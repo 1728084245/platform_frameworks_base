@@ -38,9 +38,12 @@ public final class NetworkSecurityConfig {
     public static final boolean DEFAULT_CLEARTEXT_TRAFFIC_PERMITTED = true;
     /** @hide */
     public static final boolean DEFAULT_HSTS_ENFORCED = false;
+    /** @hide */
+    public static final boolean DEFAULT_CERTIFICATE_TRANSPARENCY_VERIFICATION_REQUIRED = false;
 
     private final boolean mCleartextTrafficPermitted;
     private final boolean mHstsEnforced;
+    private final boolean mCertificateTransparencyVerificationRequired;
     private final PinSet mPins;
     private final List<CertificatesEntryRef> mCertificatesEntryRefs;
     private Set<TrustAnchor> mAnchors;
@@ -48,10 +51,15 @@ public final class NetworkSecurityConfig {
     private NetworkSecurityTrustManager mTrustManager;
     private final Object mTrustManagerLock = new Object();
 
-    private NetworkSecurityConfig(boolean cleartextTrafficPermitted, boolean hstsEnforced,
-            PinSet pins, List<CertificatesEntryRef> certificatesEntryRefs) {
+    private NetworkSecurityConfig(
+            boolean cleartextTrafficPermitted,
+            boolean hstsEnforced,
+            boolean certificateTransparencyVerificationRequired,
+            PinSet pins,
+            List<CertificatesEntryRef> certificatesEntryRefs) {
         mCleartextTrafficPermitted = cleartextTrafficPermitted;
         mHstsEnforced = hstsEnforced;
+        mCertificateTransparencyVerificationRequired = certificateTransparencyVerificationRequired;
         mPins = pins;
         mCertificatesEntryRefs = certificatesEntryRefs;
         // Sort the certificates entry refs so that all entries that override pins come before
@@ -102,6 +110,10 @@ public final class NetworkSecurityConfig {
 
     public boolean isHstsEnforced() {
         return mHstsEnforced;
+    }
+
+    public boolean isCertificateTransparencyVerificationRequired() {
+        return mCertificateTransparencyVerificationRequired;
     }
 
     public PinSet getPins() {
@@ -179,20 +191,21 @@ public final class NetworkSecurityConfig {
      * @hide
      */
     public static Builder getDefaultBuilder(ApplicationInfo info) {
+        // System certificate store, does not bypass static pins, does not disable CT.
+        CertificatesEntryRef systemRef = new CertificatesEntryRef(
+                SystemCertificateSource.getInstance(), false, false);
         Builder builder = new Builder()
                 .setHstsEnforced(DEFAULT_HSTS_ENFORCED)
-                // System certificate store, does not bypass static pins.
-                .addCertificatesEntryRef(
-                        new CertificatesEntryRef(SystemCertificateSource.getInstance(), false));
+                .addCertificatesEntryRef(systemRef);
         final boolean cleartextTrafficPermitted = info.targetSdkVersion < Build.VERSION_CODES.P
-                && info.targetSandboxVersion < 2;
+                && !info.isInstantApp();
         builder.setCleartextTrafficPermitted(cleartextTrafficPermitted);
         // Applications targeting N and above must opt in into trusting the user added certificate
         // store.
         if (info.targetSdkVersion <= Build.VERSION_CODES.M && !info.isPrivilegedApp()) {
-            // User certificate store, does not bypass static pins.
+            // User certificate store, does not bypass static pins. CT is disabled.
             builder.addCertificatesEntryRef(
-                    new CertificatesEntryRef(UserCertificateSource.getInstance(), false));
+                    new CertificatesEntryRef(UserCertificateSource.getInstance(), false, true));
         }
         return builder;
     }
@@ -208,6 +221,9 @@ public final class NetworkSecurityConfig {
         private boolean mHstsEnforced = DEFAULT_HSTS_ENFORCED;
         private boolean mCleartextTrafficPermittedSet = false;
         private boolean mHstsEnforcedSet = false;
+        private boolean mCertificateTransparencyVerificationRequired =
+                DEFAULT_CERTIFICATE_TRANSPARENCY_VERIFICATION_REQUIRED;
+        private boolean mCertificateTransparencyVerificationRequiredSet = false;
         private Builder mParentBuilder;
 
         /**
@@ -216,7 +232,7 @@ public final class NetworkSecurityConfig {
          * in {@link Builder#build()}, recursively if needed.
          */
         public Builder setParent(Builder parent) {
-            // Sanity check to avoid adding loops.
+            // Quick check to avoid adding loops.
             Builder current = parent;
             while (current != null) {
                 if (current == this) {
@@ -313,12 +329,45 @@ public final class NetworkSecurityConfig {
             return mCertificatesEntryRefs;
         }
 
+        Builder setCertificateTransparencyVerificationRequired(boolean required) {
+            mCertificateTransparencyVerificationRequired = required;
+            mCertificateTransparencyVerificationRequiredSet = true;
+            return this;
+        }
+
+        private boolean getCertificateTransparencyVerificationRequired() {
+            if (mCertificateTransparencyVerificationRequiredSet) {
+                return mCertificateTransparencyVerificationRequired;
+            }
+            // CT verification has not been set explicitly. Before deferring to
+            // the parent, check if any of the CertificatesEntryRef requires it
+            // to be disabled (i.e., user store or inline certificate).
+            if (hasCertificatesEntryRefs()) {
+                for (CertificatesEntryRef ref : getCertificatesEntryRefs()) {
+                    if (ref.disableCT()) {
+                        return false;
+                    }
+                }
+            }
+            if (mParentBuilder != null) {
+                return mParentBuilder.getCertificateTransparencyVerificationRequired();
+            }
+            return DEFAULT_CERTIFICATE_TRANSPARENCY_VERIFICATION_REQUIRED;
+        }
+
         public NetworkSecurityConfig build() {
             boolean cleartextPermitted = getEffectiveCleartextTrafficPermitted();
             boolean hstsEnforced = getEffectiveHstsEnforced();
+            boolean certificateTransparencyVerificationRequired =
+                    getCertificateTransparencyVerificationRequired();
             PinSet pinSet = getEffectivePinSet();
             List<CertificatesEntryRef> entryRefs = getEffectiveCertificatesEntryRefs();
-            return new NetworkSecurityConfig(cleartextPermitted, hstsEnforced, pinSet, entryRefs);
+            return new NetworkSecurityConfig(
+                    cleartextPermitted,
+                    hstsEnforced,
+                    certificateTransparencyVerificationRequired,
+                    pinSet,
+                    entryRefs);
         }
     }
 }

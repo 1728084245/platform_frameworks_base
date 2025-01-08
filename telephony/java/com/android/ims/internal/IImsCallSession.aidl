@@ -18,9 +18,10 @@ package com.android.ims.internal;
 
 import android.os.Message;
 import android.telephony.ims.aidl.IImsCallSessionListener;
-
 import android.telephony.ims.ImsCallProfile;
 import android.telephony.ims.ImsStreamMediaProfile;
+import android.telephony.ims.RtpHeaderExtension;
+
 import com.android.ims.internal.IImsVideoCallProvider;
 
 /**
@@ -90,6 +91,8 @@ interface IImsCallSession {
      * override the previous listener.
      *
      * @param listener to listen to the session events of this object
+     *
+     * @deprecated This is depreacated.
      */
     void setListener(in IImsCallSessionListener listener);
 
@@ -149,6 +152,22 @@ interface IImsCallSession {
      * @see Listener#callSessionStartFailed
      */
     void reject(int reason);
+
+    /**
+     * Transfer an established call to given number
+     *
+     * @param number number to transfer the call
+     * @param isConfirmationRequired if {@code True}, indicates a confirmed transfer,
+     * if {@code False} it indicates an unconfirmed transfer.
+     */
+    void transfer(String number, boolean isConfirmationRequired);
+
+    /**
+     * Transfer an established call to another call session
+     *
+     * @param transferToSession The other ImsCallSession to transfer the ongoing session to.
+     */
+    void consultativeTransfer(in IImsCallSession transferToSession);
 
     /**
      * Terminates a call.
@@ -282,4 +301,21 @@ interface IImsCallSession {
      * @param rttMessage RTT message to be sent
      */
     void sendRttMessage(in String rttMessage);
+
+    /*
+     * Device sends RTP header extension(s).
+     * @param extensions the header extensions to be sent
+     */
+    void sendRtpHeaderExtensions(in List<RtpHeaderExtension> extensions);
+
+    /*
+     * Deliver the bitrate for the indicated media type, direction and bitrate to the upper layer.
+     *
+     * @param mediaType MediaType is used to identify media stream such as audio or video.
+     * @param direction Direction of this packet stream (e.g. uplink or downlink).
+     * @param bitsPerSecond This value is the bitrate received from the NW through the Recommended
+     *        bitrate MAC Control Element message and ImsStack converts this value from MAC bitrate
+     *        to audio/video codec bitrate (defined in TS26.114).
+     */
+    void callSessionNotifyAnbr(int mediaType, int direction, int bitsPerSecond);
 }

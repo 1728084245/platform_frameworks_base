@@ -31,26 +31,27 @@ import android.os.Handler;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
-import android.view.animation.AnimationUtils;
 
-import com.android.systemui.Interpolators;
-import com.android.systemui.R;
+import com.android.app.animation.Interpolators;
+import com.android.app.viewcapture.ViewCaptureAwareWindowManager;
+import com.android.systemui.res.R;
 
 /**
  * Visually discloses that contextual data was provided to an assistant.
  */
 public class AssistDisclosure {
     private final Context mContext;
-    private final WindowManager mWm;
+    private final ViewCaptureAwareWindowManager mWm;
     private final Handler mHandler;
 
     private AssistDisclosureView mView;
     private boolean mViewAdded;
 
-    public AssistDisclosure(Context context, Handler handler) {
+    public AssistDisclosure(Context context, Handler handler,
+            ViewCaptureAwareWindowManager viewCaptureAwareWindowManager) {
         mContext = context;
         mHandler = handler;
-        mWm = mContext.getSystemService(WindowManager.class);
+        mWm = viewCaptureAwareWindowManager;
     }
 
     public void postShow() {
@@ -71,6 +72,7 @@ public class AssistDisclosure {
                             | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED,
                     PixelFormat.TRANSLUCENT);
             lp.setTitle("AssistDisclosure");
+            lp.setFitInsetsTypes(0 /* types */);
 
             mWm.addView(mView, lp);
             mViewAdded = true;

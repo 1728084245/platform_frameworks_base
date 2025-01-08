@@ -16,7 +16,8 @@
 
 package android.media;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 
 /**
  * An AudioMixPortConfig describes a possible configuration of an output or input mixer.
@@ -28,7 +29,7 @@ import android.annotation.UnsupportedAppUsage;
 
 public class AudioMixPortConfig extends AudioPortConfig {
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     AudioMixPortConfig(AudioMixPort mixPort, int samplingRate, int channelMask, int format,
                 AudioGainConfig gain) {
         super((AudioPort)mixPort, samplingRate, channelMask, format, gain);

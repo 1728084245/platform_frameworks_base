@@ -16,17 +16,22 @@
 
 package android.telephony;
 
+import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.SystemApi;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.service.carrier.CarrierIdentifier;
+import android.telephony.TelephonyManager.CarrierRestrictionStatus;
+
+import com.android.internal.telephony.flags.Flags;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -79,13 +84,75 @@ public final class CarrierRestrictionRules implements Parcelable {
     /** The same configuration is applied to all SIM slots independently. */
     public static final int MULTISIM_POLICY_NONE = 0;
 
-    /** Any SIM card can be used as far as one SIM card matching the configuration is present. */
+    /**
+     * Indicates that any SIM card can be used as far as one valid card is present in the device.
+     * For the modem, a SIM card is valid when its content (i.e. MCC, MNC, GID, SPN) matches the
+     * carrier restriction configuration.
+     */
     public static final int MULTISIM_POLICY_ONE_VALID_SIM_MUST_BE_PRESENT = 1;
+
+    /**
+     * Indicates that the SIM lock policy applies uniformly to all sim slots.
+     * @hide
+     */
+    public static final int MULTISIM_POLICY_APPLY_TO_ALL_SLOTS = 2;
+
+    /**
+     * The SIM lock configuration applies exclusively to sim slot 1, leaving
+     * all other sim slots unlocked irrespective of the SIM card in slot 1
+     * @hide
+     */
+    public static final int MULTISIM_POLICY_APPLY_TO_ONLY_SLOT_1 = 3;
+
+    /**
+     * Valid sim cards must be present on sim slot1 in order
+     * to use other sim slots.
+     * @hide
+     */
+    public static final int MULTISIM_POLICY_VALID_SIM_MUST_PRESENT_ON_SLOT_1 = 4;
+
+    /**
+     * Valid sim card must be present on slot1 and it must be in full service
+     * in order to use other sim slots.
+     * @hide
+     */
+    public static final int MULTISIM_POLICY_ACTIVE_SERVICE_ON_SLOT_1_TO_UNBLOCK_OTHER_SLOTS = 5;
+
+    /**
+     * Valid sim card be present on any slot and it must be in full service
+     * in order to use other sim slots.
+     * @hide
+     */
+    public static final int MULTISIM_POLICY_ACTIVE_SERVICE_ON_ANY_SLOT_TO_UNBLOCK_OTHER_SLOTS = 6;
+
+    /**
+     * Valid sim cards must be present on all slots. If any SIM cards become
+     * invalid then device would set other SIM cards as invalid as well.
+     * @hide
+     */
+    public static final int MULTISIM_POLICY_ALL_SIMS_MUST_BE_VALID = 7;
+
+    /**
+     * In case there is no match policy listed above.
+     * @hide
+     */
+    public static final int MULTISIM_POLICY_SLOT_POLICY_OTHER = 8;
+
+
 
     /** @hide */
     @Retention(RetentionPolicy.SOURCE)
     @IntDef(prefix = "MULTISIM_POLICY_",
-            value = {MULTISIM_POLICY_NONE, MULTISIM_POLICY_ONE_VALID_SIM_MUST_BE_PRESENT})
+            value = {MULTISIM_POLICY_NONE,
+                    MULTISIM_POLICY_ONE_VALID_SIM_MUST_BE_PRESENT,
+                    MULTISIM_POLICY_APPLY_TO_ALL_SLOTS,
+                    MULTISIM_POLICY_APPLY_TO_ONLY_SLOT_1,
+                    MULTISIM_POLICY_VALID_SIM_MUST_PRESENT_ON_SLOT_1,
+                    MULTISIM_POLICY_ACTIVE_SERVICE_ON_SLOT_1_TO_UNBLOCK_OTHER_SLOTS,
+                    MULTISIM_POLICY_ACTIVE_SERVICE_ON_ANY_SLOT_TO_UNBLOCK_OTHER_SLOTS,
+                    MULTISIM_POLICY_ALL_SIMS_MUST_BE_VALID,
+                    MULTISIM_POLICY_SLOT_POLICY_OTHER
+            })
     public @interface MultiSimPolicy {}
 
     /** @hide */
@@ -99,26 +166,42 @@ public final class CarrierRestrictionRules implements Parcelable {
 
     private List<CarrierIdentifier> mAllowedCarriers;
     private List<CarrierIdentifier> mExcludedCarriers;
+    private List<CarrierInfo> mAllowedCarrierInfo;
+    private List<CarrierInfo> mExcludedCarrierInfo;
     @CarrierRestrictionDefault
     private int mCarrierRestrictionDefault;
     @MultiSimPolicy
     private int mMultiSimPolicy;
+    @CarrierRestrictionStatus
+    private int mCarrierRestrictionStatus;
+    private boolean mUseCarrierLockInfo;
 
     private CarrierRestrictionRules() {
         mAllowedCarriers = new ArrayList<CarrierIdentifier>();
         mExcludedCarriers = new ArrayList<CarrierIdentifier>();
+        mAllowedCarrierInfo = new ArrayList<CarrierInfo>();
+        mExcludedCarrierInfo = new ArrayList<CarrierInfo>();
         mCarrierRestrictionDefault = CARRIER_RESTRICTION_DEFAULT_NOT_ALLOWED;
         mMultiSimPolicy = MULTISIM_POLICY_NONE;
+        mCarrierRestrictionStatus = TelephonyManager.CARRIER_RESTRICTION_STATUS_UNKNOWN;
+        mUseCarrierLockInfo = false;
     }
 
     private CarrierRestrictionRules(Parcel in) {
         mAllowedCarriers = new ArrayList<CarrierIdentifier>();
         mExcludedCarriers = new ArrayList<CarrierIdentifier>();
-
+        mAllowedCarrierInfo = new ArrayList<CarrierInfo>();
+        mExcludedCarrierInfo = new ArrayList<CarrierInfo>();
         in.readTypedList(mAllowedCarriers, CarrierIdentifier.CREATOR);
         in.readTypedList(mExcludedCarriers, CarrierIdentifier.CREATOR);
         mCarrierRestrictionDefault = in.readInt();
         mMultiSimPolicy = in.readInt();
+        mCarrierRestrictionStatus = in.readInt();
+        if (Flags.carrierRestrictionRulesEnhancement()) {
+            in.readTypedList(mAllowedCarrierInfo, CarrierInfo.CREATOR);
+            in.readTypedList(mExcludedCarrierInfo, CarrierInfo.CREATOR);
+            mUseCarrierLockInfo = in.readBoolean();
+        }
     }
 
     /**
@@ -133,6 +216,14 @@ public final class CarrierRestrictionRules implements Parcelable {
      * Indicates if all carriers are allowed
      */
     public boolean isAllCarriersAllowed() {
+        if (Flags.carrierRestrictionStatus() && mCarrierRestrictionStatus
+                == TelephonyManager.CARRIER_RESTRICTION_STATUS_NOT_RESTRICTED) {
+            return true;
+        }
+        if (Flags.carrierRestrictionRulesEnhancement() && mUseCarrierLockInfo) {
+            return (mAllowedCarrierInfo.isEmpty() && mExcludedCarrierInfo.isEmpty()
+                    && mCarrierRestrictionDefault == CARRIER_RESTRICTION_DEFAULT_ALLOWED);
+        }
         return (mAllowedCarriers.isEmpty() && mExcludedCarriers.isEmpty()
                 && mCarrierRestrictionDefault == CARRIER_RESTRICTION_DEFAULT_ALLOWED);
     }
@@ -155,6 +246,25 @@ public final class CarrierRestrictionRules implements Parcelable {
         return mExcludedCarriers;
     }
 
+    /**
+     * Retrieves list of excluded carrierInfos
+     *
+     * @return the list of excluded carrierInfos
+     * @hide
+     */
+    public @NonNull List<CarrierInfo> getExcludedCarriersInfoList() {
+        return mExcludedCarrierInfo;
+    }
+
+    /**
+     * Retrieves list of excluded carrierInfos
+     *
+     * @return the list of excluded carrierInfos
+     * @hide
+     */
+    public @NonNull List<CarrierInfo> getAllowedCarriersInfoList() {
+        return mAllowedCarrierInfo;
+    }
     /**
      * Retrieves the default behavior of carrier restrictions
      */
@@ -276,8 +386,8 @@ public final class CarrierRestrictionRules implements Parcelable {
         if (str.length() != pattern.length()) {
             return false;
         }
-        String lowerCaseStr = str.toLowerCase();
-        String lowerCasePattern = pattern.toLowerCase();
+        String lowerCaseStr = str.toLowerCase(Locale.ROOT);
+        String lowerCasePattern = pattern.toLowerCase(Locale.ROOT);
 
         for (int i = 0; i < lowerCasePattern.length(); i++) {
             if (lowerCasePattern.charAt(i) != lowerCaseStr.charAt(i)
@@ -289,6 +399,25 @@ public final class CarrierRestrictionRules implements Parcelable {
     }
 
     /**
+     * Get the carrier restriction status of the device.
+     * The return value of the API is as follows.
+     * <ul>
+     *      <li>return {@link TelephonyManager#CARRIER_RESTRICTION_STATUS_RESTRICTED_TO_CALLER}
+     *      if the caller and the device locked by the network are same</li>
+     *      <li>return {@link TelephonyManager#CARRIER_RESTRICTION_STATUS_RESTRICTED} if the
+     *      caller and the device locked by the network are different</li>
+     *      <li>return {@link TelephonyManager#CARRIER_RESTRICTION_STATUS_NOT_RESTRICTED} if the
+     *      device is not locked</li>
+     *      <li>return {@link TelephonyManager#CARRIER_RESTRICTION_STATUS_UNKNOWN} if the device
+     *      locking state is unavailable or radio does not supports the feature</li>
+     * </ul>
+     */
+    @FlaggedApi(Flags.FLAG_CARRIER_RESTRICTION_STATUS)
+    public @CarrierRestrictionStatus int getCarrierRestrictionStatus() {
+        return mCarrierRestrictionStatus;
+    }
+
+    /**
      * {@link Parcelable#writeToParcel}
      */
     @Override
@@ -297,6 +426,12 @@ public final class CarrierRestrictionRules implements Parcelable {
         out.writeTypedList(mExcludedCarriers);
         out.writeInt(mCarrierRestrictionDefault);
         out.writeInt(mMultiSimPolicy);
+        out.writeInt(mCarrierRestrictionStatus);
+        if (Flags.carrierRestrictionRulesEnhancement()) {
+            out.writeTypedList(mAllowedCarrierInfo);
+            out.writeTypedList(mExcludedCarrierInfo);
+            out.writeBoolean(mUseCarrierLockInfo);
+        }
     }
 
     /**
@@ -310,7 +445,7 @@ public final class CarrierRestrictionRules implements Parcelable {
     /**
      * {@link Parcelable.Creator}
      */
-    public static final Creator<CarrierRestrictionRules> CREATOR =
+    public static final @android.annotation.NonNull Creator<CarrierRestrictionRules> CREATOR =
             new Creator<CarrierRestrictionRules>() {
         @Override
         public CarrierRestrictionRules createFromParcel(Parcel in) {
@@ -323,11 +458,30 @@ public final class CarrierRestrictionRules implements Parcelable {
         }
     };
 
+    @NonNull
     @Override
     public String toString() {
         return "CarrierRestrictionRules(allowed:" + mAllowedCarriers + ", excluded:"
                 + mExcludedCarriers + ", default:" + mCarrierRestrictionDefault
-                + ", multisim policy:" + mMultiSimPolicy + ")";
+                + ", MultiSim policy:" + mMultiSimPolicy + getCarrierInfoList()
+                + ", mIsCarrierLockInfoSupported = " + mUseCarrierLockInfo
+                + getCarrierRestrictionStatusToLog() + ")";
+    }
+
+    private String getCarrierInfoList() {
+        if (Flags.carrierRestrictionRulesEnhancement()) {
+            return ",  allowedCarrierInfoList:" + mAllowedCarrierInfo
+                    + ", excludedCarrierInfoList:" + mExcludedCarrierInfo;
+        } else {
+            return "";
+        }
+    }
+
+    private String getCarrierRestrictionStatusToLog() {
+        if(android.os.Build.isDebuggable()) {
+            return ", CarrierRestrictionStatus = " + mCarrierRestrictionStatus;
+        }
+        return "";
     }
 
     /**
@@ -352,6 +506,13 @@ public final class CarrierRestrictionRules implements Parcelable {
             mRules.mAllowedCarriers.clear();
             mRules.mExcludedCarriers.clear();
             mRules.mCarrierRestrictionDefault = CARRIER_RESTRICTION_DEFAULT_ALLOWED;
+            if (Flags.carrierRestrictionRulesEnhancement()) {
+                mRules.mCarrierRestrictionStatus =
+                        TelephonyManager.CARRIER_RESTRICTION_STATUS_NOT_RESTRICTED;
+                mRules.mAllowedCarrierInfo.clear();
+                mRules.mExcludedCarrierInfo.clear();
+                mRules.mUseCarrierLockInfo = false;
+            }
             return this;
         }
 
@@ -395,6 +556,54 @@ public final class CarrierRestrictionRules implements Parcelable {
          */
         public @NonNull Builder setMultiSimPolicy(@MultiSimPolicy int multiSimPolicy) {
             mRules.mMultiSimPolicy = multiSimPolicy;
+            return this;
+        }
+
+        /**
+         * Set the device's carrier restriction status
+         *
+         * @param carrierRestrictionStatus device restriction status
+         */
+        public @NonNull
+        @FlaggedApi(Flags.FLAG_SET_CARRIER_RESTRICTION_STATUS)
+        Builder setCarrierRestrictionStatus(
+                @CarrierRestrictionStatus int carrierRestrictionStatus) {
+            mRules.mCarrierRestrictionStatus = carrierRestrictionStatus;
+            return this;
+        }
+
+        /**
+         * Set list of allowed carrierInfo
+         *
+         * @param allowedCarrierInfo list of allowed CarrierInfo
+         * @hide
+         */
+        public @NonNull Builder setAllowedCarrierInfo(
+                @NonNull List<CarrierInfo> allowedCarrierInfo) {
+            mRules.mAllowedCarrierInfo = new ArrayList<CarrierInfo>(allowedCarrierInfo);
+            return this;
+        }
+
+        /**
+         * Set list of allowed carrierInfo
+         *
+         * @param excludedCarrierInfo list of allowed CarrierInfo
+         * @hide
+         */
+        public @NonNull Builder setExcludedCarrierInfo(
+                @NonNull List<CarrierInfo> excludedCarrierInfo) {
+            mRules.mExcludedCarrierInfo = new ArrayList<CarrierInfo>(excludedCarrierInfo);
+            return this;
+        }
+
+        /**
+         * set whether the HAL radio supports the advanced carrier lock features or not.
+         *
+         * @param carrierLockInfoSupported advanced carrierInfo changes supported or not
+         * @hide
+         */
+        public @NonNull Builder setCarrierLockInfoFeature(boolean carrierLockInfoSupported) {
+            mRules.mUseCarrierLockInfo = carrierLockInfoSupported;
             return this;
         }
     }

@@ -4,49 +4,74 @@ import collections
 import copy
 import glob
 from os import path
+import re
 import sys
 from xml.etree import ElementTree
 
 from fontTools import ttLib
 
+# TODO(nona): Remove hard coded font version and unicode versions.
+# Figure out a way of giving this information with command lines.
+EMOJI_FONT_TO_UNICODE_MAP = {
+    '2.034': 15.0,
+    '2.042': 15.1,
+    '2.047': 16.0,
+}
+
 EMOJI_VS = 0xFE0F
 
 LANG_TO_SCRIPT = {
+    'af': 'Latn',
     'as': 'Beng',
+    'am': 'Latn',
     'be': 'Cyrl',
     'bg': 'Cyrl',
     'bn': 'Beng',
+    'cs': 'Latn',
     'cu': 'Cyrl',
     'cy': 'Latn',
     'da': 'Latn',
     'de': 'Latn',
+    'el': 'Latn',
     'en': 'Latn',
     'es': 'Latn',
     'et': 'Latn',
     'eu': 'Latn',
     'fr': 'Latn',
     'ga': 'Latn',
+    'gl': 'Latn',
     'gu': 'Gujr',
     'hi': 'Deva',
     'hr': 'Latn',
     'hu': 'Latn',
     'hy': 'Armn',
+    'it': 'Latn',
     'ja': 'Jpan',
+    'ka': 'Latn',
     'kn': 'Knda',
     'ko': 'Kore',
     'la': 'Latn',
+    'lt': 'Latn',
+    'lv': 'Latn',
     'ml': 'Mlym',
     'mn': 'Cyrl',
     'mr': 'Deva',
     'nb': 'Latn',
+    'nl': 'Latn',
     'nn': 'Latn',
     'or': 'Orya',
     'pa': 'Guru',
     'pt': 'Latn',
+    'pl': 'Latn',
+    'ru': 'Latn',
+    'sk': 'Latn',
     'sl': 'Latn',
+    'sq': 'Latn',
+    'sv': 'Latn',
     'ta': 'Taml',
     'te': 'Telu',
     'tk': 'Latn',
+    'uk': 'Latn',
 }
 
 def lang_to_script(lang_code):
@@ -113,16 +138,17 @@ def get_variation_sequences_cmap(font):
 def get_emoji_map(font):
     # Add normal characters
     emoji_map = copy.copy(get_best_cmap(font))
-    reverse_cmap = {glyph: code for code, glyph in emoji_map.items()}
+    reverse_cmap = {glyph: code for code, glyph in emoji_map.items() if not contains_pua(code) }
 
     # Add variation sequences
-    vs_dict = get_variation_sequences_cmap(font).uvsDict
-    for vs in vs_dict:
-        for base, glyph in vs_dict[vs]:
-            if glyph is None:
-                emoji_map[(base, vs)] = emoji_map[base]
-            else:
-                emoji_map[(base, vs)] = glyph
+    vs_cmap = get_variation_sequences_cmap(font)
+    if vs_cmap:
+        for vs in vs_cmap.uvsDict:
+            for base, glyph in vs_cmap.uvsDict[vs]:
+                if glyph is None:
+                    emoji_map[(base, vs)] = emoji_map[base]
+                else:
+                    emoji_map[(base, vs)] = glyph
 
     # Add GSUB rules
     ttfont = open_font(font)
@@ -225,6 +251,8 @@ def parse_fonts_xml(fonts_xml_path):
         name = family.get('name')
         variant = family.get('variant')
         langs = family.get('lang')
+        ignoreAttr = family.get('ignore')
+
         if name:
             assert variant is None, (
                 'No variant expected for LGC font %s.' % name)
@@ -236,10 +264,16 @@ def parse_fonts_xml(fonts_xml_path):
             assert variant in {None, 'elegant', 'compact'}, (
                 'Unexpected value for variant: %s' % variant)
 
+    trim_re = re.compile(r"^[ \n\r\t]*(.+)[ \n\r\t]*$")
     for family in families:
         name = family.get('name')
         variant = family.get('variant')
         langs = family.get('lang')
+        ignoreAttr = family.get('ignore')
+        ignore = ignoreAttr == 'true' or ignoreAttr == '1'
+
+        if ignore:
+            continue
 
         if langs:
             langs = langs.split()
@@ -251,13 +285,27 @@ def parse_fonts_xml(fonts_xml_path):
             assert child.tag == 'font', (
                 'Unknown tag <%s>' % child.tag)
             font_file = child.text.rstrip()
-            weight = int(child.get('weight'))
-            assert weight % 100 == 0, (
-                'Font weight "%d" is not a multiple of 100.' % weight)
 
-            style = child.get('style')
-            assert style in {'normal', 'italic'}, (
-                'Unknown style "%s"' % style)
+            m = trim_re.match(font_file)
+            font_file = m.group(1)
+
+            # In case of variable font and it supports `wght` axis, the weight attribute can be
+            # dropped which is automatically adjusted at runtime.
+            if 'weight' in child:
+                weight = int(child.get('weight'))
+                assert weight % 100 == 0, (
+                    'Font weight "%d" is not a multiple of 100.' % weight)
+            else:
+                weight = None
+
+            # In case of variable font and it supports `ital` or `slnt` axes, the style attribute
+            # can be dropped which is automatically adjusted at runtime.
+            if 'style' in child:
+                style = child.get('style')
+                assert style in {'normal', 'italic'}, (
+                    'Unknown style "%s"' % style)
+            else:
+                style = None
 
             fallback_for = child.get('fallbackFor')
 
@@ -270,7 +318,7 @@ def parse_fonts_xml(fonts_xml_path):
             if index:
                 index = int(index)
 
-            if not path.exists(path.join(_fonts_dir, font_file)):
+            if not path.exists(path.join(_fonts_dir, m.group(1))):
                 continue # Missing font is a valid case. Just ignore the missing font files.
 
             record = FontRecord(
@@ -286,7 +334,7 @@ def parse_fonts_xml(fonts_xml_path):
 
             if not fallback_for:
                 if not name or name == 'sans-serif':
-                    for _, fallback in _fallback_chains.iteritems():
+                    for _, fallback in _fallback_chains.items():
                         fallback.append(record)
                 else:
                     _fallback_chains[name].append(record)
@@ -302,57 +350,152 @@ def parse_fonts_xml(fonts_xml_path):
 
 
 def check_emoji_coverage(all_emoji, equivalent_emoji):
-    emoji_font = get_emoji_font()
-    check_emoji_font_coverage(emoji_font, all_emoji, equivalent_emoji)
+    emoji_fonts = get_emoji_fonts()
+    check_emoji_font_coverage(emoji_fonts, all_emoji, equivalent_emoji)
 
 
-def get_emoji_font():
-    emoji_fonts = [
-        record.font for record in _all_fonts
-        if 'Zsye' in record.scripts]
-    assert len(emoji_fonts) == 1, 'There are %d emoji fonts.' % len(emoji_fonts)
-    return emoji_fonts[0]
+def get_emoji_fonts():
+    return [ record.font for record in _all_fonts if 'Zsye' in record.scripts ]
+
+def seq_any(sequence, pred):
+  if type(sequence) is tuple:
+    return any([pred(x) for x in sequence])
+  else:
+    return pred(sequence)
+
+def seq_all(sequence, pred):
+  if type(sequence) is tuple:
+    return all([pred(x) for x in sequence])
+  else:
+    return pred(sequence)
+
+def is_regional_indicator(x):
+    # regional indicator A..Z
+    return 0x1F1E6 <= x <= 0x1F1FF
+
+def is_flag_sequence(seq):
+    if type(seq) == int:
+      return False
+    len(seq) == 2 and is_regional_indicator(seq[0]) and is_regional_indicator(seq[1])
+
+def is_tag(x):
+    # tag block
+    return 0xE0000 <= x <= 0xE007F
+
+def is_pua(x):
+    return 0xE000 <= x <= 0xF8FF or 0xF0000 <= x <= 0xFFFFD or 0x100000 <= x <= 0x10FFFD
+
+def contains_pua(sequence):
+    return seq_any(sequence, is_pua)
+
+def contains_regional_indicator(sequence):
+    return seq_any(sequence, is_regional_indicator)
+
+def only_tags(sequence):
+    return seq_all(sequence, is_tag)
+
+def get_psname(ttf):
+    return str(next(x for x in ttf['name'].names
+        if x.platformID == 3 and x.platEncID == 1 and x.nameID == 6))
+
+def hex_strs(sequence):
+    if type(sequence) is tuple:
+        return tuple(f"{s:X}" for s in sequence)
+    return hex(sequence)
+
+def check_emoji_not_compat(all_emoji, equivalent_emoji):
+    compat_psnames = set()
+    for emoji_font in get_emoji_fonts():
+        ttf = open_font(emoji_font)
+        psname = get_psname(ttf)
+
+        if "meta" in ttf:
+            assert 'Emji' not in ttf["meta"].data, 'NotoColorEmoji MUST be a compat font'
+
+def is_flag_emoji(font):
+    return 0x1F1E6 in get_best_cmap(font)
+
+def emoji_font_version_to_unicode_version(font_version):
+    version_str = '%.3f' % font_version
+    assert version_str in EMOJI_FONT_TO_UNICODE_MAP, 'Unknown emoji font verion: %s' % version_str
+    return EMOJI_FONT_TO_UNICODE_MAP[version_str]
 
 
-def check_emoji_font_coverage(emoji_font, all_emoji, equivalent_emoji):
-    coverage = get_emoji_map(emoji_font)
+def check_emoji_font_coverage(emoji_fonts, all_emoji, equivalent_emoji):
+    coverages = []
+    emoji_font_version = 0
+    emoji_flag_font_version = 0
+    for emoji_font in emoji_fonts:
+        coverages.append(get_emoji_map(emoji_font))
+
+        # Find the largest version of the installed emoji font.
+        version = open_font(emoji_font)['head'].fontRevision
+        if is_flag_emoji(emoji_font):
+          emoji_flag_font_version = max(emoji_flag_font_version, version)
+        else:
+          emoji_font_version = max(emoji_font_version, version)
+
+    emoji_flag_unicode_version = emoji_font_version_to_unicode_version(emoji_flag_font_version)
+    emoji_unicode_version = emoji_font_version_to_unicode_version(emoji_font_version)
+
+    errors = []
+
     for sequence in all_emoji:
-        assert sequence in coverage, (
-            '%s is not supported in the emoji font.' % printable(sequence))
+        if all([sequence not in coverage for coverage in coverages]):
+            sequence_version = float(_age_by_chars[sequence])
+            if is_flag_sequence(sequence):
+                if sequence_version <= emoji_flag_unicode_version:
+                    errors.append('%s is not supported in the emoji font.' % printable(sequence))
+            else:
+                if sequence_version <= emoji_unicode_version:
+                    errors.append('%s is not supported in the emoji font.' % printable(sequence))
 
-    for sequence in coverage:
-        if sequence in {0x0000, 0x000D, 0x0020}:
-            # The font needs to support a few extra characters, which is OK
-            continue
-        assert sequence in all_emoji, (
-            'Emoji font should not support %s.' % printable(sequence))
+    for coverage in coverages:
+        for sequence in coverage:
+            if sequence in {0x0000, 0x000D, 0x0020}:
+                # The font needs to support a few extra characters, which is OK
+                continue
 
-    for first, second in sorted(equivalent_emoji.items()):
-        assert coverage[first] == coverage[second], (
-            '%s and %s should map to the same glyph.' % (
-                printable(first),
-                printable(second)))
+            if contains_pua(sequence):
+                # The font needs to have some PUA for EmojiCompat library.
+                continue
 
-    for glyph in set(coverage.values()):
-        maps_to_glyph = [seq for seq in coverage if coverage[seq] == glyph]
-        if len(maps_to_glyph) > 1:
-            # There are more than one sequences mapping to the same glyph. We
-            # need to make sure they were expected to be equivalent.
-            equivalent_seqs = set()
-            for seq in maps_to_glyph:
-                equivalent_seq = seq
-                while equivalent_seq in equivalent_emoji:
-                    equivalent_seq = equivalent_emoji[equivalent_seq]
-                equivalent_seqs.add(equivalent_seq)
-            assert len(equivalent_seqs) == 1, (
-                'The sequences %s should not result in the same glyph %s' % (
-                    printable(equivalent_seqs),
-                    glyph))
+            if sequence not in all_emoji:
+                errors.append('%s support unexpected in the emoji font.' % printable(sequence))
+
+    for first, second in equivalent_emoji.items():
+        for coverage in coverages:
+            if first not in coverage or second not in coverage:
+                continue  # sequence will be reported missing
+            if coverage[first] != coverage[second]:
+                errors.append('%s and %s should map to the same glyph.' % (
+                    printable(first),
+                    printable(second)))
+
+    for coverage in coverages:
+        for glyph in set(coverage.values()):
+            maps_to_glyph = [
+                seq for seq in coverage if coverage[seq] == glyph and not contains_pua(seq) ]
+            if len(maps_to_glyph) > 1:
+                # There are more than one sequences mapping to the same glyph. We
+                # need to make sure they were expected to be equivalent.
+                equivalent_seqs = set()
+                for seq in maps_to_glyph:
+                    equivalent_seq = seq
+                    while equivalent_seq in equivalent_emoji:
+                        equivalent_seq = equivalent_emoji[equivalent_seq]
+                    equivalent_seqs.add(equivalent_seq)
+                if len(equivalent_seqs) != 1:
+                    errors.append('The sequences %s should not result in the same glyph %s' % (
+                        printable(equivalent_seqs),
+                        glyph))
+
+    assert not errors, '%d emoji font errors:\n%s\n%d emoji font coverage errors' % (len(errors), '\n'.join(errors), len(errors))
 
 
 def check_emoji_defaults(default_emoji):
     missing_text_chars = _emoji_properties['Emoji'] - default_emoji
-    for name, fallback_chain in _fallback_chains.iteritems():
+    for name, fallback_chain in _fallback_chains.items():
         emoji_font_seen = False
         for record in fallback_chain:
             if 'Zsye' in record.scripts:
@@ -369,7 +512,7 @@ def check_emoji_defaults(default_emoji):
                 continue
 
             # Check default emoji-style characters
-            assert_font_supports_none_of_chars(record.font, sorted(default_emoji), name)
+            assert_font_supports_none_of_chars(record.font, default_emoji, name)
 
             # Mark default text-style characters appearing in fonts above the emoji
             # font as seen
@@ -383,6 +526,19 @@ def check_emoji_defaults(default_emoji):
             'Text style version of some emoji characters are missing: ' +
                 repr(missing_text_chars))
 
+
+def parse_unicode_seq(chars):
+    if ' ' in chars:  # character sequence
+        sequence = [int(ch, 16) for ch in chars.split(' ')]
+        additions = [tuple(sequence)]
+    elif '..' in chars:  # character range
+        char_start, char_end = chars.split('..')
+        char_start = int(char_start, 16)
+        char_end = int(char_end, 16)
+        additions = range(char_start, char_end+1)
+    else:  # single character
+        additions = [int(chars, 16)]
+    return additions
 
 # Setting reverse to true returns a dictionary that maps the values to sets of
 # characters, useful for some binary properties. Otherwise, we get a
@@ -405,16 +561,8 @@ def parse_unicode_datafile(file_path, reverse=False):
             chars = chars.strip()
             prop = prop.strip()
 
-            if ' ' in chars:  # character sequence
-                sequence = [int(ch, 16) for ch in chars.split(' ')]
-                additions = [tuple(sequence)]
-            elif '..' in chars:  # character range
-                char_start, char_end = chars.split('..')
-                char_start = int(char_start, 16)
-                char_end = int(char_end, 16)
-                additions = xrange(char_start, char_end+1)
-            else:  # singe character
-                additions = [int(chars, 16)]
+            additions = parse_unicode_seq(chars)
+
             if reverse:
                 output_dict[prop].update(additions)
             else:
@@ -423,6 +571,32 @@ def parse_unicode_datafile(file_path, reverse=False):
                     output_dict[addition] = prop
     return output_dict
 
+def parse_sequence_age(file_path):
+    VERSION_RE = re.compile(r'E([\d\.]+)')
+    output_dict = {}
+    with open(file_path) as datafile:
+        for line in datafile:
+            comment = ''
+            if '#' in line:
+                hash_pos = line.index('#')
+                comment = line[hash_pos + 1:].strip()
+                line = line[:hash_pos]
+            line = line.strip()
+            if not line:
+                continue
+
+            chars = line[:line.index(';')].strip()
+
+            m = VERSION_RE.match(comment)
+            assert m, 'Version not found: unknown format: %s' % line
+            version = m.group(1)
+
+            additions = parse_unicode_seq(chars)
+
+            for addition in additions:
+                assert addition not in output_dict
+                output_dict[addition] = version
+    return output_dict
 
 def parse_emoji_variants(file_path):
     emoji_set = set()
@@ -447,7 +621,7 @@ def parse_emoji_variants(file_path):
 
 
 def parse_ucd(ucd_path):
-    global _emoji_properties, _chars_by_age
+    global _emoji_properties, _chars_by_age, _age_by_chars
     global _text_variation_sequences, _emoji_variation_sequences
     global _emoji_sequences, _emoji_zwj_sequences
     _emoji_properties = parse_unicode_datafile(
@@ -459,6 +633,10 @@ def parse_ucd(ucd_path):
 
     _chars_by_age = parse_unicode_datafile(
         path.join(ucd_path, 'DerivedAge.txt'), reverse=True)
+    _age_by_chars = parse_unicode_datafile(
+        path.join(ucd_path, 'DerivedAge.txt'))
+    _age_by_chars.update(parse_sequence_age(
+        path.join(ucd_path, 'emoji-sequences.txt')))
     sequences = parse_emoji_variants(
         path.join(ucd_path, 'emoji-variation-sequences.txt'))
     _text_variation_sequences, _emoji_variation_sequences = sequences
@@ -475,6 +653,11 @@ def parse_ucd(ucd_path):
     _emoji_sequences = remove_emoji_exclude(_emoji_sequences, exclusions)
     _emoji_zwj_sequences = remove_emoji_exclude(_emoji_zwj_sequences, exclusions)
     _emoji_variation_sequences = remove_emoji_variation_exclude(_emoji_variation_sequences, exclusions)
+    # Unicode 12.0 adds Basic_Emoji in emoji-sequences.txt. We ignore them here since we are already
+    # checking the emoji presentations with emoji-variation-sequences.txt.
+    # Please refer to http://unicode.org/reports/tr51/#def_basic_emoji_set .
+    _emoji_sequences = {k: v for k, v in _emoji_sequences.items() if not v == 'Basic_Emoji' }
+
 
 def remove_emoji_variation_exclude(source, items):
     return source.difference(items.keys())
@@ -484,11 +667,6 @@ def remove_emoji_exclude(source, items):
 
 def flag_sequence(territory_code):
     return tuple(0x1F1E6 + ord(ch) - ord('A') for ch in territory_code)
-
-UNSUPPORTED_FLAGS = frozenset({
-    flag_sequence('BL'), flag_sequence('BQ'), flag_sequence('MQ'),
-    flag_sequence('RE'), flag_sequence('TF'),
-})
 
 EQUIVALENT_FLAGS = {
     flag_sequence('BV'): flag_sequence('NO'),
@@ -542,56 +720,8 @@ SAME_FLAG_MAPPINGS = [
 ]
 
 ZWJ = 0x200D
-FEMALE_SIGN = 0x2640
-MALE_SIGN = 0x2642
 
-GENDER_DEFAULTS = [
-    (0x26F9, MALE_SIGN), # PERSON WITH BALL
-    (0x1F3C3, MALE_SIGN), # RUNNER
-    (0x1F3C4, MALE_SIGN), # SURFER
-    (0x1F3CA, MALE_SIGN), # SWIMMER
-    (0x1F3CB, MALE_SIGN), # WEIGHT LIFTER
-    (0x1F3CC, MALE_SIGN), # GOLFER
-    (0x1F46E, MALE_SIGN), # POLICE OFFICER
-    (0x1F46F, FEMALE_SIGN), # WOMAN WITH BUNNY EARS
-    (0x1F471, MALE_SIGN), # PERSON WITH BLOND HAIR
-    (0x1F473, MALE_SIGN), # MAN WITH TURBAN
-    (0x1F477, MALE_SIGN), # CONSTRUCTION WORKER
-    (0x1F481, FEMALE_SIGN), # INFORMATION DESK PERSON
-    (0x1F482, MALE_SIGN), # GUARDSMAN
-    (0x1F486, FEMALE_SIGN), # FACE MASSAGE
-    (0x1F487, FEMALE_SIGN), # HAIRCUT
-    (0x1F575, MALE_SIGN), # SLEUTH OR SPY
-    (0x1F645, FEMALE_SIGN), # FACE WITH NO GOOD GESTURE
-    (0x1F646, FEMALE_SIGN), # FACE WITH OK GESTURE
-    (0x1F647, MALE_SIGN), # PERSON BOWING DEEPLY
-    (0x1F64B, FEMALE_SIGN), # HAPPY PERSON RAISING ONE HAND
-    (0x1F64D, FEMALE_SIGN), # PERSON FROWNING
-    (0x1F64E, FEMALE_SIGN), # PERSON WITH POUTING FACE
-    (0x1F6A3, MALE_SIGN), # ROWBOAT
-    (0x1F6B4, MALE_SIGN), # BICYCLIST
-    (0x1F6B5, MALE_SIGN), # MOUNTAIN BICYCLIST
-    (0x1F6B6, MALE_SIGN), # PEDESTRIAN
-    (0x1F926, FEMALE_SIGN), # FACE PALM
-    (0x1F937, FEMALE_SIGN), # SHRUG
-    (0x1F938, MALE_SIGN), # PERSON DOING CARTWHEEL
-    (0x1F939, MALE_SIGN), # JUGGLING
-    (0x1F93C, MALE_SIGN), # WRESTLERS
-    (0x1F93D, MALE_SIGN), # WATER POLO
-    (0x1F93E, MALE_SIGN), # HANDBALL
-    (0x1F9D6, FEMALE_SIGN), # PERSON IN STEAMY ROOM
-    (0x1F9D7, FEMALE_SIGN), # PERSON CLIMBING
-    (0x1F9D8, FEMALE_SIGN), # PERSON IN LOTUS POSITION
-    (0x1F9D9, FEMALE_SIGN), # MAGE
-    (0x1F9DA, FEMALE_SIGN), # FAIRY
-    (0x1F9DB, FEMALE_SIGN), # VAMPIRE
-    (0x1F9DC, FEMALE_SIGN), # MERPERSON
-    (0x1F9DD, FEMALE_SIGN), # ELF
-    (0x1F9DE, FEMALE_SIGN), # GENIE
-    (0x1F9DF, FEMALE_SIGN), # ZOMBIE
-    (0X1F9B8, FEMALE_SIGN), # SUPERVILLAIN
-    (0x1F9B9, FEMALE_SIGN), # SUPERHERO
-]
+EMPTY_FLAG_SEQUENCE = (0x1F3F4, 0xE007F)
 
 def is_fitzpatrick_modifier(cp):
     return 0x1F3FB <= cp <= 0x1F3FF
@@ -601,7 +731,7 @@ def reverse_emoji(seq):
     rev = list(reversed(seq))
     # if there are fitzpatrick modifiers in the sequence, keep them after
     # the emoji they modify
-    for i in xrange(1, len(rev)):
+    for i in range(1, len(rev)):
         if is_fitzpatrick_modifier(rev[i-1]):
             rev[i], rev[i-1] = rev[i-1], rev[i]
     return tuple(rev)
@@ -618,35 +748,20 @@ def compute_expected_emoji():
     adjusted_emoji_zwj_sequences.update(_emoji_zwj_sequences)
 
     # Add empty flag tag sequence that is supported as fallback
-    _emoji_sequences[(0x1F3F4, 0xE007F)] = 'Emoji_Tag_Sequence'
+    _emoji_sequences[EMPTY_FLAG_SEQUENCE] = 'Emoji_Tag_Sequence'
 
     for sequence in _emoji_sequences.keys():
         sequence = tuple(ch for ch in sequence if ch != EMOJI_VS)
         all_sequences.add(sequence)
         sequence_pieces.update(sequence)
-        if _emoji_sequences.get(sequence, None) == 'Emoji_Tag_Sequence':
-            # Add reverse of all emoji ZWJ sequences, which are added to the
-            # fonts as a workaround to get the sequences work in RTL text.
-            # TODO: test if these are actually needed by Minikin/HarfBuzz.
-            reversed_seq = reverse_emoji(sequence)
-            all_sequences.add(reversed_seq)
-            equivalent_emoji[reversed_seq] = sequence
 
     for sequence in adjusted_emoji_zwj_sequences.keys():
         sequence = tuple(ch for ch in sequence if ch != EMOJI_VS)
         all_sequences.add(sequence)
         sequence_pieces.update(sequence)
-        # Add reverse of all emoji ZWJ sequences, which are added to the fonts
-        # as a workaround to get the sequences work in RTL text.
-        reversed_seq = reverse_emoji(sequence)
-        all_sequences.add(reversed_seq)
-        equivalent_emoji[reversed_seq] = sequence
 
     for first, second in SAME_FLAG_MAPPINGS:
         equivalent_emoji[first] = second
-
-    # Remove unsupported flags
-    all_sequences.difference_update(UNSUPPORTED_FLAGS)
 
     # Add all tag characters used in flags
     sequence_pieces.update(range(0xE0030, 0xE0039 + 1))
@@ -666,13 +781,6 @@ def compute_expected_emoji():
     equivalent_emoji.update(LEGACY_ANDROID_EMOJI)
     equivalent_emoji.update(ZWJ_IDENTICALS)
 
-    for ch, gender in GENDER_DEFAULTS:
-        equivalent_emoji[(ch, ZWJ, gender)] = ch
-        for skin_tone in range(0x1F3FB, 0x1F3FF+1):
-            skin_toned = (ch, skin_tone, ZWJ, gender)
-            if skin_toned in all_emoji:
-                equivalent_emoji[skin_toned] = (ch, skin_tone)
-
     for seq in _emoji_variation_sequences:
         equivalent_emoji[seq] = seq[0]
 
@@ -680,7 +788,7 @@ def compute_expected_emoji():
 
 
 def check_compact_only_fallback():
-    for name, fallback_chain in _fallback_chains.iteritems():
+    for name, fallback_chain in _fallback_chains.items():
         for record in fallback_chain:
             if record.variant == 'compact':
                 same_script_elegants = [x for x in fallback_chain
@@ -710,20 +818,20 @@ def check_vertical_metrics():
 def check_cjk_punctuation():
     cjk_scripts = {'Hans', 'Hant', 'Jpan', 'Kore'}
     cjk_punctuation = range(0x3000, 0x301F + 1)
-    for name, fallback_chain in _fallback_chains.iteritems():
+    for name, fallback_chain in _fallback_chains.items():
         for record in fallback_chain:
             if record.scripts.intersection(cjk_scripts):
                 # CJK font seen. Stop checking the rest of the fonts.
                 break
             assert_font_supports_none_of_chars(record.font, cjk_punctuation, name)
 
-
 def main():
     global _fonts_dir
     target_out = sys.argv[1]
     _fonts_dir = path.join(target_out, 'fonts')
 
-    fonts_xml_path = path.join(target_out, 'etc', 'fonts.xml')
+    fonts_xml_path = path.join(target_out, 'etc', 'font_fallback.xml')
+
     parse_fonts_xml(fonts_xml_path)
 
     check_compact_only_fallback()
@@ -740,6 +848,7 @@ def main():
         ucd_path = sys.argv[3]
         parse_ucd(ucd_path)
         all_emoji, default_emoji, equivalent_emoji = compute_expected_emoji()
+        check_emoji_not_compat(all_emoji, equivalent_emoji)
         check_emoji_coverage(all_emoji, equivalent_emoji)
         check_emoji_defaults(default_emoji)
 

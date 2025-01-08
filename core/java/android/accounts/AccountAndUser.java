@@ -16,7 +16,8 @@
 
 package android.accounts;
 
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.Nullable;
+import android.compat.annotation.UnsupportedAppUsage;
 
 /**
  * Used to store the Account and the UserId this account is associated with.
@@ -35,7 +36,7 @@ public class AccountAndUser {
         this.userId = userId;
     }
 
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof AccountAndUser)) return false;
         final AccountAndUser other = (AccountAndUser) o;

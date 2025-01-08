@@ -16,19 +16,26 @@
 
 #include "AnimatedImageThread.h"
 
+#ifdef __ANDROID__
 #include <sys/resource.h>
+#endif
 
 namespace android {
 namespace uirenderer {
 
 AnimatedImageThread& AnimatedImageThread::getInstance() {
-    static AnimatedImageThread* sInstance = new AnimatedImageThread();
+    static sp<AnimatedImageThread> sInstance = []() {
+        sp<AnimatedImageThread> thread = sp<AnimatedImageThread>::make();
+        thread->start("AnimatedImageThread");
+        return thread;
+    }();
     return *sInstance;
 }
 
 AnimatedImageThread::AnimatedImageThread() {
+#ifdef __ANDROID__
     setpriority(PRIO_PROCESS, 0, PRIORITY_NORMAL + PRIORITY_MORE_FAVORABLE);
-    start("AnimatedImageThread");
+#endif
 }
 
 std::future<AnimatedImageDrawable::Snapshot> AnimatedImageThread::decodeNextFrame(

@@ -16,30 +16,41 @@
 
 #include "SkiaDisplayList.h"
 
+#include <SkImagePriv.h>
+#include <SkPathOps.h>
+
+// clang-format off
+#include "FunctorDrawable.h" // Must be included before DumpOpsCanvas.h
 #include "DumpOpsCanvas.h"
+// clang-format on
 #include "SkiaPipeline.h"
+#include "TreeInfo.h"
 #include "VectorDrawable.h"
 #include "renderthread/CanvasContext.h"
-
-#include <SkImagePriv.h>
 
 namespace android {
 namespace uirenderer {
 namespace skiapipeline {
 
-void SkiaDisplayList::syncContents() {
+void SkiaDisplayList::syncContents(const WebViewSyncData& data) {
     for (auto& functor : mChildFunctors) {
-        functor.syncFunctor();
+        functor->syncFunctor(data);
     }
     for (auto& animatedImage : mAnimatedImages) {
         animatedImage->syncProperties();
     }
     for (auto& vectorDrawable : mVectorDrawables) {
-        vectorDrawable->syncProperties();
+        vectorDrawable.first->syncProperties();
     }
 }
 
-bool SkiaDisplayList::reuseDisplayList(RenderNode* node, renderthread::CanvasContext* context) {
+void SkiaDisplayList::onRemovedFromTree() {
+    for (auto& functor : mChildFunctors) {
+        functor->onRemovedFromTree();
+    }
+}
+
+bool SkiaDisplayList::reuseDisplayList(RenderNode* node) {
     reset();
     node->attachAvailableList(this);
     return true;
@@ -49,6 +60,35 @@ void SkiaDisplayList::updateChildren(std::function<void(RenderNode*)> updateFn) 
     for (auto& child : mChildNodes) {
         updateFn(child.getRenderNode());
     }
+}
+
+void SkiaDisplayList::visit(std::function<void(const RenderNode&)> func) const {
+    for (auto& child : mChildNodes) {
+        child.getRenderNode()->visit(func);
+    }
+}
+
+static bool intersects(const SkISize screenSize, const Matrix4& mat, const SkRect& bounds) {
+    Vector3 points[] = { Vector3 {bounds.fLeft, bounds.fTop, 0},
+                         Vector3 {bounds.fRight, bounds.fTop, 0},
+                         Vector3 {bounds.fRight, bounds.fBottom, 0},
+                         Vector3 {bounds.fLeft, bounds.fBottom, 0}};
+    float minX, minY, maxX, maxY;
+    bool first = true;
+    for (auto& point : points) {
+        mat.mapPoint3d(point);
+        if (first) {
+            minX = maxX = point.x;
+            minY = maxY = point.y;
+            first = false;
+        } else {
+            minX = std::min(minX, point.x);
+            minY = std::min(minY, point.y);
+            maxX = std::max(maxX, point.x);
+            maxY = std::max(maxY, point.y);
+        }
+    }
+    return SkRect::Make(screenSize).intersects(SkRect::MakeLTRB(minX, minY, maxX, maxY));
 }
 
 bool SkiaDisplayList::prepareListAndChildren(
@@ -65,17 +105,23 @@ bool SkiaDisplayList::prepareListAndChildren(
         info.canvasContext.unpinImages();
     }
 
+#ifdef __ANDROID__
+    auto grContext = info.canvasContext.getGrContext();
+    for (const auto& bufferData : mMeshBufferData) {
+        bufferData->updateBuffers(grContext);
+    }
+#endif
+
     bool hasBackwardProjectedNodesHere = false;
     bool hasBackwardProjectedNodesSubtree = false;
 
     for (auto& child : mChildNodes) {
-        hasBackwardProjectedNodesHere |= child.getNodeProperties().getProjectBackwards();
         RenderNode* childNode = child.getRenderNode();
         Matrix4 mat4(child.getRecordedMatrix());
         info.damageAccumulator->pushTransform(&mat4);
-        // TODO: a layer is needed if the canvas is rotated or has a non-rect clip
         info.hasBackwardProjectedNodes = false;
         childFn(childNode, observer, info, functorsNeedLayer);
+        hasBackwardProjectedNodesHere |= child.getNodeProperties().getProjectBackwards();
         hasBackwardProjectedNodesSubtree |= info.hasBackwardProjectedNodes;
         info.damageAccumulator->popTransform();
     }
@@ -108,15 +154,19 @@ bool SkiaDisplayList::prepareListAndChildren(
         }
     }
 
-    for (auto& vectorDrawable : mVectorDrawables) {
+    for (auto& [vectorDrawable, cachedMatrix] : mVectorDrawables) {
         // If any vector drawable in the display list needs update, damage the node.
         if (vectorDrawable->isDirty()) {
-            isDirty = true;
-            static_cast<SkiaPipeline*>(info.canvasContext.getRenderPipeline())
-                    ->getVectorDrawables()
-                    ->push_back(vectorDrawable);
+            Matrix4 totalMatrix;
+            info.damageAccumulator->computeCurrentTransform(&totalMatrix);
+            Matrix4 canvasMatrix(cachedMatrix);
+            totalMatrix.multiply(canvasMatrix);
+            const SkRect& bounds = vectorDrawable->properties().getBounds();
+            if (intersects(info.screenSize, totalMatrix, bounds)) {
+                isDirty = true;
+                vectorDrawable->setPropertyChangeWillBeConsumed(true);
+            }
         }
-        vectorDrawable->setPropertyChangeWillBeConsumed(true);
     }
     return isDirty;
 }
@@ -126,22 +176,22 @@ void SkiaDisplayList::reset() {
 
     mDisplayList.reset();
 
+    mMeshBufferData.clear();
     mMutableImages.clear();
     mVectorDrawables.clear();
     mAnimatedImages.clear();
     mChildFunctors.clear();
     mChildNodes.clear();
 
-    projectionReceiveIndex = -1;
     allocator.~LinearAllocator();
     new (&allocator) LinearAllocator();
 }
 
-void SkiaDisplayList::output(std::ostream& output, uint32_t level) {
+void SkiaDisplayList::output(std::ostream& output, uint32_t level) const {
     DumpOpsCanvas canvas(output, level, *this);
     mDisplayList.draw(&canvas);
 }
 
-};  // namespace skiapipeline
-};  // namespace uirenderer
-};  // namespace android
+}  // namespace skiapipeline
+}  // namespace uirenderer
+}  // namespace android

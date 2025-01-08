@@ -16,23 +16,30 @@
 
 package com.android.internal.os;
 
-import android.annotation.UnsupportedAppUsage;
 import android.app.ActivityManager;
 import android.app.ActivityThread;
 import android.app.ApplicationErrorReport;
+import android.app.IActivityManager;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.content.type.DefaultMimeMapFactory;
+import android.net.TrafficStats;
 import android.os.Build;
 import android.os.DeadObjectException;
-import android.os.Debug;
 import android.os.IBinder;
 import android.os.Process;
 import android.os.SystemProperties;
 import android.os.Trace;
 import android.util.Log;
 import android.util.Slog;
+
 import com.android.internal.logging.AndroidConfig;
-import com.android.server.NetworkManagementSocketTagger;
+
 import dalvik.system.RuntimeHooks;
 import dalvik.system.VMRuntime;
+
+import libcore.content.type.MimeMap;
+
+import java.io.PrintStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -44,6 +51,7 @@ import java.util.logging.LogManager;
  * public consumption.
  * @hide
  */
+@android.ravenwood.annotation.RavenwoodKeepPartialClass
 public class RuntimeInit {
     final static String TAG = "AndroidRuntime";
     final static boolean DEBUG = false;
@@ -56,8 +64,20 @@ public class RuntimeInit {
     private static IBinder mApplicationObject;
 
     private static volatile boolean mCrashing = false;
+    private static final String SYSPROP_CRASH_COUNT = "sys.system_server.crash_java";
+    private static int mCrashCount;
+
+    private static volatile ApplicationWtfHandler sDefaultApplicationWtfHandler;
+
+    /**
+     * Stored values of System.out and System.err before they've been replaced by
+     * redirectLogStreams(). Kept open here for other Ravenwood internals to use.
+     */
+    public static PrintStream sOut$ravenwood;
+    public static PrintStream sErr$ravenwood;
 
     private static final native void nativeFinishInit();
+
     private static final native void nativeSetExitWithoutCleanup(boolean exitWithoutCleanup);
 
     private static int Clog_e(String tag, String msg, Throwable tr) {
@@ -97,6 +117,8 @@ public class RuntimeInit {
             // first clause in either of these two cases, only for system_server.
             if (mApplicationObject == null && (Process.SYSTEM_UID == Process.myUid())) {
                 Clog_e(TAG, "*** FATAL EXCEPTION IN SYSTEM PROCESS: " + t.getName(), e);
+                mCrashCount = SystemProperties.getInt(SYSPROP_CRASH_COUNT, 0) + 1;
+                SystemProperties.set(SYSPROP_CRASH_COUNT, String.valueOf(mCrashCount));
             } else {
                 logUncaught(t.getName(), ActivityThread.currentProcessName(), Process.myPid(), e);
             }
@@ -192,6 +214,24 @@ public class RuntimeInit {
         }
     }
 
+    /**
+     * Common initialization that (unlike {@link #commonInit()} should happen prior to
+     * the Zygote fork.
+     */
+    public static void preForkInit() {
+        if (DEBUG) Slog.d(TAG, "Entered preForkInit.");
+        RuntimeInit.enableDdms();
+        // TODO(b/142019040#comment13): Decide whether to load the default instance eagerly, i.e.
+        // MimeMap.setDefault(DefaultMimeMapFactory.create());
+        /*
+         * Replace libcore's minimal default mapping between MIME types and file
+         * extensions with a mapping that's suitable for Android. Android's mapping
+         * contains many more entries that are derived from IANA registrations but
+         * with several customizations (extensions, overrides).
+         */
+        MimeMap.setDefaultSupplier(DefaultMimeMapFactory::create);
+    }
+
     @UnsupportedAppUsage
     protected static final void commonInit() {
         if (DEBUG) Slog.d(TAG, "Entered RuntimeInit!");
@@ -228,26 +268,14 @@ public class RuntimeInit {
         /*
          * Wire socket tagging to traffic stats.
          */
-        NetworkManagementSocketTagger.install();
-
-        /*
-         * If we're running in an emulator launched with "-trace", put the
-         * VM into emulator trace profiling mode so that the user can hit
-         * F9/F10 at any time to capture traces.  This has performance
-         * consequences, so it's not something you want to do always.
-         */
-        String trace = SystemProperties.get("ro.kernel.android.tracing");
-        if (trace.equals("1")) {
-            Slog.i(TAG, "NOTE: emulator trace profiling enabled");
-            Debug.enableEmulatorTraceOutput();
-        }
+        TrafficStats.attachSocketTagger();
 
         initialized = true;
     }
 
     /**
      * Returns an HTTP user agent of the form
-     * "Dalvik/1.1.0 (Linux; U; Android Eclair Build/MASTER)".
+     * "Dalvik/1.1.0 (Linux; U; Android Eclair Build/MAIN)".
      */
     private static String getDefaultUserAgent() {
         StringBuilder result = new StringBuilder(64);
@@ -255,7 +283,7 @@ public class RuntimeInit {
         result.append(System.getProperty("java.vm.version")); // such as 1.1.0
         result.append(" (Linux; U; Android ");
 
-        String version = Build.VERSION.RELEASE; // "1.0" or "3.4b5"
+        String version = Build.VERSION.RELEASE_OR_CODENAME; // "1.0" or "3.4b5"
         result.append(version.length() > 0 ? version : "1.0");
 
         // add the model for the release build
@@ -266,7 +294,7 @@ public class RuntimeInit {
                 result.append(model);
             }
         }
-        String id = Build.ID; // "MASTER" or "M4-rc20"
+        String id = Build.ID; // "MAIN" or "M4-rc20"
         if (id.length() > 0) {
             result.append(" Build/");
             result.append(id);
@@ -324,7 +352,7 @@ public class RuntimeInit {
 
     @UnsupportedAppUsage
     public static final void main(String[] argv) {
-        enableDdms();
+        preForkInit();
         if (argv.length == 2 && argv[1].equals("application")) {
             if (DEBUG) Slog.d(TAG, "RuntimeInit: Starting application");
             redirectLogStreams();
@@ -343,8 +371,8 @@ public class RuntimeInit {
         if (DEBUG) Slog.d(TAG, "Leaving RuntimeInit!");
     }
 
-    protected static Runnable applicationInit(int targetSdkVersion, String[] argv,
-            ClassLoader classLoader) {
+    protected static Runnable applicationInit(int targetSdkVersion, long[] disabledCompatChanges,
+            String[] argv, ClassLoader classLoader) {
         // If the application calls System.exit(), terminate the process
         // immediately without running any shutdown hooks.  It is not possible to
         // shutdown an Android application gracefully.  Among other things, the
@@ -352,10 +380,8 @@ public class RuntimeInit {
         // leftover running threads to crash before the process actually exits.
         nativeSetExitWithoutCleanup(true);
 
-        // We want to be fairly aggressive about heap utilization, to avoid
-        // holding on to a lot of memory that isn't needed.
-        VMRuntime.getRuntime().setTargetHeapUtilization(0.75f);
         VMRuntime.getRuntime().setTargetSdkVersion(targetSdkVersion);
+        VMRuntime.getRuntime().setDisabledCompatChanges(disabledCompatChanges);
 
         final Arguments args = new Arguments(argv);
 
@@ -369,11 +395,34 @@ public class RuntimeInit {
     /**
      * Redirect System.out and System.err to the Android log.
      */
+    @android.ravenwood.annotation.RavenwoodReplace
     public static void redirectLogStreams() {
         System.out.close();
         System.setOut(new AndroidPrintStream(Log.INFO, "System.out"));
         System.err.close();
         System.setErr(new AndroidPrintStream(Log.WARN, "System.err"));
+    }
+
+    public static void redirectLogStreams$ravenwood() {
+        if (sOut$ravenwood != null && sErr$ravenwood != null) {
+            return; // Already initialized.
+        }
+
+        // Make sure the Log class is loaded and the JNI methods are hooked up,
+        // before redirecting System.out/err.
+        // Otherwise, because ClassLoadHook tries to write to System.out, this would cause
+        // a circular initialization problem and would cause a UnsatisfiedLinkError
+        // on the JNI methods.
+        Log.isLoggable("X", Log.VERBOSE);
+
+        if (sOut$ravenwood == null) {
+            sOut$ravenwood = System.out;
+            System.setOut(new AndroidPrintStream(Log.INFO, "System.out"));
+        }
+        if (sErr$ravenwood == null) {
+            sErr$ravenwood = System.err;
+            System.setErr(new AndroidPrintStream(Log.WARN, "System.err"));
+        }
     }
 
     /**
@@ -383,11 +432,30 @@ public class RuntimeInit {
      * @param tag to record with the error
      * @param t exception describing the error site and conditions
      */
+    @android.ravenwood.annotation.RavenwoodReplace
     public static void wtf(String tag, Throwable t, boolean system) {
         try {
-            if (ActivityManager.getService().handleApplicationWtf(
-                    mApplicationObject, tag, system,
-                    new ApplicationErrorReport.ParcelableCrashInfo(t))) {
+            boolean exit = false;
+            final IActivityManager am = ActivityManager.getService();
+            if (am != null) {
+                exit = am.handleApplicationWtf(
+                        mApplicationObject, tag, system,
+                        new ApplicationErrorReport.ParcelableCrashInfo(t),
+                        Process.myPid());
+            } else {
+                // Unlikely but possible in early system boot
+                final ApplicationWtfHandler handler = sDefaultApplicationWtfHandler;
+                if (handler != null) {
+                    exit = handler.handleApplicationWtf(
+                            mApplicationObject, tag, system,
+                            new ApplicationErrorReport.ParcelableCrashInfo(t),
+                            Process.myPid());
+                } else {
+                    // Simply log the error
+                    Slog.e(TAG, "Original WTF:", t);
+                }
+            }
+            if (exit) {
                 // The Activity Manager has already written us off -- now exit.
                 Process.killProcess(Process.myPid());
                 System.exit(10);
@@ -400,6 +468,34 @@ public class RuntimeInit {
                 Slog.e(TAG, "Original WTF:", t);
             }
         }
+    }
+
+    public static void wtf$ravenwood(String tag, Throwable t, boolean system) {
+        // We've already emitted to logs, so there's nothing more to do here,
+        // as we don't have a DropBox pipeline configured
+    }
+
+    /**
+     * Set the default {@link ApplicationWtfHandler}, in case the ActivityManager is not ready yet.
+     */
+    public static void setDefaultApplicationWtfHandler(final ApplicationWtfHandler handler) {
+        sDefaultApplicationWtfHandler = handler;
+    }
+
+    /**
+     * The handler to deal with the serious application errors.
+     */
+    public interface ApplicationWtfHandler {
+        /**
+         * @param app object of the crashing app, null for the system server
+         * @param tag reported by the caller
+         * @param system whether this wtf is coming from the system
+         * @param crashInfo describing the context of the error
+         * @param immediateCallerPid the caller Pid
+         * @return true if the process should exit immediately (WTF is fatal)
+         */
+        boolean handleApplicationWtf(IBinder app, String tag, boolean system,
+                ApplicationErrorReport.ParcelableCrashInfo crashInfo, int immediateCallerPid);
     }
 
     /**
@@ -418,7 +514,7 @@ public class RuntimeInit {
     /**
      * Enable DDMS.
      */
-    static final void enableDdms() {
+    private static void enableDdms() {
         // Register handlers for DDM messages.
         android.ddm.DdmRegister.registerHandlers();
     }

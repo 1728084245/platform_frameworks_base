@@ -16,6 +16,10 @@
 
 #include "Debug.h"
 
+#include <androidfw/TypeWrappers.h>
+#include <androidfw/Util.h>
+#include <format/binary/ResChunkPullParser.h>
+
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -23,18 +27,24 @@
 #include <set>
 #include <vector>
 
-#include "android-base/logging.h"
-#include "android-base/stringprintf.h"
-
 #include "ResourceTable.h"
+#include "ResourceUtils.h"
 #include "ResourceValues.h"
 #include "ValueVisitor.h"
+#include "android-base/logging.h"
+#include "android-base/stringprintf.h"
+#include "androidfw/ResourceTypes.h"
+#include "idmap2/Policies.h"
 #include "text/Printer.h"
 #include "util/Util.h"
 
 using ::aapt::text::Printer;
 using ::android::StringPiece;
 using ::android::base::StringPrintf;
+
+using android::idmap2::policy::kPolicyStringToFlag;
+
+using PolicyFlags = android::ResTable_overlayable_policy_header::PolicyFlags;
 
 namespace aapt {
 
@@ -72,7 +82,7 @@ class ValueHeadlinePrinter : public ConstValueVisitor {
           printer_->Print(parent_name.package);
           printer_->Print(":");
         }
-        printer_->Print(to_string(parent_name.type));
+        printer_->Print(parent_name.type.to_string());
         printer_->Print("/");
         printer_->Print(parent_name.entry);
         if (parent_ref.id) {
@@ -129,12 +139,20 @@ class ValueBodyPrinter : public ConstValueVisitor {
     constexpr uint32_t kMask = android::ResTable_map::TYPE_ENUM | android::ResTable_map::TYPE_FLAGS;
     if (attr->type_mask & kMask) {
       for (const auto& symbol : attr->symbols) {
-        printer_->Print(symbol.symbol.name.value().entry);
-        if (symbol.symbol.id) {
-          printer_->Print("(");
+        if (symbol.symbol.name) {
+          printer_->Print(symbol.symbol.name.value().entry);
+
+          if (symbol.symbol.id) {
+            printer_->Print("(");
+            printer_->Print(symbol.symbol.id.value().to_string());
+            printer_->Print(")");
+          }
+        } else if (symbol.symbol.id) {
           printer_->Print(symbol.symbol.id.value().to_string());
-          printer_->Print(")");
+        } else {
+          printer_->Print("???");
         }
+
         printer_->Println(StringPrintf("=0x%08x", symbol.value));
       }
     }
@@ -170,19 +188,17 @@ class ValueBodyPrinter : public ConstValueVisitor {
   void Visit(const Array* array) override {
     const size_t count = array->elements.size();
     printer_->Print("[");
-    if (count > 0) {
-      for (size_t i = 0u; i < count; i++) {
-        if (i != 0u && i % 4u == 0u) {
-          printer_->Println();
-          printer_->Print(" ");
-        }
-        PrintItem(*array->elements[i]);
-        if (i != count - 1) {
-          printer_->Print(", ");
-        }
+    for (size_t i = 0u; i < count; i++) {
+      if (i != 0u && i % 4u == 0u) {
+        printer_->Println();
+        printer_->Print(" ");
       }
-      printer_->Println("]");
+      PrintItem(*array->elements[i]);
+      if (i != count - 1) {
+        printer_->Print(", ");
+      }
     }
+    printer_->Println("]");
   }
 
   void Visit(const Plural* plural) override {
@@ -244,57 +260,50 @@ class ValueBodyPrinter : public ConstValueVisitor {
 
 void Debug::PrintTable(const ResourceTable& table, const DebugPrintTableOptions& options,
                        Printer* printer) {
-  for (const auto& package : table.packages) {
-    ValueHeadlinePrinter headline_printer(package->name, printer);
-    ValueBodyPrinter body_printer(package->name, printer);
+  const auto table_view = table.GetPartitionedView();
+  for (const auto& package : table_view.packages) {
+    ValueHeadlinePrinter headline_printer(package.name, printer);
+    ValueBodyPrinter body_printer(package.name, printer);
+
+    auto& dynamicRefTable = table.GetReferencedPackages();
+    if (!dynamicRefTable.empty()) {
+      printer->Println(StringPrintf("DynamicRefTable entryCount=%d", int(dynamicRefTable.size())));
+      printer->Indent();
+      for (auto&& [id, name] : dynamicRefTable) {
+        printer->Println(StringPrintf("0x%02x -> %s", id, name.c_str()));
+      }
+      printer->Undent();
+    }
 
     printer->Print("Package name=");
-    printer->Print(package->name);
-    if (package->id) {
-      printer->Print(StringPrintf(" id=%02x", package->id.value()));
+    printer->Print(package.name);
+    if (package.id) {
+      printer->Print(StringPrintf(" id=%02x", package.id.value()));
     }
     printer->Println();
 
     printer->Indent();
-    for (const auto& type : package->types) {
+    for (const auto& type : package.types) {
       printer->Print("type ");
-      printer->Print(to_string(type->type));
-      if (type->id) {
-        printer->Print(StringPrintf(" id=%02x", type->id.value()));
+      printer->Print(type.named_type.to_string());
+      if (type.id) {
+        printer->Print(StringPrintf(" id=%02x", type.id.value()));
       }
-      printer->Println(StringPrintf(" entryCount=%zd", type->entries.size()));
-
-      std::vector<const ResourceEntry*> sorted_entries;
-      for (const auto& entry : type->entries) {
-        auto iter = std::lower_bound(
-            sorted_entries.begin(), sorted_entries.end(), entry.get(),
-            [](const ResourceEntry* a, const ResourceEntry* b) -> bool {
-              if (a->id && b->id) {
-                return a->id.value() < b->id.value();
-              } else if (a->id) {
-                return true;
-              } else {
-                return false;
-              }
-            });
-        sorted_entries.insert(iter, entry.get());
-      }
+      printer->Println(StringPrintf(" entryCount=%zd", type.entries.size()));
 
       printer->Indent();
-      for (const ResourceEntry* entry : sorted_entries) {
-        const ResourceId id(package->id.value_or_default(0), type->id.value_or_default(0),
-                            entry->id.value_or_default(0));
-
+      for (const ResourceTableEntryView& entry : type.entries) {
         printer->Print("resource ");
-        printer->Print(id.to_string());
+        printer->Print(ResourceId(package.id.value_or(0), type.id.value_or(0), entry.id.value_or(0))
+                           .to_string());
         printer->Print(" ");
 
         // Write the name without the package (this is obvious and too verbose).
-        printer->Print(to_string(type->type));
+        printer->Print(type.named_type.to_string());
         printer->Print("/");
-        printer->Print(entry->name);
+        printer->Print(entry.name);
 
-        switch (entry->visibility.level) {
+        switch (entry.visibility.level) {
           case Visibility::Level::kPublic:
             printer->Print(" PUBLIC");
             break;
@@ -306,15 +315,24 @@ void Debug::PrintTable(const ResourceTable& table, const DebugPrintTableOptions&
             break;
         }
 
-        if (entry->overlayable) {
+        if (entry.visibility.staged_api) {
+          printer->Print(" STAGED");
+        }
+
+        if (entry.overlayable_item) {
           printer->Print(" OVERLAYABLE");
+        }
+
+        if (entry.staged_id) {
+          printer->Print(" STAGED_ID=");
+          printer->Print(entry.staged_id.value().id.to_string());
         }
 
         printer->Println();
 
         if (options.show_values) {
           printer->Indent();
-          for (const auto& value : entry->values) {
+          for (const auto& value : entry.values) {
             printer->Print("(");
             printer->Print(value->config.to_string());
             printer->Print(") ");
@@ -357,7 +375,7 @@ void Debug::PrintStyleGraph(ResourceTable* table, const ResourceName& target_sty
       continue;
     }
 
-    Maybe<ResourceTable::SearchResult> result = table->FindResource(style_name);
+    std::optional<ResourceTable::SearchResult> result = table->FindResource(style_name);
     if (result) {
       ResourceEntry* entry = result.value().entry;
       for (const auto& value : entry->values) {
@@ -408,6 +426,41 @@ void Debug::DumpHex(const void* data, size_t len) {
   }
 }
 
+void Debug::DumpResStringPool(const android::ResStringPool* pool, text::Printer* printer) {
+  using namespace android;
+
+  if (pool->getError() == NO_INIT) {
+    printer->Print("String pool is unitialized.\n");
+    return;
+  } else if (pool->getError() != NO_ERROR) {
+    printer->Print("String pool is corrupt/invalid.\n");
+    return;
+  }
+
+  SortedVector<const void*> uniqueStrings;
+  const size_t N = pool->size();
+  for (size_t i=0; i<N; i++) {
+    size_t len;
+    if (pool->isUTF8()) {
+      uniqueStrings.add(UnpackOptionalString(pool->string8At(i), &len));
+    } else {
+      uniqueStrings.add(UnpackOptionalString(pool->stringAt(i), &len));
+    }
+  }
+
+  printer->Print(StringPrintf("String pool of %zd unique %s %s strings, %zd entries and %zd styles "
+                              "using %zd bytes:\n", uniqueStrings.size(),
+                              pool->isUTF8() ? "UTF-8" : "UTF-16",
+                              pool->isSorted() ? "sorted" : "non-sorted", N, pool->styleCount(),
+                              pool->bytes()));
+
+  const size_t NS = pool->size();
+  for (size_t s=0; s<NS; s++) {
+    auto str = pool->string8ObjectAt(s);
+    printer->Print(StringPrintf("String #%zd : %s\n", s, str.has_value() ? str->c_str() : ""));
+  }
+}
+
 namespace {
 
 class XmlPrinter : public xml::ConstVisitor {
@@ -442,8 +495,7 @@ class XmlPrinter : public xml::ConstVisitor {
 
       if (attr.compiled_attribute) {
         printer_->Print("(");
-        printer_->Print(
-            attr.compiled_attribute.value().id.value_or_default(ResourceId(0)).to_string());
+        printer_->Print(attr.compiled_attribute.value().id.value_or(ResourceId(0)).to_string());
         printer_->Print(")");
       }
       printer_->Print("=");
@@ -474,7 +526,8 @@ class XmlPrinter : public xml::ConstVisitor {
   }
 
   void Visit(const xml::Text* text) override {
-    printer_->Println(StringPrintf("T: '%s'", text->text.c_str()));
+    printer_->Println(
+        StringPrintf("T: '%s'", android::ResTable::normalizeForOutput(text->text.c_str()).c_str()));
   }
 
  private:
@@ -486,6 +539,362 @@ class XmlPrinter : public xml::ConstVisitor {
 void Debug::DumpXml(const xml::XmlResource& doc, Printer* printer) {
   XmlPrinter xml_visitor(printer);
   doc.root->Accept(&xml_visitor);
+}
+
+struct DumpOverlayableEntry {
+  std::string overlayable_section;
+  std::string policy_subsection;
+  std::string resource_name;
+};
+
+void Debug::DumpOverlayable(const ResourceTable& table, text::Printer* printer) {
+  std::vector<DumpOverlayableEntry> items;
+  for (const auto& package : table.packages) {
+    for (const auto& type : package->types) {
+      for (const auto& entry : type->entries) {
+        if (entry->overlayable_item) {
+          const auto& overlayable_item = entry->overlayable_item.value();
+          const auto overlayable_section = StringPrintf(R"(name="%s" actor="%s")",
+              overlayable_item.overlayable->name.c_str(),
+              overlayable_item.overlayable->actor.c_str());
+          const auto policy_subsection = StringPrintf(R"(policies="%s")",
+              android::idmap2::policy::PoliciesToDebugString(overlayable_item.policies).c_str());
+          const auto value =
+              StringPrintf("%s/%s", type->named_type.to_string().data(), entry->name.c_str());
+          items.push_back(DumpOverlayableEntry{overlayable_section, policy_subsection, value});
+        }
+      }
+    }
+  }
+
+  std::sort(items.begin(), items.end(),
+      [](const DumpOverlayableEntry& a, const DumpOverlayableEntry& b) {
+        if (a.overlayable_section != b.overlayable_section) {
+          return a.overlayable_section < b.overlayable_section;
+        }
+        if (a.policy_subsection != b.policy_subsection) {
+          return a.policy_subsection < b.policy_subsection;
+        }
+        return a.resource_name < b.resource_name;
+      });
+
+  std::string last_overlayable_section;
+  std::string last_policy_subsection;
+  for (const auto& item : items) {
+    if (last_overlayable_section != item.overlayable_section) {
+      printer->Println(item.overlayable_section);
+      last_overlayable_section = item.overlayable_section;
+    }
+    if (last_policy_subsection != item.policy_subsection) {
+      printer->Indent();
+      printer->Println(item.policy_subsection);
+      last_policy_subsection = item.policy_subsection;
+      printer->Undent();
+    }
+    printer->Indent();
+    printer->Indent();
+    printer->Println(item.resource_name);
+    printer->Undent();
+    printer->Undent();
+  }
+}
+
+namespace {
+
+using namespace android;
+
+class ChunkPrinter {
+ public:
+  ChunkPrinter(const void* data, size_t len, Printer* printer, android::IDiagnostics* diag)
+      : data_(data), data_len_(len), printer_(printer), diag_(diag) {
+  }
+
+  void PrintChunkHeader(const ResChunk_header* chunk) {
+    switch (android::util::DeviceToHost16(chunk->type)) {
+      case RES_STRING_POOL_TYPE:
+        printer_->Print("[RES_STRING_POOL_TYPE]");
+        break;
+      case RES_TABLE_LIBRARY_TYPE:
+        printer_->Print("[RES_TABLE_LIBRARY_TYPE]");
+        break;
+      case RES_TABLE_TYPE:
+        printer_->Print("[ResTable_header]");
+        break;
+      case RES_TABLE_PACKAGE_TYPE:
+        printer_->Print("[ResTable_package]");
+        break;
+      case RES_TABLE_TYPE_TYPE:
+        printer_->Print("[ResTable_type]");
+        break;
+      case RES_TABLE_TYPE_SPEC_TYPE:
+        printer_->Print("[RES_TABLE_TYPE_SPEC_TYPE]");
+        break;
+      default:
+        break;
+    }
+
+    printer_->Print(StringPrintf(" chunkSize: %u", android::util::DeviceToHost32(chunk->size)));
+    printer_->Print(
+        StringPrintf(" headerSize: %u", android::util::DeviceToHost32(chunk->headerSize)));
+  }
+
+  bool PrintTable(const ResTable_header* chunk) {
+    printer_->Print(
+        StringPrintf(" Package count: %u\n", android::util::DeviceToHost32(chunk->packageCount)));
+
+    // Print the chunks contained within the table
+    printer_->Indent();
+    bool success = PrintChunk(
+        ResChunkPullParser(GetChunkData(&chunk->header), GetChunkDataLen(&chunk->header)));
+    printer_->Undent();
+    return success;
+  }
+
+  void PrintResValue(const Res_value* value, const ConfigDescription& config,
+                     const ResourceType* type) {
+    printer_->Print("[Res_value]");
+    printer_->Print(StringPrintf(" size: %u", android::util::DeviceToHost32(value->size)));
+    printer_->Print(
+        StringPrintf(" dataType: 0x%02x", android::util::DeviceToHost32(value->dataType)));
+    printer_->Print(StringPrintf(" data: 0x%08x", android::util::DeviceToHost32(value->data)));
+
+    if (type) {
+      auto item =
+          ResourceUtils::ParseBinaryResValue(*type, config, value_pool_, *value, &out_pool_);
+      printer_->Print(" (");
+      item->PrettyPrint(printer_);
+      printer_->Print(")");
+    }
+
+    printer_->Print("\n");
+  }
+
+  bool PrintTableType(const ResTable_type* chunk) {
+    printer_->Print(StringPrintf(" id: 0x%02x", android::util::DeviceToHost32(chunk->id)));
+    printer_->Print(StringPrintf(
+        " name: %s",
+        android::util::GetString(type_pool_, android::util::DeviceToHost32(chunk->id) - 1)
+            .c_str()));
+    printer_->Print(StringPrintf(" flags: 0x%02x", android::util::DeviceToHost32(chunk->flags)));
+    printer_->Print(
+        StringPrintf(" entryCount: %u", android::util::DeviceToHost32(chunk->entryCount)));
+    printer_->Print(
+        StringPrintf(" entryStart: %u", android::util::DeviceToHost32(chunk->entriesStart)));
+
+    ConfigDescription config;
+    config.copyFromDtoH(chunk->config);
+    printer_->Print(StringPrintf(" config: %s\n", config.to_string().c_str()));
+
+    const ResourceType* type = ParseResourceType(
+        android::util::GetString(type_pool_, android::util::DeviceToHost32(chunk->id) - 1));
+
+    printer_->Indent();
+
+    TypeVariant tv(chunk);
+    for (auto it = tv.beginEntries(); it != tv.endEntries(); ++it) {
+      const ResTable_entry* entry = *it;
+      if (!entry) {
+        continue;
+      }
+
+      if (entry->is_complex()) {
+        printer_->Print("[ResTable_map_entry]");
+      } else if (entry->is_compact()) {
+        printer_->Print("[ResTable_entry_compact]");
+      } else {
+        printer_->Print("[ResTable_entry]");
+      }
+
+      printer_->Print(StringPrintf(" id: 0x%04x", it.index()));
+      printer_->Print(StringPrintf(
+          " name: %s", android::util::GetString(key_pool_, entry->key()).c_str()));
+      printer_->Print(StringPrintf(" keyIndex: %u", entry->key()));
+      printer_->Print(StringPrintf(" size: %zu", entry->size()));
+      printer_->Print(StringPrintf(" flags: 0x%04x", entry->flags()));
+
+      printer_->Indent();
+
+      if (auto map_entry = entry->map_entry()) {
+        uint32_t map_entry_count = android::util::DeviceToHost32(map_entry->count);
+        printer_->Print(StringPrintf(" count: 0x%04x", map_entry_count));
+        printer_->Print(StringPrintf(" parent: 0x%08x\n",
+                                     android::util::DeviceToHost32(map_entry->parent.ident)));
+
+        // Print the name and value mappings
+        auto maps = (const ResTable_map*)((const uint8_t*)entry + entry->size());
+        for (size_t i = 0; i < map_entry_count; i++) {
+          PrintResValue(&(maps[i].value), config, type);
+
+          printer_->Print(StringPrintf(
+              " name: %s name-id:%d\n",
+              android::util::GetString(key_pool_, android::util::DeviceToHost32(maps[i].name.ident))
+                  .c_str(),
+              android::util::DeviceToHost32(maps[i].name.ident)));
+        }
+      } else {
+        printer_->Print("\n");
+
+        // Print the value of the entry
+        Res_value value = entry->value();
+        PrintResValue(&value, config, type);
+      }
+
+      printer_->Undent();
+    }
+
+    printer_->Undent();
+    return true;
+  }
+
+  void PrintStringPool(const ResStringPool_header* chunk) {
+    // Initialize the string pools
+
+    ResStringPool* pool;
+    if (value_pool_.getError() == NO_INIT) {
+      pool = &value_pool_;
+    } else if (type_pool_.getError() == NO_INIT) {
+      pool = &type_pool_;
+    } else if (key_pool_.getError() == NO_INIT) {
+      pool = &key_pool_;
+    } else {
+      return;
+    }
+
+    pool->setTo(chunk, android::util::DeviceToHost32(
+                           (reinterpret_cast<const ResChunk_header*>(chunk))->size));
+
+    printer_->Print(StringPrintf(" strings: %zd styles %zd flags: %s|%s\n", pool->size(),
+                                 pool->styleCount(), pool->isUTF8() ? "UTF-8" : "UTF-16",
+                                 pool->isSorted() ? "SORTED" : "NON-SORTED"));
+
+    for (size_t i = 0; i < pool->size(); i++) {
+      printer_->Print(StringPrintf("#%zd : %s\n", i, android::util::GetString(*pool, i).c_str()));
+      if (i < pool->styleCount()) {
+        printer_->Print(" [Style] ");
+        auto maybe_style = pool->styleAt(i);
+        if (!maybe_style) {
+          printer_->Print("??? missing\n");
+        } else {
+          std::vector<const ResStringPool_span*> spans;
+          for (auto style = maybe_style.value().unsafe_ptr();
+               style->name.index != android::ResStringPool_span::END; ++style) {
+            spans.push_back(style);
+          }
+          printer_->Print(StringPrintf("(%zd)", spans.size()));
+          if (!spans.empty()) {
+            printer_->Print(" :");
+            for (const auto& span : spans) {
+              printer_->Print(StringPrintf(
+                  " %s:%u,%u", android::util::GetString(*pool, span->name.index).c_str(),
+                  span->firstChar, span->lastChar));
+            }
+            printer_->Print("\n");
+          }
+        }
+      }
+    }
+  }
+
+  bool PrintPackage(const ResTable_package* chunk) {
+    printer_->Print(StringPrintf(" id: 0x%02x", android::util::DeviceToHost32(chunk->id)));
+
+    size_t len = strnlen16((const char16_t*)chunk->name, std::size(chunk->name));
+    std::u16string package_name(len, u'\0');
+    package_name.resize(len);
+    for (size_t i = 0; i < len; i++) {
+      package_name[i] = android::util::DeviceToHost16(chunk->name[i]);
+    }
+
+    printer_->Print(StringPrintf("name: %s", String8(package_name.c_str()).c_str()));
+    printer_->Print(
+        StringPrintf(" typeStrings: %u", android::util::DeviceToHost32(chunk->typeStrings)));
+    printer_->Print(
+        StringPrintf(" lastPublicType: %u", android::util::DeviceToHost32(chunk->lastPublicType)));
+    printer_->Print(
+        StringPrintf(" keyStrings: %u", android::util::DeviceToHost32(chunk->keyStrings)));
+    printer_->Print(
+        StringPrintf(" lastPublicKey: %u", android::util::DeviceToHost32(chunk->lastPublicKey)));
+    printer_->Print(
+        StringPrintf(" typeIdOffset: %u\n", android::util::DeviceToHost32(chunk->typeIdOffset)));
+
+    // Print the chunks contained within the table
+    printer_->Indent();
+    bool success = PrintChunk(
+        ResChunkPullParser(GetChunkData(&chunk->header), GetChunkDataLen(&chunk->header)));
+    printer_->Undent();
+    return success;
+  }
+
+  bool PrintChunk(ResChunkPullParser&& parser) {
+    while (ResChunkPullParser::IsGoodEvent(parser.Next())) {
+      auto chunk = parser.chunk();
+      PrintChunkHeader(chunk);
+
+      switch (android::util::DeviceToHost16(chunk->type)) {
+        case RES_STRING_POOL_TYPE:
+          PrintStringPool(reinterpret_cast<const ResStringPool_header*>(chunk));
+          break;
+
+        case RES_TABLE_TYPE:
+          PrintTable(reinterpret_cast<const ResTable_header*>(chunk));
+          break;
+
+        case RES_TABLE_PACKAGE_TYPE:
+          type_pool_.uninit();
+          key_pool_.uninit();
+          PrintPackage(reinterpret_cast<const ResTable_package*>(chunk));
+          break;
+
+        case RES_TABLE_TYPE_TYPE:
+          PrintTableType(reinterpret_cast<const ResTable_type*>(chunk));
+          break;
+
+        default:
+          printer_->Print("\n");
+          break;
+      }
+    }
+
+    if (parser.event() == ResChunkPullParser::Event::kBadDocument) {
+      diag_->Error(android::DiagMessage(source_) << "corrupt resource table: " << parser.error());
+      return false;
+    }
+
+    return true;
+  }
+
+  void Print() {
+    PrintChunk(ResChunkPullParser(data_, data_len_));
+    printer_->Print("[End]\n");
+  }
+
+ private:
+  const android::Source source_;
+  const void* data_;
+  const size_t data_len_;
+  Printer* printer_;
+  android::IDiagnostics* diag_;
+
+  // The standard value string pool for resource values.
+  ResStringPool value_pool_;
+
+  // The string pool that holds the names of the types defined
+  // in this table.
+  ResStringPool type_pool_;
+
+  // The string pool that holds the names of the entries defined
+  // in this table.
+  ResStringPool key_pool_;
+
+  android::StringPool out_pool_;
+};
+
+}  // namespace
+
+void Debug::DumpChunks(const void* data, size_t len, Printer* printer,
+                       android::IDiagnostics* diag) {
+  ChunkPrinter chunk_printer(data, len, printer, diag);
+  chunk_printer.Print();
 }
 
 }  // namespace aapt

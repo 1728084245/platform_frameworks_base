@@ -21,8 +21,8 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.os.Bundle;
-import android.support.annotation.ColorInt;
-import android.support.v7.app.AppCompatActivity;
+import androidx.annotation.ColorInt;
+import androidx.appcompat.app.AppCompatActivity;
 import android.util.AttributeSet;
 import android.view.View;
 import android.view.ViewGroup;
@@ -51,6 +51,7 @@ public class InvalidateActivity extends AppCompatActivity {
     }
 
     private ColorView[][] mColorViews;
+    private ObjectAnimator mAnimator;
 
     @SuppressWarnings("unused")
     public void setColorValue(int colorValue) {
@@ -80,9 +81,17 @@ public class InvalidateActivity extends AppCompatActivity {
             }
         }
 
-        ObjectAnimator animator = ObjectAnimator.ofInt(this, "colorValue", 0, 255);
-        animator.setRepeatMode(ValueAnimator.REVERSE);
-        animator.setRepeatCount(ValueAnimator.INFINITE);
-        animator.start();
+        mAnimator = ObjectAnimator.ofInt(this, "colorValue", 0, 255);
+        mAnimator.setRepeatMode(ValueAnimator.REVERSE);
+        mAnimator.setRepeatCount(ValueAnimator.INFINITE);
+        mAnimator.start();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (mAnimator != null) {
+            mAnimator.cancel();
+        }
     }
 }

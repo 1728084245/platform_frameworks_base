@@ -21,8 +21,11 @@ import android.telephony.ims.ImsStreamMediaProfile;
 import android.telephony.ims.ImsCallProfile;
 import android.telephony.ims.ImsReasonInfo;
 import android.telephony.ims.ImsConferenceState;
+import android.telephony.ims.RtpHeaderExtension;
 import com.android.ims.internal.IImsCallSession;
 import android.telephony.ims.ImsSuppServiceNotification;
+
+import java.util.List;
 
 /**
  * A listener type for receiving notification on IMS call session events.
@@ -34,6 +37,8 @@ oneway interface IImsCallSessionListener {
     /**
      * Notifies the result of the basic session operation (setup / terminate).
      */
+    void callSessionInitiating(in ImsCallProfile profile);
+    void callSessionInitiatingFailed(in ImsReasonInfo reasonInfo);
     void callSessionProgressing(in ImsStreamMediaProfile profile);
     void callSessionInitiated(in ImsCallProfile profile);
     void callSessionInitiatedFailed(in ImsReasonInfo reasonInfo);
@@ -92,11 +97,11 @@ oneway interface IImsCallSessionListener {
     /**
      * Notifies of handover information for this call
      */
-    void callSessionHandover(int srcAccessTech, int targetAccessTech,
+    void callSessionHandover(int srcNetworkType, int targetNetworkType,
             in ImsReasonInfo reasonInfo);
-    void callSessionHandoverFailed(int srcAccessTech, int targetAccessTech,
+    void callSessionHandoverFailed(int srcNetworkType, int targetNetworkType,
             in ImsReasonInfo reasonInfo);
-    void callSessionMayHandover(int srcAccessTech, int targetAccessTech);
+    void callSessionMayHandover(int srcNetworkType, int targetNetworkType);
 
     /**
      * Notifies the TTY mode change by remote party.
@@ -148,8 +153,35 @@ oneway interface IImsCallSessionListener {
     void callSessionRttAudioIndicatorChanged(in ImsStreamMediaProfile profile);
 
     /**
+     * Notifies the result of transfer request.
+     */
+    void callSessionTransferred();
+    void callSessionTransferFailed(in ImsReasonInfo reasonInfo);
+
+    void callSessionDtmfReceived(char dtmf);
+
+    /**
      * Notifies of a change to the call quality.
      * @param callQuality then updated call quality
      */
     void callQualityChanged(in CallQuality callQuality);
+
+    /**
+     * Notifies of incoming RTP header extensions from the network.
+     * @param extensions the RTP header extensions received.
+     */
+    void callSessionRtpHeaderExtensionsReceived(in List<RtpHeaderExtension> extensions);
+
+    /**
+     * Access Network Bitrate Recommendation Query (ANBRQ), see 3GPP TS 26.114.
+     * This API triggers radio to send ANBRQ message to the access network to query the desired
+     * bitrate.
+     *
+     * @param mediaType MediaType is used to identify media stream such as audio or video.
+     * @param direction Direction of this packet stream (e.g. uplink or downlink).
+     * @param bitsPerSecond This value is the bitrate requested by the other party UE
+     *        through RTP CMR, RTCPAPP or TMMBR, and ImsStack converts this value to the MAC bitrate
+     *        (defined in TS36.321, range: 0 ~ 8000 kbit/s).
+     */
+    void callSessionSendAnbrQuery(int mediaType, int direction, int bitsPerSecond);
 }

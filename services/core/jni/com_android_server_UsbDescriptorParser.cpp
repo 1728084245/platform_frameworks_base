@@ -15,16 +15,15 @@
  */
 
 #define LOG_TAG "UsbHostManagerJNI"
-#include "utils/Log.h"
-
+#include <nativehelper/JNIHelp.h>
 #include <stdlib.h>
+#include <usbhost/usbhost.h>
+#include <usbhost/usbhost_jni.h>
 
 #include "jni.h"
-#include <nativehelper/JNIHelp.h>
+#include "utils/Log.h"
 
-#include <usbhost/usbhost.h>
-
-#define MAX_DESCRIPTORS_LENGTH 4096
+static const int USB_CONTROL_TRANSFER_TIMEOUT_MS = 200;
 
 // com.android.server.usb.descriptors
 extern "C" {
@@ -40,26 +39,9 @@ jbyteArray JNICALL Java_com_android_server_usb_descriptors_UsbDescriptorParser_g
     }
 
     int fd = usb_device_get_fd(device);
-    if (fd < 0) {
-        usb_device_close(device);
-        return NULL;
-    }
-
-    // from android_hardware_UsbDeviceConnection_get_desc()
-    jbyte buffer[MAX_DESCRIPTORS_LENGTH];
-    lseek(fd, 0, SEEK_SET);
-    int numBytes = read(fd, buffer, sizeof(buffer));
-    jbyteArray ret = NULL;
+    jbyteArray descriptors = usb_jni_read_descriptors(env, fd);
     usb_device_close(device);
-
-    if (numBytes > 0) {
-        ret = env->NewByteArray(numBytes);
-        env->SetByteArrayRegion(ret, 0, numBytes, buffer);
-    } else {
-        ALOGE("error reading descriptors\n");
-    }
-
-    return ret;
+    return descriptors;
 }
 
 jstring JNICALL Java_com_android_server_usb_descriptors_UsbDescriptorParser_getDescriptorString_1native(
@@ -81,18 +63,13 @@ jstring JNICALL Java_com_android_server_usb_descriptors_UsbDescriptorParser_getD
         return NULL;
     }
 
-    // Get Raw UCS2 Bytes
-    jbyte* byteBuffer = NULL;
-    size_t numUSC2Bytes = 0;
-    int retVal =
-            usb_device_get_string_ucs2(device, stringId, 0 /*timeout*/,
-                                     (void**)&byteBuffer, &numUSC2Bytes);
+    char* data = usb_device_get_string(device, stringId, USB_CONTROL_TRANSFER_TIMEOUT_MS);
 
     jstring j_str = NULL;
 
-    if (retVal == 0) {
-        j_str = env->NewString((jchar*)byteBuffer, numUSC2Bytes/2);
-        free(byteBuffer);
+    if (data != NULL) {
+        j_str = env->NewStringUTF(data);
+        free(data);
     }
 
     usb_device_close(device);

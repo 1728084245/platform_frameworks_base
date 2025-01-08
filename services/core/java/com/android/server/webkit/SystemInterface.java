@@ -16,10 +16,9 @@
 
 package com.android.server.webkit;
 
-import android.content.Context;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
-import android.database.ContentObserver;
 import android.webkit.UserPackage;
 import android.webkit.WebViewProviderInfo;
 
@@ -34,23 +33,19 @@ import java.util.List;
  * @hide
  */
 public interface SystemInterface {
-    public WebViewProviderInfo[] getWebViewPackages();
-    public int onWebViewProviderChanged(PackageInfo packageInfo);
-    public long getFactoryPackageVersion(String packageName) throws NameNotFoundException;
+    WebViewProviderInfo[] getWebViewPackages();
+    int onWebViewProviderChanged(PackageInfo packageInfo);
+    long getFactoryPackageVersion(String packageName) throws NameNotFoundException;
 
-    public String getUserChosenWebViewProvider(Context context);
-    public void updateUserSetting(Context context, String newProviderName);
-    public void killPackageDependents(String packageName);
+    String getUserChosenWebViewProvider();
+    void updateUserSetting(String newProviderName);
+    void killPackageDependents(String packageName);
 
-    public boolean isFallbackLogicEnabled();
-    public void enableFallbackLogic(boolean enable);
+    void enablePackageForAllUsers(String packageName, boolean enable);
+    void installExistingPackageForAllUsers(String packageName);
 
-    public void uninstallAndDisablePackageForAllUsers(Context context, String packageName);
-    public void enablePackageForAllUsers(Context context, String packageName, boolean enable);
-    public void enablePackageForUser(String packageName, boolean enable, int userId);
-
-    public boolean systemIsDebuggable();
-    public PackageInfo getPackageInfoForProvider(WebViewProviderInfo configInfo)
+    boolean systemIsDebuggable();
+    PackageInfo getPackageInfoForProvider(WebViewProviderInfo configInfo)
             throws NameNotFoundException;
     /**
      * Get the PackageInfos of all users for the package represented by {@param configInfo}.
@@ -58,11 +53,14 @@ public interface SystemInterface {
      *         certain user. The returned array can contain null PackageInfos if the given package
      *         is uninstalled for some user.
      */
-    public List<UserPackage> getPackageInfoForProviderAllUsers(Context context,
-            WebViewProviderInfo configInfo);
+    List<UserPackage> getPackageInfoForProviderAllUsers(WebViewProviderInfo configInfo);
 
-    public int getMultiProcessSetting(Context context);
-    public void setMultiProcessSetting(Context context, int value);
-    public void notifyZygote(boolean enableMultiProcess);
-    public boolean isMultiProcessDefaultEnabled();
+    int getMultiProcessSetting();
+    void setMultiProcessSetting(int value);
+    void notifyZygote(boolean enableMultiProcess);
+    /** Start the zygote if it's not already running. */
+    void ensureZygoteStarted();
+    boolean isMultiProcessDefaultEnabled();
+
+    void pinWebviewIfRequired(ApplicationInfo appInfo);
 }

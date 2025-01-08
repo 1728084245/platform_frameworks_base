@@ -16,15 +16,15 @@
 
 package android.app.servertransaction;
 
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import android.app.ClientTransactionHandler;
-import android.os.IBinder;
 import android.platform.test.annotations.Presubmit;
-import android.support.test.filters.SmallTest;
-import android.support.test.runner.AndroidJUnit4;
+
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -45,22 +45,22 @@ public class ClientTransactionTests {
 
     @Test
     public void testPreExecute() {
-        ClientTransactionItem callback1 = mock(ClientTransactionItem.class);
-        ClientTransactionItem callback2 = mock(ClientTransactionItem.class);
-        ActivityLifecycleItem stateRequest = mock(ActivityLifecycleItem.class);
-        ClientTransactionHandler clientTransactionHandler = mock(ClientTransactionHandler.class);
-        IBinder token = mock(IBinder.class);
+        final ClientTransactionItem callback1 = mock(ClientTransactionItem.class);
+        final ClientTransactionItem callback2 = mock(ClientTransactionItem.class);
+        final ActivityLifecycleItem stateRequest = mock(ActivityLifecycleItem.class);
+        doReturn(true).when(stateRequest).isActivityLifecycleItem();
+        final ClientTransactionHandler clientTransactionHandler =
+                mock(ClientTransactionHandler.class);
 
-        ClientTransaction transaction = ClientTransaction.obtain(null /* client */,
-                token /* activityToken */);
-        transaction.addCallback(callback1);
-        transaction.addCallback(callback2);
-        transaction.setLifecycleStateRequest(stateRequest);
+        final ClientTransaction transaction = new ClientTransaction();
+        transaction.addTransactionItem(callback1);
+        transaction.addTransactionItem(callback2);
+        transaction.addTransactionItem(stateRequest);
 
         transaction.preExecute(clientTransactionHandler);
 
-        verify(callback1, times(1)).preExecute(clientTransactionHandler, token);
-        verify(callback2, times(1)).preExecute(clientTransactionHandler, token);
-        verify(stateRequest, times(1)).preExecute(clientTransactionHandler, token);
+        verify(callback1).preExecute(clientTransactionHandler);
+        verify(callback2).preExecute(clientTransactionHandler);
+        verify(stateRequest).preExecute(clientTransactionHandler);
     }
 }

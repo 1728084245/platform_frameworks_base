@@ -16,60 +16,87 @@
 
 package com.android.server.am;
 
+import static androidx.test.platform.app.InstrumentationRegistry.getInstrumentation;
+
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+
+import android.content.ComponentName;
 import android.content.Context;
+import android.content.pm.PackageManagerInternal;
 import android.os.Handler;
 
-import androidx.test.InstrumentationRegistry;
 import androidx.test.annotation.UiThreadTest;
 import androidx.test.filters.FlakyTest;
 import androidx.test.filters.SmallTest;
-import androidx.test.runner.AndroidJUnit4;
 
-import com.android.server.AppOpsService;
+import com.android.server.LocalServices;
+import com.android.server.appop.AppOpsService;
+import com.android.server.wm.ActivityTaskManagerService;
 
+import org.junit.AfterClass;
 import org.junit.Before;
+import org.junit.BeforeClass;
+import org.junit.Rule;
 import org.junit.Test;
-import org.junit.runner.RunWith;
 
 import java.io.File;
 
 /**
- * runtest -c com.android.server.am.AppErrorDialogTest frameworks-services
+ * Build/Install/Run:
+ *  atest FrameworksServicesTests:AppErrorDialogTest
  */
-@RunWith(AndroidJUnit4.class)
 @SmallTest
 @FlakyTest(bugId = 113616538)
 public class AppErrorDialogTest {
+
+    @BeforeClass
+    public static void setUpOnce() {
+        final PackageManagerInternal pm = mock(PackageManagerInternal.class);
+        doReturn(new ComponentName("", "")).when(pm).getSystemUiServiceComponent();
+        LocalServices.addService(PackageManagerInternal.class, pm);
+    }
+
+    @AfterClass
+    public static void tearDownOnce() {
+        LocalServices.removeServiceForTest(PackageManagerInternal.class);
+    }
+
+    @Rule
+    public ServiceThreadRule mServiceThreadRule = new ServiceThreadRule();
 
     private Context mContext;
     private ActivityManagerService mService;
 
     @Before
     public void setUp() throws Exception {
-        mContext = InstrumentationRegistry.getTargetContext();
-        mService = new ActivityManagerService(new ActivityManagerService.Injector() {
+        mContext = getInstrumentation().getTargetContext();
+        mService = new ActivityManagerService(new ActivityManagerService.Injector(mContext) {
             @Override
-            public AppOpsService getAppOpsService(File file, Handler handler) {
+            public AppOpsService getAppOpsService(File recentAccessesFile, File storageFile,
+                    Handler handler) {
                 return null;
             }
 
             @Override
             public Handler getUiHandler(ActivityManagerService service) {
-                return null;
+                return mServiceThreadRule.getThread().getThreadHandler();
             }
 
             @Override
             public boolean isNetworkRestrictedForUid(int uid) {
                 return false;
             }
-        });
+        }, mServiceThreadRule.getThread());
+        mService.mActivityTaskManager = new ActivityTaskManagerService(mContext);
+        mService.mActivityTaskManager.initialize(null, null, mContext.getMainLooper());
     }
 
     @Test
     @UiThreadTest
-    public void testCreateWorks() throws Exception {
+    public void testCreateWorks() {
         AppErrorDialog.Data data = new AppErrorDialog.Data();
-        data.proc = new ProcessRecord(null, null, mContext.getApplicationInfo(), "name", 12345);
+        data.proc = new ProcessRecord(mService, mContext.getApplicationInfo(), "name", 12345);
         data.result = new AppErrorResult();
 
         AppErrorDialog dialog = new AppErrorDialog(mContext, mService, data);

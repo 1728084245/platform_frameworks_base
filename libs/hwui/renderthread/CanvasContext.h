@@ -16,33 +16,38 @@
 
 #pragma once
 
-#include "BakedOpDispatcher.h"
-#include "BakedOpRenderer.h"
+#include <SkBitmap.h>
+#include <SkRect.h>
+#include <SkSize.h>
+#include <cutils/compiler.h>
+#include <utils/Functor.h>
+#include <utils/Mutex.h>
+
+#include <functional>
+#include <future>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "ColorMode.h"
 #include "DamageAccumulator.h"
-#include "FrameBuilder.h"
 #include "FrameInfo.h"
 #include "FrameInfoVisualizer.h"
 #include "FrameMetricsReporter.h"
+#include "HintSessionWrapper.h"
 #include "IContextFactory.h"
 #include "IRenderPipeline.h"
+#include "JankTracker.h"
 #include "LayerUpdateQueue.h"
+#include "Lighting.h"
+#include "ReliableSurface.h"
 #include "RenderNode.h"
+#include "renderstate/RenderState.h"
 #include "renderthread/RenderTask.h"
 #include "renderthread/RenderThread.h"
-#include "thread/Task.h"
-#include "thread/TaskProcessor.h"
-
-#include <EGL/egl.h>
-#include <SkBitmap.h>
-#include <SkRect.h>
-#include <cutils/compiler.h>
-#include <gui/Surface.h>
-#include <utils/Functor.h>
-
-#include <functional>
-#include <set>
-#include <string>
-#include <vector>
+#include "utils/ForceDark.h"
+#include "utils/RingBuffer.h"
 
 namespace android {
 namespace uirenderer {
@@ -56,16 +61,16 @@ class RenderState;
 
 namespace renderthread {
 
-class EglManager;
 class Frame;
 
 // This per-renderer class manages the bridge between the global EGL context
 // and the render surface.
 // TODO: Rename to Renderer or some other per-window, top-level manager
-class CanvasContext : public IFrameCallback {
+class CanvasContext : public IFrameCallback, public IGpuContextCallback {
 public:
     static CanvasContext* create(RenderThread& thread, bool translucent, RenderNode* rootRenderNode,
-                                 IContextFactory* contextFactory);
+                                 IContextFactory* contextFactory, pid_t uiThreadId,
+                                 pid_t renderThreadId);
     virtual ~CanvasContext();
 
     /**
@@ -77,8 +82,7 @@ public:
      */
     bool createOrUpdateLayer(RenderNode* node, const DamageAccumulator& dmgAccumulator,
                              ErrorHandler* errorHandler) {
-        return mRenderPipeline->createOrUpdateLayer(node, dmgAccumulator, mWideColorGamut,
-                errorHandler);
+        return mRenderPipeline->createOrUpdateLayer(node, dmgAccumulator, errorHandler);
     }
 
     /**
@@ -90,20 +94,22 @@ public:
      *         and false otherwise (e.g. cache limits have been exceeded).
      */
     bool pinImages(std::vector<SkImage*>& mutableImages) {
+        if (!Properties::isDrawingEnabled()) {
+            return true;
+        }
         return mRenderPipeline->pinImages(mutableImages);
     }
-    bool pinImages(LsaVector<sk_sp<Bitmap>>& images) { return mRenderPipeline->pinImages(images); }
+    bool pinImages(LsaVector<sk_sp<Bitmap>>& images) {
+        if (!Properties::isDrawingEnabled()) {
+            return true;
+        }
+        return mRenderPipeline->pinImages(images);
+    }
 
     /**
      * Unpin any image that had be previously pinned to the GPU cache
      */
     void unpinImages() { mRenderPipeline->unpinImages(); }
-
-    /**
-     * Destroy any layers that have been attached to the provided RenderNode removing
-     * any state that may have been set during createOrUpdateLayer().
-     */
-    static void destroyLayer(RenderNode* node);
 
     static void invokeFunctor(const RenderThread& thread, Functor* functor);
 
@@ -113,23 +119,33 @@ public:
      * If Properties::isSkiaEnabled() is true then this will return the Skia
      * grContext associated with the current RenderPipeline.
      */
-    GrContext* getGrContext() const { return mRenderThread.getGrContext(); }
+    GrDirectContext* getGrContext() const { return mRenderThread.getGrContext(); }
+
+    ASurfaceControl* getSurfaceControl() const { return mSurfaceControl; }
+    int32_t getSurfaceControlGenerationId() const { return mSurfaceControlGenerationId; }
 
     // Won't take effect until next EGLSurface creation
     void setSwapBehavior(SwapBehavior swapBehavior);
 
-    void setSurface(sp<Surface>&& surface);
+    void setHardwareBuffer(AHardwareBuffer* buffer);
+    void setSurface(ANativeWindow* window, bool enableTimeout = true);
+    void setSurfaceControl(ASurfaceControl* surfaceControl);
     bool pauseSurface();
     void setStopped(bool stopped);
-    bool hasSurface() { return mNativeSurface.get(); }
+    bool isStopped() { return mStopped || !hasOutputTarget(); }
+    bool hasOutputTarget() const { return mNativeSurface.get() || mHardwareBuffer; }
+    void allocateBuffers();
 
-    void setup(float lightRadius, uint8_t ambientShadowAlpha, uint8_t spotShadowAlpha);
-    void setLightCenter(const Vector3& lightCenter);
+    void setLightAlpha(uint8_t ambientShadowAlpha, uint8_t spotShadowAlpha);
+    void setLightGeometry(const Vector3& lightCenter, float lightRadius);
     void setOpaque(bool opaque);
-    void setWideGamut(bool wideGamut);
+    float setColorMode(ColorMode mode);
+    float targetSdrHdrRatio() const;
+    void setTargetSdrHdrRatio(float ratio);
     bool makeCurrent();
     void prepareTree(TreeInfo& info, int64_t* uiFrameInfo, int64_t syncQueued, RenderNode* target);
-    void draw();
+    // Returns the DequeueBufferDuration.
+    void draw(bool solelyTextureViewUpdates);
     void destroy();
 
     // IFrameCallback, Choreographer-driven frame callback entry point
@@ -137,11 +153,10 @@ public:
     void prepareAndDraw(RenderNode* node);
 
     void buildLayer(RenderNode* node);
-    bool copyLayerInto(DeferredLayerUpdater* layer, SkBitmap* bitmap);
     void markLayerInUse(RenderNode* node);
 
     void destroyHardwareResources();
-    static void trimMemory(RenderThread& thread, int level);
+    void onContextDestroyed() override;
 
     DeferredLayerUpdater* createTextureLayer();
 
@@ -149,54 +164,86 @@ public:
     void notifyFramePending();
 
     FrameInfoVisualizer& profiler() { return mProfiler; }
+    std::mutex& profilerLock() { return mFrameInfoMutex; }
 
     void dumpFrames(int fd);
     void resetFrameStats();
 
     void setName(const std::string&& name);
 
-    void serializeDisplayListTree();
-
     void addRenderNode(RenderNode* node, bool placeFront);
     void removeRenderNode(RenderNode* node);
 
     void setContentDrawBounds(const Rect& bounds) { mContentDrawBounds = bounds; }
 
-    RenderState& getRenderState() { return mRenderThread.renderState(); }
-
-    void addFrameMetricsObserver(FrameMetricsObserver* observer) {
-        if (mFrameMetricsReporter.get() == nullptr) {
-            mFrameMetricsReporter.reset(new FrameMetricsReporter());
-        }
-
-        mFrameMetricsReporter->addObserver(observer);
-    }
-
-    void removeFrameMetricsObserver(FrameMetricsObserver* observer) {
-        if (mFrameMetricsReporter.get() != nullptr) {
-            mFrameMetricsReporter->removeObserver(observer);
-            if (!mFrameMetricsReporter->hasObservers()) {
-                mFrameMetricsReporter.reset(nullptr);
-            }
-        }
-    }
+    void addFrameMetricsObserver(FrameMetricsObserver* observer);
+    void removeFrameMetricsObserver(FrameMetricsObserver* observer);
 
     // Used to queue up work that needs to be completed before this frame completes
-    ANDROID_API void enqueueFrameWork(std::function<void()>&& func);
+    void enqueueFrameWork(std::function<void()>&& func);
 
-    ANDROID_API int64_t getFrameNumber();
+    uint64_t getFrameNumber();
 
     void waitOnFences();
 
     IRenderPipeline* getRenderPipeline() { return mRenderPipeline.get(); }
 
-    void addFrameCompleteListener(std::function<void(int64_t)>&& func) {
-        mFrameCompleteCallbacks.push_back(std::move(func));
+    void addFrameCommitListener(std::function<void(bool)>&& func) {
+        mFrameCommitCallbacks.push_back(std::move(func));
     }
+
+    void setPictureCapturedCallback(const std::function<void(sk_sp<SkPicture>&&)>& callback) {
+        mRenderPipeline->setPictureCapturedCallback(callback);
+    }
+
+    void setForceDark(ForceDarkType type) { mForceDarkType = type; }
+
+    ForceDarkType getForceDarkType() { return mForceDarkType; }
+
+    SkISize getNextFrameSize() const;
+
+    // Returns the matrix to use to nudge non-AA'd points/lines towards the fragment center
+    const SkM44& getPixelSnapMatrix() const;
+
+    // Called when SurfaceStats are available.
+    static void onSurfaceStatsAvailable(void* context, int32_t surfaceControlId,
+                                        ASurfaceControlStats* stats);
+
+    void setASurfaceTransactionCallback(
+            const std::function<bool(int64_t, int64_t, int64_t)>& callback) {
+        mASurfaceTransactionCallback = callback;
+    }
+
+    void setHardwareBufferRenderParams(const HardwareBufferRenderParams& params) {
+        mBufferParams = params;
+    }
+
+    bool mergeTransaction(ASurfaceTransaction* transaction, ASurfaceControl* control);
+
+    void setPrepareSurfaceControlForWebviewCallback(const std::function<void()>& callback) {
+        mPrepareSurfaceControlForWebviewCallback = callback;
+    }
+
+    void prepareSurfaceControlForWebview();
+
+    static CanvasContext* getActiveContext();
+
+    void sendLoadResetHint();
+
+    void sendLoadIncreaseHint();
+
+    void setSyncDelayDuration(nsecs_t duration);
+
+    void startHintSession();
+
+    static bool shouldDither();
+
+    void visitAllRenderNodes(std::function<void(const RenderNode&)>) const;
 
 private:
     CanvasContext(RenderThread& thread, bool translucent, RenderNode* rootRenderNode,
-                  IContextFactory* contextFactory, std::unique_ptr<IRenderPipeline> renderPipeline);
+                  IContextFactory* contextFactory, std::unique_ptr<IRenderPipeline> renderPipeline,
+                  pid_t uiThreadId, pid_t renderThreadId);
 
     friend class RegisterFrameCallbackTask;
     // TODO: Replace with something better for layer & other GL object
@@ -206,14 +253,46 @@ private:
     void freePrefetchedLayers();
 
     bool isSwapChainStuffed();
+    bool surfaceRequiresRedraw();
+    void setupPipelineSurface();
 
     SkRect computeDirtyRect(const Frame& frame, SkRect* dirty);
+    void finishFrame(FrameInfo* frameInfo);
 
-    EGLint mLastFrameWidth = 0;
-    EGLint mLastFrameHeight = 0;
+    /**
+     * Invoke 'reportFrameMetrics' on the last frame stored in 'mLastFrameInfos'.
+     * Populate the 'presentTime' field before calling.
+     */
+    void reportMetricsWithPresentTime();
+
+    struct FrameMetricsInfo {
+        FrameInfo* frameInfo;
+        int64_t frameNumber;
+        int32_t surfaceId;
+    };
+
+    FrameInfo* getFrameInfoFromLastFew(uint64_t frameNumber, uint32_t surfaceControlId);
+
+    Frame getFrame();
+
+    // The same type as Frame.mWidth and Frame.mHeight
+    int32_t mLastFrameWidth = 0;
+    int32_t mLastFrameHeight = 0;
 
     RenderThread& mRenderThread;
-    sp<Surface> mNativeSurface;
+
+    AHardwareBuffer* mHardwareBuffer = nullptr;
+    HardwareBufferRenderParams mBufferParams;
+    std::unique_ptr<ReliableSurface> mNativeSurface;
+    // The SurfaceControl reference is passed from ViewRootImpl, can be set to
+    // NULL to remove the reference
+    ASurfaceControl* mSurfaceControl = nullptr;
+    // id to track surface control changes and WebViewFunctor uses it to determine
+    // whether reparenting is needed also used by FrameMetricsReporter to determine
+    // if a frame is from an "old" surface (i.e. one that existed before the
+    // observer was attched) and therefore shouldn't be reported.
+    // NOTE: It is important that this is an increasing counter.
+    int32_t mSurfaceControlGenerationId = 0;
     // stopped indicates the CanvasContext will reject actual redraw operations,
     // and defer repaint until it is un-stopped
     bool mStopped = false;
@@ -232,16 +311,19 @@ private:
         nsecs_t queueDuration;
     };
 
-    RingBuffer<SwapHistory, 3> mSwapHistory;
-    int64_t mFrameNumber = -1;
+    // Need at least 4 because we do quad buffer. Add a few more for good measure.
+    RingBuffer<SwapHistory, 7> mSwapHistory;
+    // Frame numbers start at 1, 0 means uninitialized
+    uint64_t mFrameNumber = 0;
+    int64_t mDamageId = 0;
 
     // last vsync for a dropped frame due to stuffed queue
     nsecs_t mLastDropVsync = 0;
 
     bool mOpaque;
-    bool mWideColorGamut = false;
-    BakedOpRenderer::LightInfo mLightInfo;
-    FrameBuilder::LightGeometry mLightGeometry = {{0, 0, 0}, 0};
+    ForceDarkType mForceDarkType = ForceDarkType::NONE;
+    LightInfo mLightInfo;
+    LightGeometry mLightGeometry = {{0, 0, 0}, 0};
 
     bool mHaveNewSurface = false;
     DamageAccumulator mDamageAccumulator;
@@ -251,28 +333,48 @@ private:
     std::vector<sp<RenderNode>> mRenderNodes;
 
     FrameInfo* mCurrentFrameInfo = nullptr;
+
+    // List of data of frames that are awaiting GPU completion reporting. Used to compute frame
+    // metrics and determine whether or not to report the metrics.
+    RingBuffer<FrameMetricsInfo, 6> mLastFrameMetricsInfos
+            GUARDED_BY(mLastFrameMetricsInfosMutex);
+    std::mutex mLastFrameMetricsInfosMutex;
+
     std::string mName;
     JankTracker mJankTracker;
     FrameInfoVisualizer mProfiler;
-    std::unique_ptr<FrameMetricsReporter> mFrameMetricsReporter;
+    std::unique_ptr<FrameMetricsReporter> mFrameMetricsReporter GUARDED_BY(mFrameInfoMutex);
+    std::mutex mFrameInfoMutex;
 
     std::set<RenderNode*> mPrefetchedLayers;
 
     // Stores the bounds of the main content.
     Rect mContentDrawBounds;
 
-    // TODO: This is really a Task<void> but that doesn't really work
-    // when Future<> expects to be able to get/set a value
-    struct FuncTask : public Task<bool> {
-        std::function<void()> func;
-    };
-    class FuncTaskProcessor;
-
-    std::vector<sp<FuncTask>> mFrameFences;
-    sp<TaskProcessor<bool>> mFrameWorkProcessor;
+    std::vector<std::future<void>> mFrameFences;
     std::unique_ptr<IRenderPipeline> mRenderPipeline;
 
-    std::vector<std::function<void(int64_t)>> mFrameCompleteCallbacks;
+    std::vector<std::function<void(bool)>> mFrameCommitCallbacks;
+
+    // If set to true, we expect that callbacks into onSurfaceStatsAvailable
+    bool mExpectSurfaceStats = false;
+
+    std::function<bool(int64_t, int64_t, int64_t)> mASurfaceTransactionCallback;
+    std::function<void()> mPrepareSurfaceControlForWebviewCallback;
+
+    std::shared_ptr<HintSessionWrapper> mHintSessionWrapper;
+    nsecs_t mLastDequeueBufferDuration = 0;
+    nsecs_t mSyncDelayDuration = 0;
+    nsecs_t mIdleDuration = 0;
+
+    ColorMode mColorMode = ColorMode::Default;
+    float mTargetSdrHdrRatio = 1.f;
+
+    struct SkippedFrameInfo {
+        int64_t vsyncId;
+        int64_t startTime;
+    };
+    std::optional<SkippedFrameInfo> mSkippedFrameInfo;
 };
 
 } /* namespace renderthread */

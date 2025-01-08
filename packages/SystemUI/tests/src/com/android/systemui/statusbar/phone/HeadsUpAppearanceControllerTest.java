@@ -16,159 +16,297 @@
 
 package com.android.systemui.statusbar.phone;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import android.testing.AndroidTestingRunner;
+import android.platform.test.annotations.DisableFlags;
+import android.testing.TestableLooper;
 import android.testing.TestableLooper.RunWithLooper;
 import android.view.View;
 import android.widget.TextView;
 
+import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.filters.SmallTest;
 
 import com.android.systemui.SysuiTestCase;
-import com.android.systemui.statusbar.ExpandableNotificationRow;
+import com.android.systemui.flags.FakeFeatureFlagsClassic;
+import com.android.systemui.plugins.DarkIconDispatcher;
+import com.android.systemui.plugins.statusbar.StatusBarStateController;
+import com.android.systemui.shade.ShadeHeadsUpTracker;
+import com.android.systemui.shade.ShadeViewController;
+import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.HeadsUpStatusBarView;
-import com.android.systemui.statusbar.NotificationTestHelper;
-import com.android.systemui.statusbar.policy.DarkIconDispatcher;
-import com.android.systemui.statusbar.stack.NotificationStackScrollLayout;
+import com.android.systemui.statusbar.notification.NotificationWakeUpCoordinator;
+import com.android.systemui.statusbar.notification.collection.NotificationEntry;
+import com.android.systemui.statusbar.notification.domain.interactor.HeadsUpNotificationIconInteractor;
+import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
+import com.android.systemui.statusbar.notification.row.NotificationTestHelper;
+import com.android.systemui.statusbar.notification.row.shared.AsyncGroupHeaderViewInflation;
+import com.android.systemui.statusbar.notification.stack.NotificationRoundnessManager;
+import com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayoutController;
+import com.android.systemui.statusbar.policy.Clock;
+import com.android.systemui.statusbar.policy.HeadsUpManager;
+import com.android.systemui.statusbar.policy.KeyguardStateController;
 
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.util.Optional;
+
 @SmallTest
-@RunWith(AndroidTestingRunner.class)
-@RunWithLooper(setAsMainLooper = true)
+@RunWith(AndroidJUnit4.class)
+@RunWithLooper
 public class HeadsUpAppearanceControllerTest extends SysuiTestCase {
 
-    private final NotificationStackScrollLayout mStackScroller =
-            mock(NotificationStackScrollLayout.class);
-    private final NotificationPanelView mPanelView = mock(NotificationPanelView.class);
+    private final NotificationStackScrollLayoutController mStackScrollerController =
+            mock(NotificationStackScrollLayoutController.class);
+    private final ShadeViewController mShadeViewController =
+            mock(ShadeViewController.class);
+    private final ShadeHeadsUpTracker mShadeHeadsUpTracker = mock(ShadeHeadsUpTracker.class);
     private final DarkIconDispatcher mDarkIconDispatcher = mock(DarkIconDispatcher.class);
     private HeadsUpAppearanceController mHeadsUpAppearanceController;
-    private ExpandableNotificationRow mFirst;
+    private NotificationTestHelper mTestHelper;
+    private ExpandableNotificationRow mRow;
+    private NotificationEntry mEntry;
     private HeadsUpStatusBarView mHeadsUpStatusBarView;
-    private HeadsUpManagerPhone mHeadsUpManager;
+    private HeadsUpManager mHeadsUpManager;
     private View mOperatorNameView;
+    private StatusBarStateController mStatusbarStateController;
+    private PhoneStatusBarTransitions mPhoneStatusBarTransitions;
+    private KeyguardBypassController mBypassController;
+    private NotificationWakeUpCoordinator mWakeUpCoordinator;
+    private KeyguardStateController mKeyguardStateController;
+    private CommandQueue mCommandQueue;
+    private NotificationRoundnessManager mNotificationRoundnessManager;
+    private final FakeFeatureFlagsClassic mFeatureFlags = new FakeFeatureFlagsClassic();
 
     @Before
     public void setUp() throws Exception {
-        NotificationTestHelper testHelper = new NotificationTestHelper(getContext());
-        mFirst = testHelper.createRow();
-        mDependency.injectTestDependency(DarkIconDispatcher.class, mDarkIconDispatcher);
+        allowTestableLooperAsMainThread();
+        mTestHelper = new NotificationTestHelper(
+                mContext,
+                mDependency,
+                TestableLooper.get(this));
+        mRow = mTestHelper.createRow();
+        mEntry = mRow.getEntry();
         mHeadsUpStatusBarView = new HeadsUpStatusBarView(mContext, mock(View.class),
                 mock(TextView.class));
-        mHeadsUpManager = mock(HeadsUpManagerPhone.class);
+        mHeadsUpManager = mock(HeadsUpManager.class);
         mOperatorNameView = new View(mContext);
+        mStatusbarStateController = mock(StatusBarStateController.class);
+        mPhoneStatusBarTransitions = mock(PhoneStatusBarTransitions.class);
+        mBypassController = mock(KeyguardBypassController.class);
+        mWakeUpCoordinator = mock(NotificationWakeUpCoordinator.class);
+        mKeyguardStateController = mock(KeyguardStateController.class);
+        mCommandQueue = mock(CommandQueue.class);
+        mNotificationRoundnessManager = mock(NotificationRoundnessManager.class);
+        when(mShadeViewController.getShadeHeadsUpTracker()).thenReturn(mShadeHeadsUpTracker);
         mHeadsUpAppearanceController = new HeadsUpAppearanceController(
-                mock(NotificationIconAreaController.class),
                 mHeadsUpManager,
+                mStatusbarStateController,
+                mPhoneStatusBarTransitions,
+                mBypassController,
+                mWakeUpCoordinator,
+                mDarkIconDispatcher,
+                mKeyguardStateController,
+                mCommandQueue,
+                mStackScrollerController,
+                mShadeViewController,
+                mNotificationRoundnessManager,
                 mHeadsUpStatusBarView,
-                mStackScroller,
-                mPanelView,
-                new View(mContext),
-                mOperatorNameView);
-        mHeadsUpAppearanceController.setExpandedHeight(0.0f, 0.0f);
+                new Clock(mContext, null),
+                mFeatureFlags,
+                mock(HeadsUpNotificationIconInteractor.class),
+                Optional.of(mOperatorNameView));
+        mHeadsUpAppearanceController.setAppearFraction(0.0f, 0.0f);
     }
 
     @Test
     public void testShowinEntryUpdated() {
-        mFirst.setPinned(true);
+        mRow.setPinned(true);
         when(mHeadsUpManager.hasPinnedHeadsUp()).thenReturn(true);
-        when(mHeadsUpManager.getTopEntry()).thenReturn(mFirst.getEntry());
-        mHeadsUpAppearanceController.onHeadsUpPinned(mFirst);
-        Assert.assertEquals(mFirst.getEntry(), mHeadsUpStatusBarView.getShowingEntry());
+        when(mHeadsUpManager.getTopEntry()).thenReturn(mEntry);
+        mHeadsUpAppearanceController.onHeadsUpPinned(mEntry);
+        assertEquals(mRow.getEntry(), mHeadsUpStatusBarView.getShowingEntry());
 
-        mFirst.setPinned(false);
+        mRow.setPinned(false);
         when(mHeadsUpManager.hasPinnedHeadsUp()).thenReturn(false);
-        mHeadsUpAppearanceController.onHeadsUpUnPinned(mFirst);
-        Assert.assertEquals(null, mHeadsUpStatusBarView.getShowingEntry());
+        mHeadsUpAppearanceController.onHeadsUpUnPinned(mEntry);
+        assertEquals(null, mHeadsUpStatusBarView.getShowingEntry());
     }
 
     @Test
     public void testShownUpdated() {
-        mFirst.setPinned(true);
+        mRow.setPinned(true);
         when(mHeadsUpManager.hasPinnedHeadsUp()).thenReturn(true);
-        when(mHeadsUpManager.getTopEntry()).thenReturn(mFirst.getEntry());
-        mHeadsUpAppearanceController.onHeadsUpPinned(mFirst);
-        Assert.assertTrue(mHeadsUpAppearanceController.isShown());
+        when(mHeadsUpManager.getTopEntry()).thenReturn(mEntry);
+        mHeadsUpAppearanceController.onHeadsUpPinned(mEntry);
+        assertTrue(mHeadsUpAppearanceController.isShown());
 
-        mFirst.setPinned(false);
+        mRow.setPinned(false);
         when(mHeadsUpManager.hasPinnedHeadsUp()).thenReturn(false);
-        mHeadsUpAppearanceController.onHeadsUpUnPinned(mFirst);
+        mHeadsUpAppearanceController.onHeadsUpUnPinned(mEntry);
         Assert.assertFalse(mHeadsUpAppearanceController.isShown());
     }
 
     @Test
+    @DisableFlags(AsyncGroupHeaderViewInflation.FLAG_NAME)
     public void testHeaderUpdated() {
-        mFirst.setPinned(true);
+        mRow.setPinned(true);
         when(mHeadsUpManager.hasPinnedHeadsUp()).thenReturn(true);
-        when(mHeadsUpManager.getTopEntry()).thenReturn(mFirst.getEntry());
-        mHeadsUpAppearanceController.onHeadsUpPinned(mFirst);
-        Assert.assertEquals(mFirst.getHeaderVisibleAmount(), 0.0f, 0.0f);
+        when(mHeadsUpManager.getTopEntry()).thenReturn(mEntry);
+        mHeadsUpAppearanceController.onHeadsUpPinned(mEntry);
+        assertEquals(mRow.getHeaderVisibleAmount(), 0.0f, 0.0f);
 
-        mFirst.setPinned(false);
+        mRow.setPinned(false);
         when(mHeadsUpManager.hasPinnedHeadsUp()).thenReturn(false);
-        mHeadsUpAppearanceController.onHeadsUpUnPinned(mFirst);
-        Assert.assertEquals(mFirst.getHeaderVisibleAmount(), 1.0f, 0.0f);
+        mHeadsUpAppearanceController.onHeadsUpUnPinned(mEntry);
+        assertEquals(mRow.getHeaderVisibleAmount(), 1.0f, 0.0f);
     }
 
     @Test
     public void testOperatorNameViewUpdated() {
         mHeadsUpAppearanceController.setAnimationsEnabled(false);
 
-        mFirst.setPinned(true);
+        mRow.setPinned(true);
         when(mHeadsUpManager.hasPinnedHeadsUp()).thenReturn(true);
-        when(mHeadsUpManager.getTopEntry()).thenReturn(mFirst.getEntry());
-        mHeadsUpAppearanceController.onHeadsUpPinned(mFirst);
-        Assert.assertEquals(View.INVISIBLE, mOperatorNameView.getVisibility());
+        when(mHeadsUpManager.getTopEntry()).thenReturn(mEntry);
+        mHeadsUpAppearanceController.onHeadsUpPinned(mEntry);
+        assertEquals(View.INVISIBLE, mOperatorNameView.getVisibility());
 
-        mFirst.setPinned(false);
+        mRow.setPinned(false);
         when(mHeadsUpManager.hasPinnedHeadsUp()).thenReturn(false);
-        mHeadsUpAppearanceController.onHeadsUpUnPinned(mFirst);
-        Assert.assertEquals(View.VISIBLE, mOperatorNameView.getVisibility());
+        mHeadsUpAppearanceController.onHeadsUpUnPinned(mEntry);
+        assertEquals(View.VISIBLE, mOperatorNameView.getVisibility());
     }
 
     @Test
-    public void testHeaderReadFromOldController() {
-        mHeadsUpAppearanceController.setExpandedHeight(1.0f, 1.0f);
+    public void constructor_animationValuesUpdated() {
+        float appearFraction = .75f;
+        float expandedHeight = 400f;
+        when(mStackScrollerController.getAppearFraction()).thenReturn(appearFraction);
+        when(mStackScrollerController.getExpandedHeight()).thenReturn(expandedHeight);
 
         HeadsUpAppearanceController newController = new HeadsUpAppearanceController(
-                mock(NotificationIconAreaController.class),
                 mHeadsUpManager,
+                mStatusbarStateController,
+                mPhoneStatusBarTransitions,
+                mBypassController,
+                mWakeUpCoordinator,
+                mDarkIconDispatcher,
+                mKeyguardStateController,
+                mCommandQueue,
+                mStackScrollerController,
+                mShadeViewController,
+                mNotificationRoundnessManager,
                 mHeadsUpStatusBarView,
-                mStackScroller,
-                mPanelView,
-                new View(mContext),
-                new View(mContext));
-        newController.readFrom(mHeadsUpAppearanceController);
+                new Clock(mContext, null),
+                mFeatureFlags, mock(HeadsUpNotificationIconInteractor.class),
+                Optional.empty());
 
-        Assert.assertEquals(mHeadsUpAppearanceController.mExpandedHeight,
-                newController.mExpandedHeight, 0.0f);
-        Assert.assertEquals(mHeadsUpAppearanceController.mExpandFraction,
-                newController.mExpandFraction, 0.0f);
-        Assert.assertEquals(mHeadsUpAppearanceController.mIsExpanded,
-                newController.mIsExpanded);
+        assertEquals(expandedHeight, newController.mExpandedHeight, 0.0f);
+        assertEquals(appearFraction, newController.mAppearFraction, 0.0f);
     }
 
     @Test
     public void testDestroy() {
         reset(mHeadsUpManager);
         reset(mDarkIconDispatcher);
-        reset(mPanelView);
-        reset(mStackScroller);
-        mHeadsUpAppearanceController.destroy();
+        reset(mShadeHeadsUpTracker);
+        reset(mStackScrollerController);
+
+        mHeadsUpAppearanceController.onViewDetached();
+
         verify(mHeadsUpManager).removeListener(any());
         verify(mDarkIconDispatcher).removeDarkReceiver((DarkIconDispatcher.DarkReceiver) any());
-        verify(mPanelView).removeVerticalTranslationListener(any());
-        verify(mPanelView).removeTrackingHeadsUpListener(any());
-        verify(mPanelView).setHeadsUpAppearanceController(any());
-        verify(mStackScroller).removeOnExpandedHeightListener(any());
-        verify(mStackScroller).removeOnLayoutChangeListener(any());
+        verify(mShadeHeadsUpTracker).removeTrackingHeadsUpListener(any());
+        verify(mShadeHeadsUpTracker).setHeadsUpAppearanceController(isNull());
+        verify(mStackScrollerController).removeOnExpandedHeightChangedListener(any());
+    }
+
+    @Test
+    public void testPulsingRoundness_onUpdateHeadsUpAndPulsingRoundness() {
+        // Pulsing: Enable flag and dozing
+        when(mNotificationRoundnessManager.shouldRoundNotificationPulsing()).thenReturn(true);
+        when(mTestHelper.getStatusBarStateController().isDozing()).thenReturn(true);
+
+        // Pulsing: Enabled
+        mRow.setHeadsUp(true);
+        mHeadsUpAppearanceController.updateHeadsUpAndPulsingRoundness(mEntry);
+
+        String debugString = mRow.getRoundableState().debugString();
+        assertEquals(
+                "If Pulsing is enabled, roundness should be set to 1. Value: " + debugString,
+                /* expected = */ 1,
+                /* actual = */ mRow.getTopRoundness(),
+                /* delta = */ 0.001
+        );
+        assertTrue(debugString.contains("Pulsing"));
+
+        // Pulsing: Disabled
+        mRow.setHeadsUp(false);
+        mHeadsUpAppearanceController.updateHeadsUpAndPulsingRoundness(mEntry);
+
+        assertEquals(
+                "If Pulsing is disabled, roundness should be set to 0. Value: "
+                        + mRow.getRoundableState().debugString(),
+                /* expected = */ 0,
+                /* actual = */ mRow.getTopRoundness(),
+                /* delta = */ 0.001
+        );
+    }
+
+    @Test
+    public void testPulsingRoundness_onHeadsUpStateChanged() {
+        // Pulsing: Enable flag and dozing
+        when(mNotificationRoundnessManager.shouldRoundNotificationPulsing()).thenReturn(true);
+        when(mTestHelper.getStatusBarStateController().isDozing()).thenReturn(true);
+
+        // Pulsing: Enabled
+        mEntry.setHeadsUp(true);
+        mHeadsUpAppearanceController.onHeadsUpStateChanged(mEntry, true);
+
+        String debugString = mRow.getRoundableState().debugString();
+        assertEquals(
+                "If Pulsing is enabled, roundness should be set to 1. Value: " + debugString,
+                /* expected = */ 1,
+                /* actual = */ mRow.getTopRoundness(),
+                /* delta = */ 0.001
+        );
+        assertTrue(debugString.contains("Pulsing"));
+
+        // Pulsing: Disabled
+        mEntry.setHeadsUp(false);
+        mHeadsUpAppearanceController.onHeadsUpStateChanged(mEntry, false);
+
+        assertEquals(
+                "If Pulsing is disabled, roundness should be set to 0. Value: "
+                        + mRow.getRoundableState().debugString(),
+                /* expected = */ 0,
+                /* actual = */ mRow.getTopRoundness(),
+                /* delta = */ 0.001
+        );
+    }
+
+    @Test
+    public void onHeadsUpStateChanged_true_transitionsNotified() {
+        mHeadsUpAppearanceController.onHeadsUpStateChanged(mEntry, true);
+
+        verify(mPhoneStatusBarTransitions).onHeadsUpStateChanged(true);
+    }
+
+    @Test
+    public void onHeadsUpStateChanged_false_transitionsNotified() {
+        mHeadsUpAppearanceController.onHeadsUpStateChanged(mEntry, false);
+
+        verify(mPhoneStatusBarTransitions).onHeadsUpStateChanged(false);
     }
 }

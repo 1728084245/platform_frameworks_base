@@ -16,8 +16,9 @@
 
 package android.database;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Build;
+
 import java.util.ArrayList;
 
 /**
@@ -25,6 +26,7 @@ import java.util.ArrayList;
  * {@link #newRow()} to add rows. Automatically expands internal capacity
  * as needed.
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public class MatrixCursor extends AbstractCursor {
 
     private final String[] columnNames;
@@ -238,6 +240,12 @@ public class MatrixCursor extends AbstractCursor {
                     data[(row * columnCount) + i] = value;
                 }
             }
+            return this;
+        }
+
+        /** @hide */
+        public final RowBuilder add(int columnIndex, Object value) {
+            data[(row * columnCount) + columnIndex] = value;
             return this;
         }
     }

@@ -18,6 +18,7 @@
 #define LOG_TAG "MediaExtractor-JNI"
 #include <utils/Log.h>
 
+#include "android_media_AudioPresentation.h"
 #include "android_media_MediaDataSource.h"
 #include "android_media_MediaExtractor.h"
 #include "android_media_MediaMetricsJNI.h"
@@ -27,7 +28,7 @@
 #include "android_runtime/Log.h"
 #include "android_util_Binder.h"
 #include "jni.h"
-#include <nativehelper/JNIHelp.h>
+#include <nativehelper/JNIPlatformHelp.h>
 
 #include <android/hardware/cas/1.0/BpHwCas.h>
 #include <android/hardware/cas/1.0/BnHwCas.h>
@@ -56,6 +57,7 @@ struct fields_t {
 };
 
 static fields_t gFields;
+static JAudioPresentationInfo::fields_t gAudioPresentationFields;
 
 JMediaExtractor::JMediaExtractor(JNIEnv *env, jobject thiz)
     : mClass(NULL),
@@ -66,7 +68,7 @@ JMediaExtractor::JMediaExtractor(JNIEnv *env, jobject thiz)
     mClass = (jclass)env->NewGlobalRef(clazz);
     mObject = env->NewWeakGlobalRef(thiz);
 
-    mImpl = new NuMediaExtractor;
+    mImpl = new NuMediaExtractor(NuMediaExtractor::EntryPoint::SDK);
 }
 
 JMediaExtractor::~JMediaExtractor() {
@@ -194,6 +196,15 @@ status_t JMediaExtractor::readSampleData(
         dstSize = (size_t) env->GetDirectBufferCapacity(byteBuf);
     }
 
+    // unlikely, but GetByteArrayElements() can fail
+    if (dst == nullptr) {
+        ALOGE("no buffer into which to read the data");
+        if (byteArray != NULL) {
+            env->ReleaseByteArrayElements(byteArray, (jbyte *)dst, 0);
+        }
+        return -ENOMEM;
+    }
+
     if (dstSize < offset) {
         if (byteArray != NULL) {
             env->ReleaseByteArrayElements(byteArray, (jbyte *)dst, 0);
@@ -202,8 +213,10 @@ status_t JMediaExtractor::readSampleData(
         return -ERANGE;
     }
 
+    // passes in the backing memory to use, so it doesn't fail
     sp<ABuffer> buffer = new ABuffer((char *)dst + offset, dstSize - offset);
 
+    buffer->setRange(0, 0);  // mark it empty
     status_t err = mImpl->readSampleData(buffer);
 
     if (byteArray != NULL) {
@@ -280,7 +293,6 @@ status_t JMediaExtractor::getMetrics(Parcel *reply) const {
     return status;
 }
 
-
 status_t JMediaExtractor::getSampleMeta(sp<MetaData> *sampleMeta) {
     return mImpl->getSampleMeta(sampleMeta);
 }
@@ -289,6 +301,14 @@ bool JMediaExtractor::getCachedDuration(int64_t *durationUs, bool *eos) const {
     return mImpl->getCachedDuration(durationUs, eos);
 }
 
+status_t JMediaExtractor::getAudioPresentations(size_t trackIdx,
+        AudioPresentationCollection *presentations) const {
+    return mImpl->getAudioPresentations(trackIdx, presentations);
+}
+
+status_t JMediaExtractor::setLogSessionId(const String8 &LogSessionId) {
+    return mImpl->setLogSessionId(LogSessionId);
+}
 }  // namespace android
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -668,6 +688,28 @@ static jboolean android_media_MediaExtractor_getSampleCryptoInfo(
     return JNI_TRUE;
 }
 
+static jobject android_media_MediaExtractor_getAudioPresentations(
+        JNIEnv *env, jobject thiz, jint trackIdx) {
+    sp<JMediaExtractor> extractor = getMediaExtractor(env, thiz);
+    jobject presentationsJObj = JAudioPresentationInfo::asJobject(env, gAudioPresentationFields);
+    if (extractor == NULL) {
+        jniThrowException(env, "java/lang/IllegalStateException", NULL);
+        return presentationsJObj;
+    }
+    AudioPresentationCollection presentations;
+    status_t err = extractor->getAudioPresentations(trackIdx, &presentations);
+    if (err == ERROR_END_OF_STREAM || err == ERROR_UNSUPPORTED) {
+        return presentationsJObj;
+    } else if (err != OK) {
+        jniThrowException(env, "java/lang/IllegalArgumentException", NULL);
+        return presentationsJObj;
+    }
+
+    JAudioPresentationInfo::addPresentations(
+            env, gAudioPresentationFields, presentations, presentationsJObj);
+    return presentationsJObj;
+}
+
 static void android_media_MediaExtractor_native_init(JNIEnv *env) {
     jclass clazz = env->FindClass("android/media/MediaExtractor");
     CHECK(clazz != NULL);
@@ -683,6 +725,8 @@ static void android_media_MediaExtractor_native_init(JNIEnv *env) {
 
     gFields.cryptoInfoSetPatternID =
         env->GetMethodID(clazz, "setPattern", "(II)V");
+
+    gAudioPresentationFields.init(env);
 }
 
 static void android_media_MediaExtractor_native_setup(
@@ -883,17 +927,30 @@ android_media_MediaExtractor_native_getMetrics(JNIEnv * env, jobject thiz)
     }
 
     // build and return the Bundle
-    MediaAnalyticsItem *item = new MediaAnalyticsItem;
+    std::unique_ptr<mediametrics::Item> item(mediametrics::Item::create());
     item->readFromParcel(reply);
-    jobject mybundle = MediaMetricsJNI::writeMetricsToBundle(env, item, NULL);
-
-    // housekeeping
-    delete item;
-    item = NULL;
+    jobject mybundle = MediaMetricsJNI::writeMetricsToBundle(env, item.get(), NULL);
 
     return mybundle;
 }
 
+static void
+android_media_MediaExtractor_native_setLogSessionId(
+        JNIEnv * env, jobject thiz, jstring logSessionIdJString)
+{
+    ALOGV("android_media_MediaExtractor_native_setLogSessionId");
+
+    sp<JMediaExtractor> extractor = getMediaExtractor(env, thiz);
+    if (extractor == nullptr) {
+        jniThrowException(env, "java/lang/IllegalStateException", nullptr);
+    }
+
+    const char* logSessionId = env->GetStringUTFChars(logSessionIdJString, nullptr);
+    if (extractor->setLogSessionId(String8(logSessionId)) != OK) {
+        ALOGE("setLogSessionId failed");
+    }
+    env->ReleaseStringUTFChars(logSessionIdJString, logSessionId);
+}
 
 static const JNINativeMethod gMethods[] = {
     { "release", "()V", (void *)android_media_MediaExtractor_release },
@@ -963,6 +1020,12 @@ static const JNINativeMethod gMethods[] = {
 
     {"native_getMetrics",          "()Landroid/os/PersistableBundle;",
       (void *)android_media_MediaExtractor_native_getMetrics},
+
+    { "native_setLogSessionId", "(Ljava/lang/String;)V",
+      (void *)android_media_MediaExtractor_native_setLogSessionId},
+
+    { "native_getAudioPresentations", "(I)Ljava/util/List;",
+      (void *)android_media_MediaExtractor_getAudioPresentations },
 };
 
 int register_android_media_MediaExtractor(JNIEnv *env) {

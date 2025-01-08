@@ -19,7 +19,7 @@ import android.animation.PropertyValuesHolder;
 import android.animation.ValueAnimator;
 import android.graphics.Color;
 import android.os.Bundle;
-import android.support.v7.app.AppCompatActivity;
+import androidx.appcompat.app.AppCompatActivity;
 import android.util.DisplayMetrics;
 import android.view.View;
 import android.view.ViewGroup.LayoutParams;
@@ -29,6 +29,8 @@ import android.widget.FrameLayout;
  * Tests resizing of a View backed by a hardware layer.
  */
 public class ResizeHWLayerActivity extends AppCompatActivity {
+
+    private ValueAnimator mAnimator;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -43,10 +45,10 @@ public class ResizeHWLayerActivity extends AppCompatActivity {
         PropertyValuesHolder pvhWidth = PropertyValuesHolder.ofInt("width", width, 1);
         PropertyValuesHolder pvhHeight = PropertyValuesHolder.ofInt("height", height, 1);
         final LayoutParams params = child.getLayoutParams();
-        ValueAnimator animator = ValueAnimator.ofPropertyValuesHolder(pvhWidth, pvhHeight);
-        animator.setRepeatMode(ValueAnimator.REVERSE);
-        animator.setRepeatCount(ValueAnimator.INFINITE);
-        animator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+        mAnimator = ValueAnimator.ofPropertyValuesHolder(pvhWidth, pvhHeight);
+        mAnimator.setRepeatMode(ValueAnimator.REVERSE);
+        mAnimator.setRepeatCount(ValueAnimator.INFINITE);
+        mAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
             @Override
             public void onAnimationUpdate(ValueAnimator valueAnimator) {
                 params.width = (Integer)valueAnimator.getAnimatedValue("width");
@@ -54,7 +56,15 @@ public class ResizeHWLayerActivity extends AppCompatActivity {
                 child.requestLayout();
             }
         });
-        animator.start();
+        mAnimator.start();
         setContentView(child);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (mAnimator != null) {
+            mAnimator.cancel();
+        }
     }
 }

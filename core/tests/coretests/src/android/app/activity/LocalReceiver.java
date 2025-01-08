@@ -23,9 +23,9 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ReceiverCallNotAllowedException;
 import android.content.ServiceConnection;
-import android.os.RemoteException;
 import android.os.IBinder;
 import android.os.Parcel;
+import android.os.RemoteException;
 
 public class LocalReceiver extends BroadcastReceiver {
     public LocalReceiver() {
@@ -36,7 +36,8 @@ public class LocalReceiver extends BroadcastReceiver {
         if (BroadcastTest.BROADCAST_FAIL_REGISTER.equals(intent.getAction())) {
             resultString = "Successfully registered, but expected it to fail";
             try {
-                context.registerReceiver(this, new IntentFilter("foo.bar"));
+                context.registerReceiver(this, new IntentFilter("foo.bar"),
+                        Context.RECEIVER_EXPORTED_UNAUDITED);
                 context.unregisterReceiver(this);
             } catch (ReceiverCallNotAllowedException e) {
                 //resultString = "This is the correct behavior but not yet implemented";
@@ -52,7 +53,7 @@ public class LocalReceiver extends BroadcastReceiver {
                     public void onServiceDisconnected(ComponentName name) {
                     }
                 };
-                context.bindService(new Intent(context, LocalService.class), sc, 0);
+                context.bindService(new Intent(context, ServiceTest.RemoteService.class), sc, 0);
                 context.unbindService(sc);
             } catch (ReceiverCallNotAllowedException e) {
                 //resultString = "This is the correct behavior but not yet implemented";

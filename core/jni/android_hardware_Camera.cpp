@@ -17,22 +17,24 @@
 
 //#define LOG_NDEBUG 0
 #define LOG_TAG "Camera-JNI"
-#include <utils/Log.h>
-
-#include "jni.h"
-#include <nativehelper/JNIHelp.h>
-#include "core_jni_helpers.h"
+#include <android/content/AttributionSourceState.h>
+#include <android_os_Parcel.h>
 #include <android_runtime/android_graphics_SurfaceTexture.h>
 #include <android_runtime/android_view_Surface.h>
-
+#include <binder/IMemory.h>
+#include <binder/Parcel.h>
+#include <camera/Camera.h>
+#include <camera/StringUtils.h>
 #include <cutils/properties.h>
-#include <utils/Vector.h>
-#include <utils/Errors.h>
-
 #include <gui/GLConsumer.h>
 #include <gui/Surface.h>
-#include <camera/Camera.h>
-#include <binder/IMemory.h>
+#include <nativehelper/JNIHelp.h>
+#include <utils/Errors.h>
+#include <utils/Log.h>
+#include <utils/Vector.h>
+
+#include "core_jni_helpers.h"
+#include "jni.h"
 
 using namespace android;
 
@@ -256,6 +258,10 @@ void JNICameraContext::copyAndPost(JNIEnv* env, const sp<IMemory>& dataPtr, int 
         ssize_t offset;
         size_t size;
         sp<IMemoryHeap> heap = dataPtr->getMemory(&offset, &size);
+        if (heap == NULL) {
+            ALOGV("copyAndPost: skipping null memory callback!");
+            return;
+        }
         ALOGV("copyAndPost: off=%zd, size=%zu", offset, size);
         uint8_t *heapBase = (uint8_t*)heap->base();
 
@@ -520,22 +526,46 @@ void JNICameraContext::clearCallbackBuffers_l(JNIEnv *env, Vector<jbyteArray> *b
     }
 }
 
-static jint android_hardware_Camera_getNumberOfCameras(JNIEnv *env, jobject thiz)
-{
-    return Camera::getNumberOfCameras();
+static bool attributionSourceStateForJavaParcel(JNIEnv *env, jobject jClientAttributionParcel,
+                                                AttributionSourceState &clientAttribution) {
+    const Parcel *clientAttributionParcel = parcelForJavaObject(env, jClientAttributionParcel);
+    if (clientAttribution.readFromParcel(clientAttributionParcel) != ::android::OK) {
+        jniThrowRuntimeException(env, "Fail to unparcel AttributionSourceState");
+        return false;
+    }
+    clientAttribution.uid = Camera::USE_CALLING_UID;
+    clientAttribution.pid = Camera::USE_CALLING_PID;
+    return true;
 }
 
-static void android_hardware_Camera_getCameraInfo(JNIEnv *env, jobject thiz,
-    jint cameraId, jobject info_obj)
-{
+static jint android_hardware_Camera_getNumberOfCameras(JNIEnv *env, jobject thiz,
+                                                       jobject jClientAttributionParcel,
+                                                       jint devicePolicy) {
+    AttributionSourceState clientAttribution;
+    if (!attributionSourceStateForJavaParcel(env, jClientAttributionParcel, clientAttribution)) {
+        return 0;
+    }
+    return Camera::getNumberOfCameras(clientAttribution, devicePolicy);
+}
+
+static void android_hardware_Camera_getCameraInfo(JNIEnv *env, jobject thiz, jint cameraId,
+                                                  jint rotationOverride,
+                                                  jobject jClientAttributionParcel,
+                                                  jint devicePolicy, jobject info_obj) {
+    AttributionSourceState clientAttribution;
+    if (!attributionSourceStateForJavaParcel(env, jClientAttributionParcel, clientAttribution)) {
+        return;
+    }
+
     CameraInfo cameraInfo;
-    if (cameraId >= Camera::getNumberOfCameras() || cameraId < 0) {
+    if (cameraId >= Camera::getNumberOfCameras(clientAttribution, devicePolicy) || cameraId < 0) {
         ALOGE("%s: Unknown camera ID %d", __FUNCTION__, cameraId);
         jniThrowRuntimeException(env, "Unknown camera ID");
         return;
     }
 
-    status_t rc = Camera::getCameraInfo(cameraId, &cameraInfo);
+    status_t rc = Camera::getCameraInfo(cameraId, rotationOverride, clientAttribution, devicePolicy,
+                                        &cameraInfo);
     if (rc != NO_ERROR) {
         jniThrowRuntimeException(env, "Fail to get camera info");
         return;
@@ -551,30 +581,19 @@ static void android_hardware_Camera_getCameraInfo(JNIEnv *env, jobject thiz,
 }
 
 // connect to camera service
-static jint android_hardware_Camera_native_setup(JNIEnv *env, jobject thiz,
-    jobject weak_this, jint cameraId, jint halVersion, jstring clientPackageName)
-{
-    // Convert jstring to String16
-    const char16_t *rawClientName = reinterpret_cast<const char16_t*>(
-        env->GetStringChars(clientPackageName, NULL));
-    jsize rawClientNameLen = env->GetStringLength(clientPackageName);
-    String16 clientName(rawClientName, rawClientNameLen);
-    env->ReleaseStringChars(clientPackageName,
-                            reinterpret_cast<const jchar*>(rawClientName));
-
-    sp<Camera> camera;
-    if (halVersion == CAMERA_HAL_API_VERSION_NORMAL_CONNECT) {
-        // Default path: hal version is don't care, do normal camera connect.
-        camera = Camera::connect(cameraId, clientName,
-                Camera::USE_CALLING_UID, Camera::USE_CALLING_PID);
-    } else {
-        jint status = Camera::connectLegacy(cameraId, halVersion, clientName,
-                Camera::USE_CALLING_UID, camera);
-        if (status != NO_ERROR) {
-            return status;
-        }
+static jint android_hardware_Camera_native_setup(JNIEnv *env, jobject thiz, jobject weak_this,
+                                                 jint cameraId, jint rotationOverride,
+                                                 jboolean forceSlowJpegMode,
+                                                 jobject jClientAttributionParcel,
+                                                 jint devicePolicy) {
+    AttributionSourceState clientAttribution;
+    if (!attributionSourceStateForJavaParcel(env, jClientAttributionParcel, clientAttribution)) {
+        return -EACCES;
     }
 
+    int targetSdkVersion = android_get_application_target_sdk_version();
+    sp<Camera> camera = Camera::connect(cameraId, targetSdkVersion, rotationOverride,
+                                        forceSlowJpegMode, clientAttribution, devicePolicy);
     if (camera == NULL) {
         return -EACCES;
     }
@@ -602,7 +621,8 @@ static jint android_hardware_Camera_native_setup(JNIEnv *env, jobject thiz,
 
     // Update default display orientation in case the sensor is reverse-landscape
     CameraInfo cameraInfo;
-    status_t rc = Camera::getCameraInfo(cameraId, &cameraInfo);
+    status_t rc = Camera::getCameraInfo(cameraId, rotationOverride, clientAttribution, devicePolicy,
+                                        &cameraInfo);
     if (rc != NO_ERROR) {
         ALOGE("%s: getCameraInfo error: %d", __FUNCTION__, rc);
         return rc;
@@ -880,11 +900,11 @@ static jstring android_hardware_Camera_getParameters(JNIEnv *env, jobject thiz)
     if (camera == 0) return 0;
 
     String8 params8 = camera->getParameters();
-    if (params8.isEmpty()) {
+    if (params8.empty()) {
         jniThrowRuntimeException(env, "getParameters failed (empty parameters)");
         return 0;
     }
-    return env->NewStringUTF(params8.string());
+    return env->NewStringUTF(params8.c_str());
 }
 
 static void android_hardware_Camera_reconnect(JNIEnv *env, jobject thiz)
@@ -1019,90 +1039,82 @@ static void android_hardware_Camera_enableFocusMoveCallback(JNIEnv *env, jobject
     }
 }
 
+static void android_hardware_Camera_setAudioRestriction(
+        JNIEnv *env, jobject thiz, jint mode)
+{
+    ALOGV("setAudioRestriction");
+    sp<Camera> camera = get_native_camera(env, thiz, NULL);
+    if (camera == 0) {
+        jniThrowRuntimeException(env, "camera has been disconnected");
+        return;
+    }
+
+    int32_t ret = camera->setAudioRestriction(mode);
+    if (ret < 0) {
+        jniThrowRuntimeException(env, "Illegal argument or low-level eror");
+        return;
+    }
+}
+
+static int32_t android_hardware_Camera_getAudioRestriction(
+        JNIEnv *env, jobject thiz)
+{
+    ALOGV("getAudioRestriction");
+    sp<Camera> camera = get_native_camera(env, thiz, NULL);
+    if (camera == 0) {
+        jniThrowRuntimeException(env, "camera has been disconnected");
+        return -1;
+    }
+
+    int32_t ret = camera->getGlobalAudioRestriction();
+    if (ret < 0) {
+        jniThrowRuntimeException(env, "Illegal argument or low-level eror");
+        return -1;
+    }
+    return ret;
+}
+
 //-------------------------------------------------
 
 static const JNINativeMethod camMethods[] = {
-  { "getNumberOfCameras",
-    "()I",
-    (void *)android_hardware_Camera_getNumberOfCameras },
-  { "_getCameraInfo",
-    "(ILandroid/hardware/Camera$CameraInfo;)V",
-    (void*)android_hardware_Camera_getCameraInfo },
-  { "native_setup",
-    "(Ljava/lang/Object;IILjava/lang/String;)I",
-    (void*)android_hardware_Camera_native_setup },
-  { "native_release",
-    "()V",
-    (void*)android_hardware_Camera_release },
-  { "setPreviewSurface",
-    "(Landroid/view/Surface;)V",
-    (void *)android_hardware_Camera_setPreviewSurface },
-  { "setPreviewTexture",
-    "(Landroid/graphics/SurfaceTexture;)V",
-    (void *)android_hardware_Camera_setPreviewTexture },
-  { "setPreviewCallbackSurface",
-    "(Landroid/view/Surface;)V",
-    (void *)android_hardware_Camera_setPreviewCallbackSurface },
-  { "startPreview",
-    "()V",
-    (void *)android_hardware_Camera_startPreview },
-  { "_stopPreview",
-    "()V",
-    (void *)android_hardware_Camera_stopPreview },
-  { "previewEnabled",
-    "()Z",
-    (void *)android_hardware_Camera_previewEnabled },
-  { "setHasPreviewCallback",
-    "(ZZ)V",
-    (void *)android_hardware_Camera_setHasPreviewCallback },
-  { "_addCallbackBuffer",
-    "([BI)V",
-    (void *)android_hardware_Camera_addCallbackBuffer },
-  { "native_autoFocus",
-    "()V",
-    (void *)android_hardware_Camera_autoFocus },
-  { "native_cancelAutoFocus",
-    "()V",
-    (void *)android_hardware_Camera_cancelAutoFocus },
-  { "native_takePicture",
-    "(I)V",
-    (void *)android_hardware_Camera_takePicture },
-  { "native_setParameters",
-    "(Ljava/lang/String;)V",
-    (void *)android_hardware_Camera_setParameters },
-  { "native_getParameters",
-    "()Ljava/lang/String;",
-    (void *)android_hardware_Camera_getParameters },
-  { "reconnect",
-    "()V",
-    (void*)android_hardware_Camera_reconnect },
-  { "lock",
-    "()V",
-    (void*)android_hardware_Camera_lock },
-  { "unlock",
-    "()V",
-    (void*)android_hardware_Camera_unlock },
-  { "startSmoothZoom",
-    "(I)V",
-    (void *)android_hardware_Camera_startSmoothZoom },
-  { "stopSmoothZoom",
-    "()V",
-    (void *)android_hardware_Camera_stopSmoothZoom },
-  { "setDisplayOrientation",
-    "(I)V",
-    (void *)android_hardware_Camera_setDisplayOrientation },
-  { "_enableShutterSound",
-    "(Z)Z",
-    (void *)android_hardware_Camera_enableShutterSound },
-  { "_startFaceDetection",
-    "(I)V",
-    (void *)android_hardware_Camera_startFaceDetection },
-  { "_stopFaceDetection",
-    "()V",
-    (void *)android_hardware_Camera_stopFaceDetection},
-  { "enableFocusMoveCallback",
-    "(I)V",
-    (void *)android_hardware_Camera_enableFocusMoveCallback},
+        {"_getNumberOfCameras", "(Landroid/os/Parcel;I)I",
+         (void *)android_hardware_Camera_getNumberOfCameras},
+        {"_getCameraInfo", "(IILandroid/os/Parcel;ILandroid/hardware/Camera$CameraInfo;)V",
+         (void *)android_hardware_Camera_getCameraInfo},
+        {"native_setup", "(Ljava/lang/Object;IIZLandroid/os/Parcel;I)I",
+         (void *)android_hardware_Camera_native_setup},
+        {"native_release", "()V", (void *)android_hardware_Camera_release},
+        {"setPreviewSurface", "(Landroid/view/Surface;)V",
+         (void *)android_hardware_Camera_setPreviewSurface},
+        {"setPreviewTexture", "(Landroid/graphics/SurfaceTexture;)V",
+         (void *)android_hardware_Camera_setPreviewTexture},
+        {"setPreviewCallbackSurface", "(Landroid/view/Surface;)V",
+         (void *)android_hardware_Camera_setPreviewCallbackSurface},
+        {"startPreview", "()V", (void *)android_hardware_Camera_startPreview},
+        {"_stopPreview", "()V", (void *)android_hardware_Camera_stopPreview},
+        {"previewEnabled", "()Z", (void *)android_hardware_Camera_previewEnabled},
+        {"setHasPreviewCallback", "(ZZ)V", (void *)android_hardware_Camera_setHasPreviewCallback},
+        {"_addCallbackBuffer", "([BI)V", (void *)android_hardware_Camera_addCallbackBuffer},
+        {"native_autoFocus", "()V", (void *)android_hardware_Camera_autoFocus},
+        {"native_cancelAutoFocus", "()V", (void *)android_hardware_Camera_cancelAutoFocus},
+        {"native_takePicture", "(I)V", (void *)android_hardware_Camera_takePicture},
+        {"native_setParameters", "(Ljava/lang/String;)V",
+         (void *)android_hardware_Camera_setParameters},
+        {"native_getParameters", "()Ljava/lang/String;",
+         (void *)android_hardware_Camera_getParameters},
+        {"reconnect", "()V", (void *)android_hardware_Camera_reconnect},
+        {"lock", "()V", (void *)android_hardware_Camera_lock},
+        {"unlock", "()V", (void *)android_hardware_Camera_unlock},
+        {"startSmoothZoom", "(I)V", (void *)android_hardware_Camera_startSmoothZoom},
+        {"stopSmoothZoom", "()V", (void *)android_hardware_Camera_stopSmoothZoom},
+        {"setDisplayOrientation", "(I)V", (void *)android_hardware_Camera_setDisplayOrientation},
+        {"_enableShutterSound", "(Z)Z", (void *)android_hardware_Camera_enableShutterSound},
+        {"_startFaceDetection", "(I)V", (void *)android_hardware_Camera_startFaceDetection},
+        {"_stopFaceDetection", "()V", (void *)android_hardware_Camera_stopFaceDetection},
+        {"enableFocusMoveCallback", "(I)V",
+         (void *)android_hardware_Camera_enableFocusMoveCallback},
+        {"setAudioRestriction", "(I)V", (void *)android_hardware_Camera_setAudioRestriction},
+        {"getAudioRestriction", "()I", (void *)android_hardware_Camera_getAudioRestriction},
 };
 
 struct field {

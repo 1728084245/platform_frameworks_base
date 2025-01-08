@@ -19,13 +19,12 @@
 
 #include "AaptAssets.h"
 #include "ResourceFilter.h"
-#include "TestHelper.h"
 
 using android::String8;
 
 static ::testing::AssertionResult TestParse(AaptGroupEntry& entry, const String8& dirName,
         String8* outType) {
-    if (entry.initFromDirName(dirName, outType)) {
+    if (entry.initFromDirName(dirName.c_str(), outType)) {
         return ::testing::AssertionSuccess() << dirName << " was successfully parsed";
     }
     return ::testing::AssertionFailure() << dirName << " could not be parsed";

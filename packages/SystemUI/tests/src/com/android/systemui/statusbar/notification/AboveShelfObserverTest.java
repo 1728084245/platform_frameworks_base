@@ -19,14 +19,16 @@ package com.android.systemui.statusbar.notification;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
-import android.test.suitebuilder.annotation.SmallTest;
-import android.testing.AndroidTestingRunner;
+import android.testing.TestableLooper;
 import android.testing.TestableLooper.RunWithLooper;
 import android.widget.FrameLayout;
 
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
+
 import com.android.systemui.SysuiTestCase;
-import com.android.systemui.statusbar.ExpandableNotificationRow;
-import com.android.systemui.statusbar.NotificationTestHelper;
+import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
+import com.android.systemui.statusbar.notification.row.NotificationTestHelper;
 
 import org.junit.Assert;
 import org.junit.Before;
@@ -34,8 +36,8 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 @SmallTest
-@RunWith(AndroidTestingRunner.class)
-@RunWithLooper(setAsMainLooper = true)
+@RunWith(AndroidJUnit4.class)
+@RunWithLooper
 public class AboveShelfObserverTest extends SysuiTestCase {
 
     private AboveShelfObserver mObserver;
@@ -45,7 +47,11 @@ public class AboveShelfObserverTest extends SysuiTestCase {
 
     @Before
     public void setUp() throws Exception {
-        mNotificationTestHelper = new NotificationTestHelper(getContext());
+        allowTestableLooperAsMainThread();
+        mNotificationTestHelper = new NotificationTestHelper(
+                mContext,
+                mDependency,
+                TestableLooper.get(this));
         mHostLayout = new FrameLayout(getContext());
         mObserver = new AboveShelfObserver(mHostLayout);
         ExpandableNotificationRow row = mNotificationTestHelper.createRow();

@@ -19,7 +19,6 @@ syntax = "proto3";
 package aapt.pb;
 
 option java_package = "com.android.aapt";
-option optimize_for = LITE_RUNTIME;
 
 // A description of the requirements a device must have in order for a
 // resource to be matched and selected.
@@ -121,6 +120,13 @@ message Configuration {
     NAVIGATION_WHEEL = 4;
   }
 
+  enum GrammaticalGender {
+    GRAM_GENDER_USET = 0;
+    GRAM_GENDER_NEUTER = 1;
+    GRAM_GENDER_FEMININE = 2;
+    GRAM_GENDER_MASCULINE = 3;
+  }
+
   //
   // Axis/dimensions that are understood by the runtime.
   //
@@ -198,6 +204,9 @@ message Configuration {
 
   // The minimum SDK version of the device.
   uint32 sdk_version = 24;
+
+  // Grammatical gender.
+  GrammaticalGender grammatical_gender = 26;
 
   //
   // Build-time only dimensions.

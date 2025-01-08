@@ -19,19 +19,26 @@ package android.os;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 
+import java.util.concurrent.Executor;
+
 /**
- * Handy class for starting a new thread that has a looper. The looper can then be 
- * used to create handler classes. Note that start() must still be called.
+ * A {@link Thread} that has a {@link Looper}.
+ * The {@link Looper} can then be used to create {@link Handler}s.
+ * <p>
+ * Note that just like with a regular {@link Thread}, {@link #start()} must still be called.
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public class HandlerThread extends Thread {
     int mPriority;
     int mTid = -1;
     Looper mLooper;
-    private @Nullable Handler mHandler;
+    private volatile @Nullable Handler mHandler;
+    private volatile @Nullable Executor mExecutor;
 
     public HandlerThread(String name) {
         super(name);
         mPriority = Process.THREAD_PRIORITY_DEFAULT;
+        onCreated();
     }
     
     /**
@@ -43,8 +50,21 @@ public class HandlerThread extends Thread {
     public HandlerThread(String name, int priority) {
         super(name);
         mPriority = priority;
+        onCreated();
     }
-    
+
+    /** @hide */
+    @android.ravenwood.annotation.RavenwoodReplace
+    protected void onCreated() {
+    }
+
+    /** @hide */
+    protected void onCreated$ravenwood() {
+        // Mark ourselves as daemon to enable tests to terminate quickly when finished, despite
+        // any HandlerThread instances that may be lingering around
+        setDaemon(true);
+    }
+
     /**
      * Call back method that can be explicitly overridden if needed to execute some
      * setup before Looper loops.
@@ -69,23 +89,35 @@ public class HandlerThread extends Thread {
     /**
      * This method returns the Looper associated with this thread. If this thread not been started
      * or for any reason isAlive() returns false, this method will return null. If this thread
-     * has been started, this method will block until the looper has been initialized.  
+     * has been started, this method will block until the looper has been initialized.
      * @return The looper.
      */
     public Looper getLooper() {
         if (!isAlive()) {
             return null;
         }
-        
+
+        boolean wasInterrupted = false;
+
         // If the thread has been started, wait until the looper has been created.
         synchronized (this) {
             while (isAlive() && mLooper == null) {
                 try {
                     wait();
                 } catch (InterruptedException e) {
+                    wasInterrupted = true;
                 }
             }
         }
+
+        /*
+         * We may need to restore the thread's interrupted flag, because it may
+         * have been cleared above since we eat InterruptedExceptions
+         */
+        if (wasInterrupted) {
+            Thread.currentThread().interrupt();
+        }
+
         return mLooper;
     }
 
@@ -99,6 +131,18 @@ public class HandlerThread extends Thread {
             mHandler = new Handler(getLooper());
         }
         return mHandler;
+    }
+
+    /**
+     * @return a shared {@link Executor} associated with this thread
+     * @hide
+     */
+    @NonNull
+    public Executor getThreadExecutor() {
+        if (mExecutor == null) {
+            mExecutor = new HandlerExecutor(getThreadHandler());
+        }
+        return mExecutor;
     }
 
     /**

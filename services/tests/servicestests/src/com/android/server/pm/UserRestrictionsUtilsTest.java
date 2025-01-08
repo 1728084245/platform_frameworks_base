@@ -19,27 +19,42 @@ package com.android.server.pm;
 import static com.android.server.devicepolicy.DpmTestUtils.assertRestrictions;
 import static com.android.server.devicepolicy.DpmTestUtils.newRestrictions;
 
+import static junit.framework.Assert.assertFalse;
+
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
+
 import android.os.Bundle;
-import android.os.UserHandle;
 import android.os.UserManager;
-import android.os.UserManagerInternal;
-import android.test.AndroidTestCase;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.platform.test.annotations.Presubmit;
+import android.platform.test.flag.junit.SetFlagsRule;
 import android.util.SparseArray;
+
+import androidx.test.filters.SmallTest;
+import androidx.test.runner.AndroidJUnit4;
+
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.runner.RunWith;
 
 /**
  * Tests for {@link com.android.server.pm.UserRestrictionsUtils}.
  *
  * <p>Run with:<pre>
-   m FrameworksServicesTests &&
-   adb install \
-     -r out/target/product/hammerhead/data/app/FrameworksServicesTests/FrameworksServicesTests.apk &&
-   adb shell am instrument -e class com.android.server.pm.UserRestrictionsUtilsTest \
-     -w com.android.frameworks.servicestests/androidx.test.runner.AndroidJUnitRunner
+   atest UserRestrictionsUtilsTest
  * </pre>
  */
+@Presubmit
+@RunWith(AndroidJUnit4.class)
 @SmallTest
-public class UserRestrictionsUtilsTest extends AndroidTestCase {
+public class UserRestrictionsUtilsTest {
+    @Rule
+    public final SetFlagsRule mSetFlagsRule = new SetFlagsRule();
+
+    @Test
     public void testNonNull() {
         Bundle out = UserRestrictionsUtils.nonNull(null);
         assertNotNull(out);
@@ -49,23 +64,7 @@ public class UserRestrictionsUtilsTest extends AndroidTestCase {
         assertSame(in, UserRestrictionsUtils.nonNull(in));
     }
 
-    public void testIsEmpty() {
-        assertTrue(UserRestrictionsUtils.isEmpty(null));
-        assertTrue(UserRestrictionsUtils.isEmpty(new Bundle()));
-        assertFalse(UserRestrictionsUtils.isEmpty(newRestrictions("a")));
-    }
-
-    public void testClone() {
-        Bundle in = new Bundle();
-        Bundle out = UserRestrictionsUtils.clone(in);
-        assertNotSame(in, out);
-        assertRestrictions(out, new Bundle());
-
-        out = UserRestrictionsUtils.clone(null);
-        assertNotNull(out);
-        out.putBoolean("a", true); // Should not be Bundle.EMPTY.
-    }
-
+    @Test
     public void testMerge() {
         Bundle a = newRestrictions("a", "d");
         Bundle b = newRestrictions("b", "d", "e");
@@ -78,13 +77,10 @@ public class UserRestrictionsUtilsTest extends AndroidTestCase {
 
         assertRestrictions(newRestrictions("a", "b", "d", "e"), a);
 
-        try {
-            UserRestrictionsUtils.merge(a, a);
-            fail();
-        } catch (IllegalArgumentException expected) {
-        }
+        assertThrows(IllegalArgumentException.class, () -> UserRestrictionsUtils.merge(a, a));
     }
 
+    @Test
     public void testCanDeviceOwnerChange() {
         assertFalse(UserRestrictionsUtils.canDeviceOwnerChange(UserManager.DISALLOW_RECORD_AUDIO));
         assertFalse(UserRestrictionsUtils.canDeviceOwnerChange(UserManager.DISALLOW_WALLPAPER));
@@ -92,184 +88,143 @@ public class UserRestrictionsUtilsTest extends AndroidTestCase {
         assertTrue(UserRestrictionsUtils.canDeviceOwnerChange(UserManager.DISALLOW_USER_SWITCH));
     }
 
-    public void testCanProfileOwnerChange() {
-        int user = UserHandle.USER_SYSTEM;
+    @Test
+    public void testCanProfileOwnerChange_mainUser() {
         assertFalse(UserRestrictionsUtils.canProfileOwnerChange(
-                UserManager.DISALLOW_RECORD_AUDIO, user));
+                UserManager.DISALLOW_RECORD_AUDIO,
+                true,
+                false));
         assertFalse(UserRestrictionsUtils.canProfileOwnerChange(
-                UserManager.DISALLOW_WALLPAPER, user));
+                UserManager.DISALLOW_WALLPAPER,
+                true,
+                false));
         assertFalse(UserRestrictionsUtils.canProfileOwnerChange(
-                UserManager.DISALLOW_USER_SWITCH, user));
+                UserManager.DISALLOW_USER_SWITCH,
+                true,
+                false));
         assertTrue(UserRestrictionsUtils.canProfileOwnerChange(
-                UserManager.DISALLOW_ADD_USER, user));
+                UserManager.DISALLOW_ADD_USER,
+                true,
+                false));
         assertTrue(UserRestrictionsUtils.canProfileOwnerChange(
-                UserManager.DISALLOW_ADJUST_VOLUME, user));
+                UserManager.DISALLOW_ADJUST_VOLUME,
+                true,
+                false));
+    }
 
-        user = 10;
+    @Test
+    public void testCanProfileOwnerChange_notMainUser() {
         assertFalse(UserRestrictionsUtils.canProfileOwnerChange(
-                UserManager.DISALLOW_RECORD_AUDIO, user));
+                UserManager.DISALLOW_RECORD_AUDIO,
+                false,
+                false));
         assertFalse(UserRestrictionsUtils.canProfileOwnerChange(
-                UserManager.DISALLOW_WALLPAPER, user));
+                UserManager.DISALLOW_WALLPAPER,
+                false,
+                false));
         assertFalse(UserRestrictionsUtils.canProfileOwnerChange(
-                UserManager.DISALLOW_ADD_USER, user));
+                UserManager.DISALLOW_ADD_USER,
+                false,
+                false));
         assertFalse(UserRestrictionsUtils.canProfileOwnerChange(
-                UserManager.DISALLOW_USER_SWITCH, user));
+                UserManager.DISALLOW_USER_SWITCH,
+                false,
+                false));
         assertTrue(UserRestrictionsUtils.canProfileOwnerChange(
-                UserManager.DISALLOW_ADJUST_VOLUME, user));
+                UserManager.DISALLOW_ADJUST_VOLUME,
+                false,
+                false));
     }
 
-    public void testSortToGlobalAndLocal() {
-        final Bundle local = new Bundle();
-        final Bundle global = new Bundle();
-
-        UserRestrictionsUtils.sortToGlobalAndLocal(null, false /* isDeviceOwner */,
-                UserManagerInternal.CAMERA_NOT_DISABLED, global, local);
-        assertEquals(0, global.size());
-        assertEquals(0, local.size());
-
-        UserRestrictionsUtils.sortToGlobalAndLocal(Bundle.EMPTY, false /* isDeviceOwner */,
-                UserManagerInternal.CAMERA_NOT_DISABLED, global, local);
-        assertEquals(0, global.size());
-        assertEquals(0, local.size());
-
-        // Restrictions set by DO.
-        UserRestrictionsUtils.sortToGlobalAndLocal(newRestrictions(
-                UserManager.DISALLOW_ADJUST_VOLUME,
-                UserManager.DISALLOW_UNMUTE_MICROPHONE,
-                UserManager.DISALLOW_USB_FILE_TRANSFER,
-                UserManager.DISALLOW_CONFIG_TETHERING,
-                UserManager.DISALLOW_OUTGOING_BEAM,
-                UserManager.DISALLOW_APPS_CONTROL,
-                UserManager.ENSURE_VERIFY_APPS
-        ), true /* isDeviceOwner */, UserManagerInternal.CAMERA_NOT_DISABLED, global, local);
-
-
-        assertRestrictions(newRestrictions(
-                // This one is global no matter who sets it.
-                UserManager.ENSURE_VERIFY_APPS,
-
-                // These can be set by PO too, but when DO sets them, they're global.
-                UserManager.DISALLOW_ADJUST_VOLUME,
-                UserManager.DISALLOW_UNMUTE_MICROPHONE,
-
-                // These can only be set by DO.
-                UserManager.DISALLOW_USB_FILE_TRANSFER,
-                UserManager.DISALLOW_CONFIG_TETHERING
-        ), global);
-
-        assertRestrictions(newRestrictions(
-                // They can be set by both DO/PO.
-                UserManager.DISALLOW_OUTGOING_BEAM,
-                UserManager.DISALLOW_APPS_CONTROL
-        ), local);
-
-        local.clear();
-        global.clear();
-
-        // Restrictions set by PO.
-        UserRestrictionsUtils.sortToGlobalAndLocal(newRestrictions(
-                UserManager.DISALLOW_ADJUST_VOLUME,
-                UserManager.DISALLOW_UNMUTE_MICROPHONE,
-                UserManager.DISALLOW_USB_FILE_TRANSFER,
-                UserManager.DISALLOW_CONFIG_TETHERING,
-                UserManager.DISALLOW_OUTGOING_BEAM,
-                UserManager.DISALLOW_APPS_CONTROL,
-                UserManager.ENSURE_VERIFY_APPS
-        ), false /* isDeviceOwner */, UserManagerInternal.CAMERA_NOT_DISABLED, global, local);
-
-        assertRestrictions(newRestrictions(
-                // This one is global no matter who sets it.
-                UserManager.ENSURE_VERIFY_APPS
-        ), global);
-
-        assertRestrictions(newRestrictions(
-                // These can be set by PO too, but when PO sets them, they're local.
-                UserManager.DISALLOW_ADJUST_VOLUME,
-                UserManager.DISALLOW_UNMUTE_MICROPHONE,
-
-                // They can be set by both DO/PO.
-                UserManager.DISALLOW_OUTGOING_BEAM,
-                UserManager.DISALLOW_APPS_CONTROL,
-
-                // These can only be set by DO.
-                UserManager.DISALLOW_USB_FILE_TRANSFER,
-                UserManager.DISALLOW_CONFIG_TETHERING
-        ), local);
-
+    @Test
+    public void testCanProfileOwnerChange_restrictionRequiresOrgOwnedDevice_orgOwned() {
+        assertTrue(UserRestrictionsUtils.canProfileOwnerChange(
+                UserManager.DISALLOW_SIM_GLOBALLY,
+                false,
+                true));
+        assertTrue(UserRestrictionsUtils.canProfileOwnerChange(
+                UserManager.DISALLOW_SIM_GLOBALLY,
+                true,
+                true));
     }
 
-    public void testSortToLocalAndGlobalWithCameraDisabled() {
-        final Bundle local = new Bundle();
-        final Bundle global = new Bundle();
-
-        UserRestrictionsUtils.sortToGlobalAndLocal(Bundle.EMPTY, false,
-                UserManagerInternal.CAMERA_DISABLED_GLOBALLY, global, local);
-        assertRestrictions(newRestrictions(UserManager.DISALLOW_CAMERA), global);
-        assertEquals(0, local.size());
-        global.clear();
-
-        UserRestrictionsUtils.sortToGlobalAndLocal(Bundle.EMPTY, false,
-                UserManagerInternal.CAMERA_DISABLED_LOCALLY, global, local);
-        assertEquals(0, global.size());
-        assertRestrictions(newRestrictions(UserManager.DISALLOW_CAMERA), local);
+    @Test
+    public void testCanProfileOwnerChange_restrictionRequiresOrgOwnedDevice_notOrgOwned() {
+        assertFalse(UserRestrictionsUtils.canProfileOwnerChange(
+                UserManager.DISALLOW_SIM_GLOBALLY,
+                false,
+                false));
+        assertFalse(UserRestrictionsUtils.canProfileOwnerChange(
+                UserManager.DISALLOW_SIM_GLOBALLY,
+                true,
+                false));
     }
 
-    public void testMergeAll() {
-        SparseArray<Bundle> restrictions = new SparseArray<>();
-        assertNull(UserRestrictionsUtils.mergeAll(restrictions));
-
-        restrictions.put(0, newRestrictions(UserManager.DISALLOW_ADJUST_VOLUME));
-        restrictions.put(1, newRestrictions(UserManager.DISALLOW_USB_FILE_TRANSFER));
-        restrictions.put(2, newRestrictions(UserManager.DISALLOW_APPS_CONTROL));
-
-        Bundle result = UserRestrictionsUtils.mergeAll(restrictions);
-        assertRestrictions(
-                newRestrictions(
-                        UserManager.DISALLOW_ADJUST_VOLUME,
-                        UserManager.DISALLOW_USB_FILE_TRANSFER,
-                        UserManager.DISALLOW_APPS_CONTROL),
-                result);
+    @Test
+    public void testCanProfileOwnerChange_restrictionNotRequiresOrgOwnedDevice_orgOwned() {
+        assertTrue(UserRestrictionsUtils.canProfileOwnerChange(
+                UserManager.DISALLOW_ADJUST_VOLUME,
+                false,
+                true));
+        assertTrue(UserRestrictionsUtils.canProfileOwnerChange(
+                UserManager.DISALLOW_ADJUST_VOLUME,
+                true,
+                true));
     }
 
+    @Test
+    public void testCanProfileOwnerChange_restrictionNotRequiresOrgOwnedDevice_notOrgOwned() {
+        assertTrue(UserRestrictionsUtils.canProfileOwnerChange(
+                UserManager.DISALLOW_ADJUST_VOLUME,
+                false,
+                false));
+        assertTrue(UserRestrictionsUtils.canProfileOwnerChange(
+                UserManager.DISALLOW_ADJUST_VOLUME,
+                true,
+                false));
+    }
+
+    @Test
     public void testMoveRestriction() {
-        SparseArray<Bundle> localRestrictions = new SparseArray<>();
-        SparseArray<Bundle> globalRestrictions = new SparseArray<>();
+        SparseArray<RestrictionsSet> localRestrictions = new SparseArray<>();
+        RestrictionsSet globalRestrictions = new RestrictionsSet();
 
         // User 0 has only local restrictions, nothing should change.
-        localRestrictions.put(0, newRestrictions(UserManager.DISALLOW_ADJUST_VOLUME));
+        localRestrictions.put(0, newRestrictions(0, UserManager.DISALLOW_ADJUST_VOLUME));
         // User 1 has a local restriction to be moved to global and some global already. Local
         // restrictions should be removed for this user.
-        localRestrictions.put(1, newRestrictions(UserManager.ENSURE_VERIFY_APPS));
-        globalRestrictions.put(1, newRestrictions(UserManager.DISALLOW_ADD_USER));
+        localRestrictions.put(1, newRestrictions(1, UserManager.ENSURE_VERIFY_APPS));
+        globalRestrictions.updateRestrictions(1,
+                newRestrictions(UserManager.DISALLOW_ADD_USER));
         // User 2 has a local restriction to be moved and one to leave local.
-        localRestrictions.put(2, newRestrictions(
-                UserManager.ENSURE_VERIFY_APPS,
-                UserManager.DISALLOW_CONFIG_VPN));
+        localRestrictions.put(2, newRestrictions(2,
+                UserManager.ENSURE_VERIFY_APPS, UserManager.DISALLOW_CONFIG_VPN));
 
         UserRestrictionsUtils.moveRestriction(
                 UserManager.ENSURE_VERIFY_APPS, localRestrictions, globalRestrictions);
 
         // Check user 0.
         assertRestrictions(
-                newRestrictions(UserManager.DISALLOW_ADJUST_VOLUME),
+                newRestrictions(0, UserManager.DISALLOW_ADJUST_VOLUME),
                 localRestrictions.get(0));
-        assertNull(globalRestrictions.get(0));
+        assertNull(globalRestrictions.getRestrictions(0));
 
         // Check user 1.
-        assertNull(localRestrictions.get(1));
+        assertTrue(localRestrictions.get(1).isEmpty());
         assertRestrictions(
                 newRestrictions(UserManager.ENSURE_VERIFY_APPS, UserManager.DISALLOW_ADD_USER),
-                globalRestrictions.get(1));
+                globalRestrictions.getRestrictions(1));
 
         // Check user 2.
         assertRestrictions(
-                newRestrictions(UserManager.DISALLOW_CONFIG_VPN),
+                newRestrictions(2, UserManager.DISALLOW_CONFIG_VPN),
                 localRestrictions.get(2));
         assertRestrictions(
                 newRestrictions(UserManager.ENSURE_VERIFY_APPS),
-                globalRestrictions.get(2));
+                globalRestrictions.getRestrictions(2));
     }
 
+    @Test
     public void testAreEqual() {
         assertTrue(UserRestrictionsUtils.areEqual(
                 null,

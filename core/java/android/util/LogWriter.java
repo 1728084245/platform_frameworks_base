@@ -16,10 +16,13 @@
 
 package android.util;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
+
 import java.io.Writer;
 
 /** @hide */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public class LogWriter extends Writer {
     private final int mPriority;
     private final String mTag;
@@ -38,7 +41,7 @@ public class LogWriter extends Writer {
      * {@link android.util.Log#ERROR Log.ERROR}.
      * @param tag A string tag to associate with each printed log statement.
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public LogWriter(int priority, String tag) {
         mPriority = priority;
         mTag = tag;

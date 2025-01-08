@@ -16,20 +16,19 @@
 
 #define LOG_TAG "UsbDeviceConnectionJNI"
 
-#include "utils/Log.h"
-
-#include "jni.h"
-#include <nativehelper/JNIHelp.h>
-#include "core_jni_helpers.h"
-
+#include <fcntl.h>
+#include <nativehelper/JNIPlatformHelp.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <usbhost/usbhost.h>
+#include <usbhost/usbhost_jni.h>
 
 #include <chrono>
 
-#include <stdio.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
+#include "core_jni_helpers.h"
+#include "jni.h"
+#include "utils/Log.h"
 
 using namespace android;
 using namespace std::chrono;
@@ -91,22 +90,8 @@ android_hardware_UsbDeviceConnection_get_fd(JNIEnv *env, jobject thiz)
 static jbyteArray
 android_hardware_UsbDeviceConnection_get_desc(JNIEnv *env, jobject thiz)
 {
-    char buffer[16384];
     int fd = android_hardware_UsbDeviceConnection_get_fd(env, thiz);
-    if (fd < 0) return NULL;
-    lseek(fd, 0, SEEK_SET);
-    int length = read(fd, buffer, sizeof(buffer));
-    if (length < 0) return NULL;
-
-    jbyteArray ret = env->NewByteArray(length);
-    if (ret) {
-        jbyte* bytes = (jbyte*)env->GetPrimitiveArrayCritical(ret, 0);
-        if (bytes) {
-            memcpy(bytes, buffer, length);
-            env->ReleasePrimitiveArrayCritical(ret, bytes, 0);
-        }
-    }
-    return ret;
+    return usb_jni_read_descriptors(env, fd);
 }
 
 static jboolean
@@ -180,19 +165,25 @@ android_hardware_UsbDeviceConnection_control_request(JNIEnv *env, jobject thiz,
         return -1;
     }
 
-    jbyte* bufferBytes = NULL;
-    if (buffer) {
-        bufferBytes = (jbyte*)env->GetPrimitiveArrayCritical(buffer, NULL);
+    bool is_dir_in = (requestType & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN;
+    std::unique_ptr<jbyte[]> bufferBytes(new (std::nothrow) jbyte[length]);
+    if (!bufferBytes) {
+        jniThrowException(env, "java/lang/OutOfMemoryError", NULL);
+        return -1;
     }
 
-    jint result = usb_device_control_transfer(device, requestType, request,
-            value, index, bufferBytes + start, length, timeout);
-
-    if (bufferBytes) {
-        env->ReleasePrimitiveArrayCritical(buffer, bufferBytes, 0);
+    if (!is_dir_in && buffer) {
+        env->GetByteArrayRegion(buffer, start, length, bufferBytes.get());
     }
 
-    return result;
+    jint bytes_transferred = usb_device_control_transfer(device, requestType, request,
+            value, index, bufferBytes.get(), length, timeout);
+
+    if (bytes_transferred > 0 && is_dir_in) {
+        env->SetByteArrayRegion(buffer, start, bytes_transferred, bufferBytes.get());
+    }
+
+    return bytes_transferred;
 }
 
 static jint
@@ -205,18 +196,25 @@ android_hardware_UsbDeviceConnection_bulk_request(JNIEnv *env, jobject thiz,
         return -1;
     }
 
-    jbyte* bufferBytes = NULL;
-    if (buffer) {
-        bufferBytes = (jbyte*)env->GetPrimitiveArrayCritical(buffer, NULL);
+    bool is_dir_in = (endpoint & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN;
+    std::unique_ptr<jbyte[]> bufferBytes(new (std::nothrow) jbyte[length]);
+    if (!bufferBytes) {
+        jniThrowException(env, "java/lang/OutOfMemoryError", NULL);
+        return -1;
     }
 
-    jint result = usb_device_bulk_transfer(device, endpoint, bufferBytes + start, length, timeout);
-
-    if (bufferBytes) {
-        env->ReleasePrimitiveArrayCritical(buffer, bufferBytes, 0);
+    if (!is_dir_in && buffer) {
+        env->GetByteArrayRegion(buffer, start, length, bufferBytes.get());
     }
 
-    return result;
+    jint bytes_transferred =
+            usb_device_bulk_transfer(device, endpoint, bufferBytes.get(), length, timeout);
+
+    if (bytes_transferred > 0 && is_dir_in) {
+        env->SetByteArrayRegion(buffer, start, bytes_transferred, bufferBytes.get());
+    }
+
+    return bytes_transferred;
 }
 
 static jobject

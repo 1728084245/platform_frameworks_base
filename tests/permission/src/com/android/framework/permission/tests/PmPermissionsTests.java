@@ -19,7 +19,8 @@ package com.android.framework.permission.tests;
 import android.app.PackageInstallObserver;
 import android.content.pm.PackageManager;
 import android.test.AndroidTestCase;
-import android.test.suitebuilder.annotation.SmallTest;
+
+import androidx.test.filters.SmallTest;
 
 /**
  * Verify PackageManager api's that require specific permissions.
@@ -43,8 +44,8 @@ public class PmPermissionsTests extends AndroidTestCase {
         try {
             mPm.getPackageSizeInfo(mPkgName, null);
             fail("PackageManager.getPackageSizeInfo" +
-                    "did not throw SecurityException as expected");
-        } catch (SecurityException e) {
+                    "did not throw UnsupportedOperationException as expected");
+        } catch (UnsupportedOperationException e) {
             // expected
         }
     }

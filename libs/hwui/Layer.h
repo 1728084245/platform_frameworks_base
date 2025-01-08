@@ -16,15 +16,16 @@
 
 #pragma once
 
-#include <GpuMemoryTracker.h>
 #include <utils/RefBase.h>
 
+#include <SkBlendMode.h>
 #include <SkColorFilter.h>
 #include <SkColorSpace.h>
-#include <SkBlendMode.h>
+#include <SkCanvas.h>
 #include <SkPaint.h>
-
-#include "Matrix.h"
+#include <SkImage.h>
+#include <SkMatrix.h>
+#include <system/graphics.h>
 
 namespace android {
 namespace uirenderer {
@@ -38,26 +39,21 @@ class RenderState;
 /**
  * A layer has dimensions and is backed by a backend specific texture or framebuffer.
  */
-class Layer : public VirtualLightRefBase, GpuMemoryTracker {
+class Layer : public VirtualLightRefBase {
 public:
-    enum class Api {
-        OpenGL = 0,
-        Vulkan = 1,
-    };
-
-    Api getApi() const { return mApi; }
+    Layer(RenderState& renderState, sk_sp<SkColorFilter>, int alpha, SkBlendMode mode);
 
     ~Layer();
 
-    virtual uint32_t getWidth() const = 0;
+    uint32_t getWidth() const { return mWidth; }
 
-    virtual uint32_t getHeight() const = 0;
+    uint32_t getHeight() const { return mHeight; }
 
-    virtual void setSize(uint32_t width, uint32_t height) = 0;
+    void setSize(uint32_t width, uint32_t height) { mWidth = width; mHeight = height; }
 
-    virtual void setBlend(bool blend) = 0;
+    void setBlend(bool blend) { mBlend = blend; }
 
-    virtual bool isBlend() const = 0;
+    bool isBlend() const { return mBlend; }
 
     inline void setForceFilter(bool forceFilter) { this->forceFilter = forceFilter; }
 
@@ -72,21 +68,23 @@ public:
 
     inline int getAlpha() const { return alpha; }
 
-    virtual SkBlendMode getMode() const { return mode; }
+    SkBlendMode getMode() const;
 
-    inline SkColorFilter* getColorFilter() const { return mColorFilter.get(); }
+    inline sk_sp<SkColorFilter> getColorFilter() const { return mColorFilter; }
 
-    void setColorFilter(sk_sp<SkColorFilter> filter);
+    void setColorFilter(sk_sp<SkColorFilter> filter) { mColorFilter = filter; };
 
-    void setDataSpace(android_dataspace dataspace);
+    inline SkMatrix& getTransform() { return transform; }
 
-    void setColorSpace(sk_sp<SkColorSpace> colorSpace);
+    inline SkRect getCurrentCropRect() { return mCurrentCropRect; }
 
-    inline sk_sp<SkColorFilter> getColorSpaceWithFilter() const { return mColorSpaceWithFilter; }
+    inline void setCurrentCropRect(const SkRect currentCropRect) {
+        mCurrentCropRect = currentCropRect;
+    }
 
-    inline mat4& getTexTransform() { return texTransform; }
+    inline void setWindowTransform(uint32_t windowTransform) { mWindowTransform = windowTransform; }
 
-    inline mat4& getTransform() { return transform; }
+    inline uint32_t getWindowTransform() { return mWindowTransform; }
 
     /**
      * Posts a decStrong call to the appropriate thread.
@@ -94,45 +92,31 @@ public:
      */
     void postDecStrong();
 
-    inline void setBufferSize(uint32_t width, uint32_t height) {
-        mBufferWidth = width;
-        mBufferHeight = height;
+    inline void setImage(const sk_sp<SkImage>& image) { this->layerImage = image; }
+
+    inline sk_sp<SkImage> getImage() const { return this->layerImage; }
+
+    inline void setMaxLuminanceNits(float maxLuminanceNits) {
+        mMaxLuminanceNits = maxLuminanceNits;
     }
 
-    inline uint32_t getBufferWidth() const { return mBufferWidth; }
+    inline float getMaxLuminanceNits() { return mMaxLuminanceNits; }
 
-    inline uint32_t getBufferHeight() const { return mBufferHeight; }
+    void setBufferFormat(uint32_t format) { mBufferFormat = format; }
+
+    uint32_t getBufferFormat() const { return mBufferFormat; }
+
+    void draw(SkCanvas* canvas);
 
 protected:
-    Layer(RenderState& renderState, Api api, sk_sp<SkColorFilter>, int alpha,
-          SkBlendMode mode);
 
     RenderState& mRenderState;
 
-    /**
-     * Blending mode of the layer.
-     */
-    SkBlendMode mode;
-
 private:
-    void buildColorSpaceWithFilter();
-
-    Api mApi;
-
     /**
      * Color filter used to draw this layer. Optional.
      */
     sk_sp<SkColorFilter> mColorFilter;
-
-    /**
-     * Colorspace of the contents of the layer. Optional.
-     */
-    android_dataspace mCurrentDataspace = HAL_DATASPACE_UNKNOWN;
-
-    /**
-     * A color filter that is the combination of the mColorFilter and mColorSpace. Optional.
-     */
-    sk_sp<SkColorFilter> mColorSpaceWithFilter;
 
     /**
      * Indicates raster data backing the layer is scaled, requiring filtration.
@@ -145,19 +129,53 @@ private:
     int alpha;
 
     /**
-     * Optional texture coordinates transform.
+     * Blending mode of the layer.
      */
-    mat4 texTransform;
+    SkBlendMode mode;
 
     /**
      * Optional transform.
      */
-    mat4 transform;
+    SkMatrix transform;
 
-    uint32_t mBufferWidth = 0;
+    /**
+     * Optional crop
+     */
+    SkRect mCurrentCropRect;
 
-    uint32_t mBufferHeight = 0;
+    /**
+     * Optional transform
+     */
+    uint32_t mWindowTransform;
+
+    /**
+     * An image backing the layer.
+     */
+    sk_sp<SkImage> layerImage;
+
+    /**
+     * layer width.
+     */
+    uint32_t mWidth = 0;
+
+    /**
+     * layer height.
+     */
+    uint32_t mHeight = 0;
+
+    /**
+     * enable blending
+     */
+    bool mBlend = false;
+
+    /**
+     * Max input luminance if the layer is HDR
+     */
+    float mMaxLuminanceNits = -1;
+
+    uint32_t mBufferFormat = 0;
+
 };  // struct Layer
 
-};  // namespace uirenderer
-};  // namespace android
+}  // namespace uirenderer
+}  // namespace android

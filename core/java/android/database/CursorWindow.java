@@ -16,18 +16,20 @@
 
 package android.database;
 
+import static java.util.Objects.requireNonNull;
+
 import android.annotation.BytesLong;
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.IntRange;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.res.Resources;
 import android.database.sqlite.SQLiteClosable;
 import android.database.sqlite.SQLiteException;
-import android.os.Binder;
 import android.os.Parcel;
 import android.os.Parcelable;
-import android.os.Process;
-import android.util.Log;
-import android.util.LongSparseArray;
-import android.util.SparseIntArray;
+import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+import android.ravenwood.annotation.RavenwoodRedirect;
+import android.ravenwood.annotation.RavenwoodRedirectionClass;
+import android.ravenwood.annotation.RavenwoodThrow;
 
 import dalvik.annotation.optimization.FastNative;
 import dalvik.system.CloseGuard;
@@ -42,6 +44,8 @@ import dalvik.system.CloseGuard;
  * consumer for reading.
  * </p>
  */
+@RavenwoodKeepWholeClass
+@RavenwoodRedirectionClass("CursorWindow_ravenwood")
 public class CursorWindow extends SQLiteClosable implements Parcelable {
     private static final String STATS_TAG = "CursorWindowStats";
 
@@ -59,48 +63,72 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
     private int mStartPos;
     private final String mName;
 
-    private final CloseGuard mCloseGuard = CloseGuard.get();
+    private final CloseGuard mCloseGuard;
 
+    // May throw CursorWindowAllocationException
+    @RavenwoodRedirect
     private static native long nativeCreate(String name, int cursorWindowSize);
+
+    // May throw CursorWindowAllocationException
+    @RavenwoodRedirect
     private static native long nativeCreateFromParcel(Parcel parcel);
+    @RavenwoodRedirect
     private static native void nativeDispose(long windowPtr);
+    @RavenwoodRedirect
     private static native void nativeWriteToParcel(long windowPtr, Parcel parcel);
 
+    @RavenwoodRedirect
     private static native String nativeGetName(long windowPtr);
+    @RavenwoodRedirect
     private static native byte[] nativeGetBlob(long windowPtr, int row, int column);
+    @RavenwoodRedirect
     private static native String nativeGetString(long windowPtr, int row, int column);
+    @RavenwoodThrow
     private static native void nativeCopyStringToBuffer(long windowPtr, int row, int column,
             CharArrayBuffer buffer);
+    @RavenwoodRedirect
     private static native boolean nativePutBlob(long windowPtr, byte[] value, int row, int column);
+    @RavenwoodRedirect
     private static native boolean nativePutString(long windowPtr, String value,
             int row, int column);
 
     // Below native methods don't do unconstrained work, so are FastNative for performance
 
     @FastNative
+    @RavenwoodThrow
     private static native void nativeClear(long windowPtr);
 
     @FastNative
+    @RavenwoodRedirect
     private static native int nativeGetNumRows(long windowPtr);
     @FastNative
+    @RavenwoodRedirect
     private static native boolean nativeSetNumColumns(long windowPtr, int columnNum);
     @FastNative
+    @RavenwoodRedirect
     private static native boolean nativeAllocRow(long windowPtr);
     @FastNative
+    @RavenwoodThrow
     private static native void nativeFreeLastRow(long windowPtr);
 
     @FastNative
+    @RavenwoodRedirect
     private static native int nativeGetType(long windowPtr, int row, int column);
     @FastNative
+    @RavenwoodRedirect
     private static native long nativeGetLong(long windowPtr, int row, int column);
     @FastNative
+    @RavenwoodRedirect
     private static native double nativeGetDouble(long windowPtr, int row, int column);
 
     @FastNative
+    @RavenwoodRedirect
     private static native boolean nativePutLong(long windowPtr, long value, int row, int column);
     @FastNative
+    @RavenwoodRedirect
     private static native boolean nativePutDouble(long windowPtr, double value, int row, int column);
     @FastNative
+    @RavenwoodThrow
     private static native boolean nativePutNull(long windowPtr, int row, int column);
 
 
@@ -126,20 +154,23 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      *
      * @param name The name of the cursor window, or null if none.
      * @param windowSizeBytes Size of cursor window in bytes.
+     * @throws IllegalArgumentException if {@code windowSizeBytes} is less than 0
+     * @throws AssertionError if created window pointer is 0
      * <p><strong>Note:</strong> Memory is dynamically allocated as data rows are added to the
      * window. Depending on the amount of data stored, the actual amount of memory allocated can be
      * lower than specified size, but cannot exceed it.
      */
     public CursorWindow(String name, @BytesLong long windowSizeBytes) {
+        if (windowSizeBytes < 0) {
+            throw new IllegalArgumentException("Window size cannot be less than 0");
+        }
         mStartPos = 0;
         mName = name != null && name.length() != 0 ? name : "<unnamed>";
         mWindowPtr = nativeCreate(mName, (int) windowSizeBytes);
         if (mWindowPtr == 0) {
-            throw new CursorWindowAllocationException("Cursor window allocation of " +
-                    windowSizeBytes + " bytes failed. " + printStats());
+            throw new AssertionError(); // Not possible, the native code won't return it.
         }
-        mCloseGuard.open("close");
-        recordNewWindow(Binder.getCallingPid(), mWindowPtr);
+        mCloseGuard = createCloseGuard();
     }
 
     /**
@@ -164,11 +195,21 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
         mStartPos = source.readInt();
         mWindowPtr = nativeCreateFromParcel(source);
         if (mWindowPtr == 0) {
-            throw new CursorWindowAllocationException("Cursor window could not be "
-                    + "created from binder.");
+            throw new AssertionError(); // Not possible, the native code won't return it.
         }
         mName = nativeGetName(mWindowPtr);
-        mCloseGuard.open("close");
+        mCloseGuard = createCloseGuard();
+    }
+
+    @android.ravenwood.annotation.RavenwoodReplace
+    private CloseGuard createCloseGuard() {
+        final CloseGuard closeGuard = CloseGuard.get();
+        closeGuard.open("CursorWindow.close");
+        return closeGuard;
+    }
+
+    private CloseGuard createCloseGuard$ravenwood() {
+        return null;
     }
 
     @Override
@@ -188,7 +229,6 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
             mCloseGuard.close();
         }
         if (mWindowPtr != 0) {
-            recordClosingOfWindow(mWindowPtr);
             nativeDispose(mWindowPtr);
             mWindowPtr = 0;
         }
@@ -229,7 +269,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      *
      * @return The zero-based start position.
      */
-    public int getStartPosition() {
+    public @IntRange(from = 0) int getStartPosition() {
         return mStartPos;
     }
 
@@ -242,7 +282,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      *
      * @param pos The new zero-based start position.
      */
-    public void setStartPosition(int pos) {
+    public void setStartPosition(@IntRange(from = 0) int pos) {
         mStartPos = pos;
     }
 
@@ -251,7 +291,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      *
      * @return The number of rows in this cursor window.
      */
-    public int getNumRows() {
+    public @IntRange(from = 0) int getNumRows() {
         acquireReference();
         try {
             return nativeGetNumRows(mWindowPtr);
@@ -271,7 +311,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param columnNum The new number of columns.
      * @return True if successful.
      */
-    public boolean setNumColumns(int columnNum) {
+    public boolean setNumColumns(@IntRange(from = 0) int columnNum) {
         acquireReference();
         try {
             return nativeSetNumColumns(mWindowPtr, columnNum);
@@ -316,7 +356,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @deprecated Use {@link #getType(int, int)} instead.
      */
     @Deprecated
-    public boolean isNull(int row, int column) {
+    public boolean isNull(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         return getType(row, column) == Cursor.FIELD_TYPE_NULL;
     }
 
@@ -331,7 +371,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @deprecated Use {@link #getType(int, int)} instead.
      */
     @Deprecated
-    public boolean isBlob(int row, int column) {
+    public boolean isBlob(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         int type = getType(row, column);
         return type == Cursor.FIELD_TYPE_BLOB || type == Cursor.FIELD_TYPE_NULL;
     }
@@ -346,7 +386,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @deprecated Use {@link #getType(int, int)} instead.
      */
     @Deprecated
-    public boolean isLong(int row, int column) {
+    public boolean isLong(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         return getType(row, column) == Cursor.FIELD_TYPE_INTEGER;
     }
 
@@ -360,7 +400,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @deprecated Use {@link #getType(int, int)} instead.
      */
     @Deprecated
-    public boolean isFloat(int row, int column) {
+    public boolean isFloat(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         return getType(row, column) == Cursor.FIELD_TYPE_FLOAT;
     }
 
@@ -375,29 +415,20 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @deprecated Use {@link #getType(int, int)} instead.
      */
     @Deprecated
-    public boolean isString(int row, int column) {
+    public boolean isString(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         int type = getType(row, column);
         return type == Cursor.FIELD_TYPE_STRING || type == Cursor.FIELD_TYPE_NULL;
     }
 
     /**
      * Returns the type of the field at the specified row and column index.
-     * <p>
-     * The returned field types are:
-     * <ul>
-     * <li>{@link Cursor#FIELD_TYPE_NULL}</li>
-     * <li>{@link Cursor#FIELD_TYPE_INTEGER}</li>
-     * <li>{@link Cursor#FIELD_TYPE_FLOAT}</li>
-     * <li>{@link Cursor#FIELD_TYPE_STRING}</li>
-     * <li>{@link Cursor#FIELD_TYPE_BLOB}</li>
-     * </ul>
-     * </p>
      *
      * @param row The zero-based row index.
      * @param column The zero-based column index.
      * @return The field type.
      */
-    public int getType(int row, int column) {
+    public @Cursor.FieldType int getType(@IntRange(from = 0) int row,
+            @IntRange(from = 0) int column) {
         acquireReference();
         try {
             return nativeGetType(mWindowPtr, row - mStartPos, column);
@@ -427,7 +458,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param column The zero-based column index.
      * @return The value of the field as a byte array.
      */
-    public byte[] getBlob(int row, int column) {
+    public byte[] getBlob(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         acquireReference();
         try {
             return nativeGetBlob(mWindowPtr, row - mStartPos, column);
@@ -462,7 +493,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param column The zero-based column index.
      * @return The value of the field as a string.
      */
-    public String getString(int row, int column) {
+    public String getString(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         acquireReference();
         try {
             return nativeGetString(mWindowPtr, row - mStartPos, column);
@@ -501,7 +532,8 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param buffer The {@link CharArrayBuffer} to hold the string.  It is automatically
      * resized if the requested string is larger than the buffer's current capacity.
       */
-    public void copyStringToBuffer(int row, int column, CharArrayBuffer buffer) {
+    public void copyStringToBuffer(@IntRange(from = 0) int row, @IntRange(from = 0) int column,
+            CharArrayBuffer buffer) {
         if (buffer == null) {
             throw new IllegalArgumentException("CharArrayBuffer should not be null");
         }
@@ -535,7 +567,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param column The zero-based column index.
      * @return The value of the field as a <code>long</code>.
      */
-    public long getLong(int row, int column) {
+    public long getLong(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         acquireReference();
         try {
             return nativeGetLong(mWindowPtr, row - mStartPos, column);
@@ -567,7 +599,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param column The zero-based column index.
      * @return The value of the field as a <code>double</code>.
      */
-    public double getDouble(int row, int column) {
+    public double getDouble(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         acquireReference();
         try {
             return nativeGetDouble(mWindowPtr, row - mStartPos, column);
@@ -588,7 +620,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param column The zero-based column index.
      * @return The value of the field as a <code>short</code>.
      */
-    public short getShort(int row, int column) {
+    public short getShort(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         return (short) getLong(row, column);
     }
 
@@ -604,7 +636,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param column The zero-based column index.
      * @return The value of the field as an <code>int</code>.
      */
-    public int getInt(int row, int column) {
+    public int getInt(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         return (int) getLong(row, column);
     }
 
@@ -620,7 +652,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param column The zero-based column index.
      * @return The value of the field as an <code>float</code>.
      */
-    public float getFloat(int row, int column) {
+    public float getFloat(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         return (float) getDouble(row, column);
     }
 
@@ -632,7 +664,9 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param column The zero-based column index.
      * @return True if successful.
      */
-    public boolean putBlob(byte[] value, int row, int column) {
+    public boolean putBlob(byte[] value,
+            @IntRange(from = 0) int row, @IntRange(from = 0) int column) {
+        requireNonNull(value);
         acquireReference();
         try {
             return nativePutBlob(mWindowPtr, value, row - mStartPos, column);
@@ -649,7 +683,9 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param column The zero-based column index.
      * @return True if successful.
      */
-    public boolean putString(String value, int row, int column) {
+    public boolean putString(String value,
+            @IntRange(from = 0) int row, @IntRange(from = 0) int column) {
+        requireNonNull(value);
         acquireReference();
         try {
             return nativePutString(mWindowPtr, value, row - mStartPos, column);
@@ -666,7 +702,8 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param column The zero-based column index.
      * @return True if successful.
      */
-    public boolean putLong(long value, int row, int column) {
+    public boolean putLong(long value,
+            @IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         acquireReference();
         try {
             return nativePutLong(mWindowPtr, value, row - mStartPos, column);
@@ -684,7 +721,8 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param column The zero-based column index.
      * @return True if successful.
      */
-    public boolean putDouble(double value, int row, int column) {
+    public boolean putDouble(double value,
+            @IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         acquireReference();
         try {
             return nativePutDouble(mWindowPtr, value, row - mStartPos, column);
@@ -700,7 +738,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param column The zero-based column index.
      * @return True if successful.
      */
-    public boolean putNull(int row, int column) {
+    public boolean putNull(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
         acquireReference();
         try {
             return nativePutNull(mWindowPtr, row - mStartPos, column);
@@ -709,7 +747,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
         }
     }
 
-    public static final Parcelable.Creator<CursorWindow> CREATOR
+    public static final @android.annotation.NonNull Parcelable.Creator<CursorWindow> CREATOR
             = new Parcelable.Creator<CursorWindow>() {
         public CursorWindow createFromParcel(Parcel source) {
             return new CursorWindow(source);
@@ -747,64 +785,7 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
         dispose();
     }
 
-    @UnsupportedAppUsage
-    private static final LongSparseArray<Integer> sWindowToPidMap = new LongSparseArray<Integer>();
-
-    private void recordNewWindow(int pid, long window) {
-        synchronized (sWindowToPidMap) {
-            sWindowToPidMap.put(window, pid);
-            if (Log.isLoggable(STATS_TAG, Log.VERBOSE)) {
-                Log.i(STATS_TAG, "Created a new Cursor. " + printStats());
-            }
-        }
-    }
-
-    private void recordClosingOfWindow(long window) {
-        synchronized (sWindowToPidMap) {
-            if (sWindowToPidMap.size() == 0) {
-                // this means we are not in the ContentProvider.
-                return;
-            }
-            sWindowToPidMap.delete(window);
-        }
-    }
-
-    @UnsupportedAppUsage
-    private String printStats() {
-        StringBuilder buff = new StringBuilder();
-        int myPid = Process.myPid();
-        int total = 0;
-        SparseIntArray pidCounts = new SparseIntArray();
-        synchronized (sWindowToPidMap) {
-            int size = sWindowToPidMap.size();
-            if (size == 0) {
-                // this means we are not in the ContentProvider.
-                return "";
-            }
-            for (int indx = 0; indx < size; indx++) {
-                int pid = sWindowToPidMap.valueAt(indx);
-                int value = pidCounts.get(pid);
-                pidCounts.put(pid, ++value);
-            }
-        }
-        int numPids = pidCounts.size();
-        for (int i = 0; i < numPids;i++) {
-            buff.append(" (# cursors opened by ");
-            int pid = pidCounts.keyAt(i);
-            if (pid == myPid) {
-                buff.append("this proc=");
-            } else {
-                buff.append("pid " + pid + "=");
-            }
-            int num = pidCounts.get(pid);
-            buff.append(num + ")");
-            total += num;
-        }
-        // limit the returned string size to 1000
-        String s = (buff.length() > 980) ? buff.substring(0, 980) : buff.toString();
-        return "# Open Cursors=" + total + s;
-    }
-
+    @android.ravenwood.annotation.RavenwoodReplace
     private static int getCursorWindowSize() {
         if (sCursorWindowSize < 0) {
             // The cursor window size. resource xml file specifies the value in kB.
@@ -813,6 +794,10 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
                     com.android.internal.R.integer.config_cursorWindowSize) * 1024;
         }
         return sCursorWindowSize;
+    }
+
+    private static int getCursorWindowSize$ravenwood() {
+        return 1024;
     }
 
     @Override

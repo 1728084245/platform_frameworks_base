@@ -14,51 +14,97 @@
 
 package com.android.systemui.statusbar.phone;
 
-import static com.android.systemui.statusbar.policy.DarkIconDispatcher.getTint;
+import static com.android.settingslib.flags.Flags.newStatusBarIcons;
+import static com.android.systemui.plugins.DarkIconDispatcher.getTint;
 
 import android.animation.ArgbEvaluator;
 import android.content.Context;
 import android.content.res.ColorStateList;
+import android.graphics.Color;
 import android.graphics.Rect;
 import android.util.ArrayMap;
 import android.widget.ImageView;
 
-import com.android.systemui.R;
-import com.android.systemui.statusbar.policy.DarkIconDispatcher;
+import com.android.systemui.dagger.SysUISingleton;
+import com.android.systemui.dump.DumpManager;
 
-public class DarkIconDispatcherImpl implements DarkIconDispatcher {
+import kotlinx.coroutines.flow.FlowKt;
+import kotlinx.coroutines.flow.MutableStateFlow;
+import kotlinx.coroutines.flow.StateFlow;
+import kotlinx.coroutines.flow.StateFlowKt;
+
+import java.io.PrintWriter;
+import java.util.ArrayList;
+
+import javax.inject.Inject;
+
+/**
+ */
+@SysUISingleton
+public class DarkIconDispatcherImpl implements SysuiDarkIconDispatcher,
+        LightBarTransitionsController.DarkIntensityApplier {
 
     private final LightBarTransitionsController mTransitionsController;
-    private final Rect mTintArea = new Rect();
+    private final ArrayList<Rect> mTintAreas = new ArrayList<>();
     private final ArrayMap<Object, DarkReceiver> mReceivers = new ArrayMap<>();
 
     private int mIconTint = DEFAULT_ICON_TINT;
+    private int mContrastTint = DEFAULT_INVERSE_ICON_TINT;
+
+    private int mDarkModeContrastColor = DEFAULT_ICON_TINT;
+    private int mLightModeContrastColor = DEFAULT_INVERSE_ICON_TINT;
+
     private float mDarkIntensity;
     private int mDarkModeIconColorSingleTone;
     private int mLightModeIconColorSingleTone;
 
-    public DarkIconDispatcherImpl(Context context) {
-        mDarkModeIconColorSingleTone = context.getColor(R.color.dark_mode_icon_color_single_tone);
-        mLightModeIconColorSingleTone = context.getColor(R.color.light_mode_icon_color_single_tone);
+    private final MutableStateFlow<DarkChange> mDarkChangeFlow = StateFlowKt.MutableStateFlow(
+            DarkChange.EMPTY);
 
-        mTransitionsController = new LightBarTransitionsController(context,
-                this::setIconTintInternal);
+    /**
+     */
+    @Inject
+    public DarkIconDispatcherImpl(
+            Context context,
+            LightBarTransitionsController.Factory lightBarTransitionsControllerFactory,
+            DumpManager dumpManager) {
+
+        if (newStatusBarIcons()) {
+            mDarkModeIconColorSingleTone = Color.BLACK;
+            mLightModeIconColorSingleTone = Color.WHITE;
+        } else {
+            mDarkModeIconColorSingleTone = context.getColor(
+                    com.android.settingslib.R.color.dark_mode_icon_color_single_tone);
+            mLightModeIconColorSingleTone = context.getColor(
+                    com.android.settingslib.R.color.light_mode_icon_color_single_tone);
+        }
+
+        mTransitionsController = lightBarTransitionsControllerFactory.create(this);
+
+        dumpManager.registerDumpable(getClass().getSimpleName(), this);
     }
 
     public LightBarTransitionsController getTransitionsController() {
         return mTransitionsController;
     }
 
+    @Override
+    public StateFlow<DarkChange> darkChangeFlow() {
+        return FlowKt.asStateFlow(mDarkChangeFlow);
+    }
+
     public void addDarkReceiver(DarkReceiver receiver) {
         mReceivers.put(receiver, receiver);
-        receiver.onDarkChanged(mTintArea, mDarkIntensity, mIconTint);
+        receiver.onDarkChanged(mTintAreas, mDarkIntensity, mIconTint);
+        receiver.onDarkChangedWithContrast(mTintAreas, mIconTint, mContrastTint);
     }
 
     public void addDarkReceiver(ImageView imageView) {
         DarkReceiver receiver = (area, darkIntensity, tint) -> imageView.setImageTintList(
-                ColorStateList.valueOf(getTint(mTintArea, imageView, mIconTint)));
+                ColorStateList.valueOf(getTint(mTintAreas, imageView, mIconTint)));
         mReceivers.put(imageView, receiver);
-        receiver.onDarkChanged(mTintArea, mDarkIntensity, mIconTint);
+        receiver.onDarkChanged(mTintAreas, mDarkIntensity, mIconTint);
+        receiver.onDarkChangedWithContrast(mTintAreas, mIconTint, mContrastTint);
     }
 
     public void removeDarkReceiver(DarkReceiver object) {
@@ -70,37 +116,69 @@ public class DarkIconDispatcherImpl implements DarkIconDispatcher {
     }
 
     public void applyDark(DarkReceiver object) {
-        mReceivers.get(object).onDarkChanged(mTintArea, mDarkIntensity, mIconTint);
+        mReceivers.get(object).onDarkChanged(mTintAreas, mDarkIntensity, mIconTint);
+        mReceivers.get(object).onDarkChangedWithContrast(mTintAreas, mIconTint, mContrastTint);
     }
 
     /**
-     * Sets the dark area so {@link #setIconsDark} only affects the icons in the specified area.
+     * Sets the dark area so {@link #applyDark} only affects the icons in the specified area.
      *
-     * @param darkArea the area in which icons should change it's tint, in logical screen
-     *                 coordinates
+     * @param darkAreas the areas in which icons should change it's tint, in logical screen
+     *                  coordinates
      */
-    public void setIconsDarkArea(Rect darkArea) {
-        if (darkArea == null && mTintArea.isEmpty()) {
+    public void setIconsDarkArea(ArrayList<Rect> darkAreas) {
+        if (darkAreas == null && mTintAreas.isEmpty()) {
             return;
         }
-        if (darkArea == null) {
-            mTintArea.setEmpty();
-        } else {
-            mTintArea.set(darkArea);
+
+        mTintAreas.clear();
+        if (darkAreas != null) {
+            mTintAreas.addAll(darkAreas);
         }
         applyIconTint();
     }
 
-    private void setIconTintInternal(float darkIntensity) {
+    @Override
+    public void applyDarkIntensity(float darkIntensity) {
         mDarkIntensity = darkIntensity;
-        mIconTint = (int) ArgbEvaluator.getInstance().evaluate(darkIntensity,
+        ArgbEvaluator evaluator = ArgbEvaluator.getInstance();
+
+        mIconTint = (int) evaluator.evaluate(darkIntensity,
                 mLightModeIconColorSingleTone, mDarkModeIconColorSingleTone);
+        mContrastTint = (int) evaluator
+                .evaluate(darkIntensity, mLightModeContrastColor, mDarkModeContrastColor);
+
         applyIconTint();
+    }
+
+    @Override
+    public int getTintAnimationDuration() {
+        return LightBarTransitionsController.DEFAULT_TINT_ANIMATION_DURATION;
     }
 
     private void applyIconTint() {
+        mDarkChangeFlow.setValue(new DarkChange(mTintAreas, mDarkIntensity, mIconTint));
         for (int i = 0; i < mReceivers.size(); i++) {
-            mReceivers.valueAt(i).onDarkChanged(mTintArea, mDarkIntensity, mIconTint);
+            mReceivers.valueAt(i).onDarkChanged(mTintAreas, mDarkIntensity, mIconTint);
+            mReceivers.valueAt(i).onDarkChangedWithContrast(mTintAreas, mIconTint, mContrastTint);
         }
+    }
+
+    @Override
+    public void dump(PrintWriter pw, String[] args) {
+        pw.println("DarkIconDispatcher: ");
+        pw.println("  mIconTint: 0x" + Integer.toHexString(mIconTint));
+        pw.println("  mContrastTint: 0x" + Integer.toHexString(mContrastTint));
+
+        pw.println("  mDarkModeIconColorSingleTone: 0x"
+                + Integer.toHexString(mDarkModeIconColorSingleTone));
+        pw.println("  mLightModeIconColorSingleTone: 0x"
+                + Integer.toHexString(mLightModeIconColorSingleTone));
+
+        pw.println("  mDarkModeContrastColor: 0x" + Integer.toHexString(mDarkModeContrastColor));
+        pw.println("  mLightModeContrastColor: 0x" + Integer.toHexString(mLightModeContrastColor));
+
+        pw.println("  mDarkIntensity: " + mDarkIntensity + "f");
+        pw.println("  mTintAreas: " + mTintAreas);
     }
 }

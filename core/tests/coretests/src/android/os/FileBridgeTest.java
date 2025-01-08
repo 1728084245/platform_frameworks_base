@@ -16,45 +16,62 @@
 
 package android.os;
 
+import static android.os.ParcelFileDescriptor.MODE_CREATE;
+import static android.os.ParcelFileDescriptor.MODE_READ_WRITE;
+
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
 import android.os.FileBridge.FileBridgeOutputStream;
-import android.test.AndroidTestCase;
+import android.platform.test.annotations.IgnoreUnderRavenwood;
+import android.platform.test.ravenwood.RavenwoodRule;
 import android.test.MoreAsserts;
 
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+
 import libcore.io.Streams;
+
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.runner.RunWith;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Random;
 
-public class FileBridgeTest extends AndroidTestCase {
+@RunWith(AndroidJUnit4.class)
+@IgnoreUnderRavenwood(blockedBy = ParcelFileDescriptor.class)
+public class FileBridgeTest {
+    @Rule
+    public final RavenwoodRule mRavenwood = new RavenwoodRule();
 
     private File file;
-    private FileOutputStream fileOs;
+    private ParcelFileDescriptor outputFile;
     private FileBridge bridge;
     private FileBridgeOutputStream client;
 
-    @Override
-    protected void setUp() throws Exception {
-        super.setUp();
-
-        file = getContext().getFileStreamPath("meow.dat");
+    @Before
+    public void setUp() throws Exception {
+        file = File.createTempFile("meow", "dat");
         file.delete();
 
-        fileOs = new FileOutputStream(file);
+        outputFile = ParcelFileDescriptor.open(file, MODE_CREATE | MODE_READ_WRITE);
 
         bridge = new FileBridge();
-        bridge.setTargetFile(fileOs.getFD());
+        bridge.setTargetFile(outputFile);
         bridge.start();
         client = new FileBridgeOutputStream(bridge.getClientSocket());
     }
 
-    @Override
-    protected void tearDown() throws Exception {
-        fileOs.close();
+    @After
+    public void tearDown() throws Exception {
+        outputFile.close();
         file.delete();
     }
 
@@ -74,17 +91,20 @@ public class FileBridgeTest extends AndroidTestCase {
         MoreAsserts.assertEquals(expected, Streams.readFully(new FileInputStream(file)));
     }
 
+    @Test
     public void testNoWriteNoSync() throws Exception {
         assertOpen();
         closeAndAssertClosed();
     }
 
+    @Test
     public void testNoWriteSync() throws Exception {
         assertOpen();
         client.flush();
         closeAndAssertClosed();
     }
 
+    @Test
     public void testWriteNoSync() throws Exception {
         assertOpen();
         client.write("meow".getBytes(StandardCharsets.UTF_8));
@@ -92,6 +112,7 @@ public class FileBridgeTest extends AndroidTestCase {
         assertContents("meow".getBytes(StandardCharsets.UTF_8));
     }
 
+    @Test
     public void testWriteSync() throws Exception {
         assertOpen();
         client.write("cake".getBytes(StandardCharsets.UTF_8));
@@ -100,6 +121,7 @@ public class FileBridgeTest extends AndroidTestCase {
         assertContents("cake".getBytes(StandardCharsets.UTF_8));
     }
 
+    @Test
     public void testWriteSyncWrite() throws Exception {
         assertOpen();
         client.write("meow".getBytes(StandardCharsets.UTF_8));
@@ -109,6 +131,7 @@ public class FileBridgeTest extends AndroidTestCase {
         assertContents("meowcake".getBytes(StandardCharsets.UTF_8));
     }
 
+    @Test
     public void testEmptyWrite() throws Exception {
         assertOpen();
         client.write(new byte[0]);
@@ -116,6 +139,7 @@ public class FileBridgeTest extends AndroidTestCase {
         assertContents(new byte[0]);
     }
 
+    @Test
     public void testWriteAfterClose() throws Exception {
         assertOpen();
         client.write("meow".getBytes(StandardCharsets.UTF_8));
@@ -128,6 +152,7 @@ public class FileBridgeTest extends AndroidTestCase {
         assertContents("meow".getBytes(StandardCharsets.UTF_8));
     }
 
+    @Test
     public void testRandomWrite() throws Exception {
         final Random r = new Random();
         final ByteArrayOutputStream result = new ByteArrayOutputStream();
@@ -144,6 +169,7 @@ public class FileBridgeTest extends AndroidTestCase {
         assertContents(result.toByteArray());
     }
 
+    @Test
     public void testGiantWrite() throws Exception {
         final byte[] test = new byte[263401];
         new Random().nextBytes(test);

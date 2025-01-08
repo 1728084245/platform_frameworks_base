@@ -16,22 +16,23 @@
 
 package android.widget.espresso;
 
-import static android.support.test.espresso.action.ViewActions.actionWithAssertions;
+import static androidx.test.espresso.action.ViewActions.actionWithAssertions;
 
 import android.graphics.Rect;
-import android.support.test.espresso.PerformException;
-import android.support.test.espresso.ViewAction;
-import android.support.test.espresso.action.CoordinatesProvider;
-import android.support.test.espresso.action.GeneralLocation;
-import android.support.test.espresso.action.Press;
-import android.support.test.espresso.action.Tap;
-import android.support.test.espresso.util.HumanReadables;
 import android.text.Layout;
 import android.view.MotionEvent;
 import android.view.View;
 import android.widget.Editor;
 import android.widget.Editor.HandleView;
 import android.widget.TextView;
+
+import androidx.test.espresso.PerformException;
+import androidx.test.espresso.ViewAction;
+import androidx.test.espresso.action.CoordinatesProvider;
+import androidx.test.espresso.action.GeneralLocation;
+import androidx.test.espresso.action.Press;
+import androidx.test.espresso.action.Tap;
+import androidx.test.espresso.util.HumanReadables;
 
 /**
  * A collection of actions on a {@link android.widget.TextView}.
@@ -198,6 +199,86 @@ public final class TextViewActions {
     }
 
     /**
+     * Returns an action that long presses then drags on handle from the current position to
+     * endIndex on the TextView.<br>
+     * <br>
+     * View constraints:
+     * <ul>
+     * <li>must be a TextView's drag-handle displayed on screen
+     * <ul>
+     *
+     * @param textView TextView the handle is on
+     * @param handleType Type of the handle
+     * @param endIndex The index of the TextView's text to end the drag at
+     */
+    public static ViewAction longPressAndDragHandle(TextView textView, Handle handleType,
+            int endIndex) {
+        return actionWithAssertions(
+                new DragAction(
+                        DragAction.Drag.LONG_PRESS,
+                        new CurrentHandleCoordinates(textView),
+                        new HandleCoordinates(textView, handleType, endIndex, true),
+                        Press.FINGER,
+                        Editor.HandleView.class));
+    }
+
+    /**
+     * Returns an action that long presses on the current handle.<br>
+     * <br>
+     * View constraints:
+     * <ul>
+     * <li>must be a TextView's drag-handle displayed on screen
+     * <ul>
+     *
+     * @param textView TextView the handle is on
+     */
+    public static ViewAction longPressHandle(TextView textView) {
+        return actionWithAssertions(
+                new ViewClickAction(Tap.LONG, new CurrentHandleCoordinates(textView),
+                        Press.FINGER));
+    }
+
+    /**
+     * Returns an action that double tap then drags on handle from the current position to
+     * endIndex on the TextView.<br>
+     * <br>
+     * View constraints:
+     * <ul>
+     * <li>must be a TextView's drag-handle displayed on screen
+     * <ul>
+     *
+     * @param textView TextView the handle is on
+     * @param handleType Type of the handle
+     * @param endIndex The index of the TextView's text to end the drag at
+     */
+    public static ViewAction doubleTapAndDragHandle(TextView textView, Handle handleType,
+            int endIndex) {
+        return actionWithAssertions(
+                new DragAction(
+                        DragAction.Drag.DOUBLE_TAP,
+                        new CurrentHandleCoordinates(textView),
+                        new HandleCoordinates(textView, handleType, endIndex, true),
+                        Press.FINGER,
+                        Editor.HandleView.class));
+    }
+
+    /**
+     * Returns an action that double tap on the current handle.<br>
+     * <br>
+     * View constraints:
+     * <ul>
+     * <li>must be a TextView's drag-handle displayed on screen
+     * <ul>
+     *
+     * @param textView TextView the handle is on
+     */
+    public static ViewAction doubleTapHandle(TextView textView) {
+        return actionWithAssertions(
+                new ViewClickAction(Tap.DOUBLE, new CurrentHandleCoordinates(textView),
+                        Press.FINGER));
+    }
+
+    /**
      * Returns an action that double taps then drags on text from startIndex to endIndex on the
      * TextView.<br>
      * <br>
@@ -354,6 +435,27 @@ public final class TextViewActions {
                         new HandleCoordinates(textView, handleType, endIndex, primary),
                         Press.FINGER,
                         Editor.HandleView.class));
+    }
+
+    /**
+     * Returns an action that drags on text from startIndex to endIndex on the TextView.<br>
+     * <br>
+     * View constraints:
+     * <ul>
+     * <li>must be a TextView displayed on screen
+     * <ul>
+     *
+     * @param startIndex The index of the TextView's text to start a drag from
+     * @param endIndex The index of the TextView's text to end the drag at
+     */
+    public static ViewAction dragOnText(int startIndex, int endIndex) {
+        return actionWithAssertions(
+                new DragAction(
+                        DragAction.Drag.TAP,
+                        new TextCoordinates(startIndex),
+                        new TextCoordinates(endIndex),
+                        Press.FINGER,
+                        TextView.class));
     }
 
     /**

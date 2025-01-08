@@ -17,20 +17,26 @@
 package android.telephony.ims;
 
 import android.annotation.IntDef;
+import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
-
+import java.util.HashMap;
+import java.util.Map;
 /**
- * This class enables an application to get details on why a method call failed.
- *
- * @hide
+ * Provides details on why an IMS call failed. Applications can use the methods in this class to
+ * get local or network fault behind an IMS services failure. For example, if the code is
+ * CODE_CALL_BARRED, then the call was blocked by network call barring configuration and it is not
+ * the device's bug and the user can retry the call when network lift the barring.
+ * Typical use case includes call backs when IMS call state changed with this class as a param
+ * containing details on why IMS call changed state/failed.
  */
-@SystemApi
 public final class ImsReasonInfo implements Parcelable {
 
     /**
@@ -454,7 +460,7 @@ public final class ImsReasonInfo implements Parcelable {
      */
     public static final int CODE_LOW_BATTERY = 505;
     /**
-     * Device declined a call due to a blacklisted caller ID.
+     * Device declined a call due to a denylisted caller ID.
      */
     public static final int CODE_BLACKLISTED_CALL_ID = 506;
     // IMS -> Telephony
@@ -871,6 +877,31 @@ public final class ImsReasonInfo implements Parcelable {
      */
     public static final int CODE_REJECT_ONGOING_CS_CALL = 1621;
 
+    /**
+     * An attempt was made to place an emergency call over WFC when emergency services is not
+     * currently available in the current location.
+     * @hide
+     */
+    public static final int CODE_EMERGENCY_CALL_OVER_WFC_NOT_AVAILABLE = 1622;
+
+    /**
+     * Indicates that WiFi calling service is not available in the current location.
+     * @hide
+     */
+    public static final int CODE_WFC_SERVICE_NOT_AVAILABLE_IN_THIS_LOCATION = 1623;
+
+    /**
+     * Call failed because of network congestion, resource is not available,
+     * or no circuit or channel available, etc.
+     */
+    public static final int CODE_NETWORK_CONGESTION = 1624;
+
+    /**
+     * The dialed RTT call should be retried without RTT
+     * @hide
+     */
+    public static final int CODE_RETRY_ON_IMS_WITHOUT_RTT = 3001;
+
     /*
      * OEM specific error codes. To be used by OEMs when they don't want to reveal error code which
      * would be replaced by ERROR_UNSPECIFIED.
@@ -1051,6 +1082,8 @@ public final class ImsReasonInfo implements Parcelable {
             CODE_REJECT_VT_AVPF_NOT_ALLOWED,
             CODE_REJECT_ONGOING_ENCRYPTED_CALL,
             CODE_REJECT_ONGOING_CS_CALL,
+            CODE_NETWORK_CONGESTION,
+            CODE_RETRY_ON_IMS_WITHOUT_RTT,
             CODE_OEM_CAUSE_1,
             CODE_OEM_CAUSE_2,
             CODE_OEM_CAUSE_3,
@@ -1070,12 +1103,205 @@ public final class ImsReasonInfo implements Parcelable {
     @Retention(RetentionPolicy.SOURCE)
     public @interface ImsCode {}
 
+
+    private static final Map<Integer, String>   sImsCodeMap;
+    static {
+        sImsCodeMap = new HashMap<>();
+        sImsCodeMap.put(CODE_UNSPECIFIED, "CODE_UNSPECIFIED");
+        sImsCodeMap.put(CODE_LOCAL_ILLEGAL_ARGUMENT, "CODE_LOCAL_ILLEGAL_ARGUMENT");
+        sImsCodeMap.put(CODE_LOCAL_ILLEGAL_STATE, "CODE_LOCAL_ILLEGAL_STATE");
+        sImsCodeMap.put(CODE_LOCAL_INTERNAL_ERROR, "CODE_LOCAL_INTERNAL_ERROR");
+        sImsCodeMap.put(CODE_LOCAL_IMS_SERVICE_DOWN, "CODE_LOCAL_IMS_SERVICE_DOWN");
+        sImsCodeMap.put(CODE_LOCAL_NO_PENDING_CALL, "CODE_LOCAL_NO_PENDING_CALL");
+        sImsCodeMap.put(CODE_LOCAL_ENDED_BY_CONFERENCE_MERGE,
+                "CODE_LOCAL_ENDED_BY_CONFERENCE_MERGE");
+        sImsCodeMap.put(CODE_LOCAL_POWER_OFF, "CODE_LOCAL_POWER_OFF");
+        sImsCodeMap.put(CODE_LOCAL_LOW_BATTERY, "CODE_LOCAL_LOW_BATTERY");
+        sImsCodeMap.put(CODE_LOCAL_NETWORK_NO_SERVICE, "CODE_LOCAL_NETWORK_NO_SERVICE");
+        sImsCodeMap.put(CODE_LOCAL_NETWORK_NO_LTE_COVERAGE, "CODE_LOCAL_NETWORK_NO_LTE_COVERAGE");
+        sImsCodeMap.put(CODE_LOCAL_NETWORK_ROAMING, "CODE_LOCAL_NETWORK_ROAMING");
+        sImsCodeMap.put(CODE_LOCAL_NETWORK_IP_CHANGED, "CODE_LOCAL_NETWORK_IP_CHANGED");
+        sImsCodeMap.put(CODE_LOCAL_SERVICE_UNAVAILABLE, "CODE_LOCAL_SERVICE_UNAVAILABLE");
+        sImsCodeMap.put(CODE_LOCAL_NOT_REGISTERED, "CODE_LOCAL_NOT_REGISTERED");
+        sImsCodeMap.put(CODE_LOCAL_CALL_EXCEEDED, "CODE_LOCAL_CALL_EXCEEDED");
+        sImsCodeMap.put(CODE_LOCAL_CALL_BUSY, "CODE_LOCAL_CALL_BUSY");
+        sImsCodeMap.put(CODE_LOCAL_CALL_DECLINE, "CODE_LOCAL_CALL_DECLINE");
+        sImsCodeMap.put(CODE_LOCAL_CALL_VCC_ON_PROGRESSING, "CODE_LOCAL_CALL_VCC_ON_PROGRESSING");
+        sImsCodeMap.put(CODE_LOCAL_CALL_RESOURCE_RESERVATION_FAILED,
+                "CODE_LOCAL_CALL_RESOURCE_RESERVATION_FAILED");
+        sImsCodeMap.put(CODE_LOCAL_CALL_CS_RETRY_REQUIRED, "CODE_LOCAL_CALL_CS_RETRY_REQUIRED");
+        sImsCodeMap.put(CODE_LOCAL_CALL_VOLTE_RETRY_REQUIRED,
+                "CODE_LOCAL_CALL_VOLTE_RETRY_REQUIRED");
+        sImsCodeMap.put(CODE_LOCAL_CALL_TERMINATED, "CODE_LOCAL_CALL_TERMINATED");
+        sImsCodeMap.put(CODE_LOCAL_HO_NOT_FEASIBLE, "CODE_LOCAL_HO_NOT_FEASIBLE");
+        sImsCodeMap.put(CODE_TIMEOUT_1XX_WAITING, "CODE_TIMEOUT_1XX_WAITING");
+        sImsCodeMap.put(CODE_TIMEOUT_NO_ANSWER, "CODE_TIMEOUT_NO_ANSWER");
+        sImsCodeMap.put(CODE_TIMEOUT_NO_ANSWER_CALL_UPDATE, "CODE_TIMEOUT_NO_ANSWER_CALL_UPDATE");
+        sImsCodeMap.put(CODE_CALL_BARRED, "CODE_CALL_BARRED");
+        sImsCodeMap.put(CODE_FDN_BLOCKED, "CODE_FDN_BLOCKED");
+        sImsCodeMap.put(CODE_IMEI_NOT_ACCEPTED, "CODE_IMEI_NOT_ACCEPTED");
+        sImsCodeMap.put(CODE_DIAL_MODIFIED_TO_USSD, "CODE_DIAL_MODIFIED_TO_USSD");
+        sImsCodeMap.put(CODE_DIAL_MODIFIED_TO_SS, "CODE_DIAL_MODIFIED_TO_SS");
+        sImsCodeMap.put(CODE_DIAL_MODIFIED_TO_DIAL, "CODE_DIAL_MODIFIED_TO_DIAL");
+        sImsCodeMap.put(CODE_DIAL_MODIFIED_TO_DIAL_VIDEO, "CODE_DIAL_MODIFIED_TO_DIAL_VIDEO");
+        sImsCodeMap.put(CODE_DIAL_VIDEO_MODIFIED_TO_DIAL, "CODE_DIAL_VIDEO_MODIFIED_TO_DIAL");
+        sImsCodeMap.put(CODE_DIAL_VIDEO_MODIFIED_TO_DIAL_VIDEO,
+                "CODE_DIAL_VIDEO_MODIFIED_TO_DIAL_VIDEO");
+        sImsCodeMap.put(CODE_DIAL_VIDEO_MODIFIED_TO_SS, "CODE_DIAL_VIDEO_MODIFIED_TO_SS");
+        sImsCodeMap.put(CODE_DIAL_VIDEO_MODIFIED_TO_USSD, "CODE_DIAL_VIDEO_MODIFIED_TO_USSD");
+        sImsCodeMap.put(CODE_SIP_REDIRECTED, "CODE_SIP_REDIRECTED");
+        sImsCodeMap.put(CODE_SIP_BAD_REQUEST, "CODE_SIP_BAD_REQUEST");
+        sImsCodeMap.put(CODE_SIP_FORBIDDEN, "CODE_SIP_FORBIDDEN");
+        sImsCodeMap.put(CODE_SIP_NOT_FOUND, "CODE_SIP_NOT_FOUND");
+        sImsCodeMap.put(CODE_SIP_NOT_SUPPORTED, "CODE_SIP_NOT_SUPPORTED");
+        sImsCodeMap.put(CODE_SIP_REQUEST_TIMEOUT, "CODE_SIP_REQUEST_TIMEOUT");
+        sImsCodeMap.put(CODE_SIP_TEMPRARILY_UNAVAILABLE, "CODE_SIP_TEMPRARILY_UNAVAILABLE");
+        sImsCodeMap.put(CODE_SIP_BAD_ADDRESS, "CODE_SIP_BAD_ADDRESS");
+        sImsCodeMap.put(CODE_SIP_BUSY, "CODE_SIP_BUSY");
+        sImsCodeMap.put(CODE_SIP_REQUEST_CANCELLED, "CODE_SIP_REQUEST_CANCELLED");
+        sImsCodeMap.put(CODE_SIP_NOT_ACCEPTABLE, "CODE_SIP_NOT_ACCEPTABLE");
+        sImsCodeMap.put(CODE_SIP_NOT_REACHABLE, "CODE_SIP_NOT_REACHABLE");
+        sImsCodeMap.put(CODE_SIP_CLIENT_ERROR, "CODE_SIP_CLIENT_ERROR");
+        sImsCodeMap.put(CODE_SIP_TRANSACTION_DOES_NOT_EXIST, "CODE_SIP_TRANSACTION_DOES_NOT_EXIST");
+        sImsCodeMap.put(CODE_SIP_SERVER_INTERNAL_ERROR, "CODE_SIP_SERVER_INTERNAL_ERROR");
+        sImsCodeMap.put(CODE_SIP_SERVICE_UNAVAILABLE, "CODE_SIP_SERVICE_UNAVAILABLE");
+        sImsCodeMap.put(CODE_SIP_SERVER_TIMEOUT, "CODE_SIP_SERVER_TIMEOUT");
+        sImsCodeMap.put(CODE_SIP_SERVER_ERROR, "CODE_SIP_SERVER_ERROR");
+        sImsCodeMap.put(CODE_SIP_USER_REJECTED, "CODE_SIP_USER_REJECTED");
+        sImsCodeMap.put(CODE_SIP_GLOBAL_ERROR, "CODE_SIP_GLOBAL_ERROR");
+        sImsCodeMap.put(CODE_EMERGENCY_TEMP_FAILURE, "CODE_EMERGENCY_TEMP_FAILURE");
+        sImsCodeMap.put(CODE_EMERGENCY_PERM_FAILURE, "CODE_EMERGENCY_PERM_FAILURE");
+        sImsCodeMap.put(CODE_SIP_USER_MARKED_UNWANTED, "CODE_SIP_USER_MARKED_UNWANTED");
+        sImsCodeMap.put(CODE_SIP_METHOD_NOT_ALLOWED, "CODE_SIP_METHOD_NOT_ALLOWED");
+        sImsCodeMap.put(CODE_SIP_PROXY_AUTHENTICATION_REQUIRED,
+                "CODE_SIP_PROXY_AUTHENTICATION_REQUIRED");
+        sImsCodeMap.put(CODE_SIP_REQUEST_ENTITY_TOO_LARGE, "CODE_SIP_REQUEST_ENTITY_TOO_LARGE");
+        sImsCodeMap.put(CODE_SIP_REQUEST_URI_TOO_LARGE, "CODE_SIP_REQUEST_URI_TOO_LARGE");
+        sImsCodeMap.put(CODE_SIP_EXTENSION_REQUIRED, "CODE_SIP_EXTENSION_REQUIRED");
+        sImsCodeMap.put(CODE_SIP_INTERVAL_TOO_BRIEF, "CODE_SIP_INTERVAL_TOO_BRIEF");
+        sImsCodeMap.put(CODE_SIP_CALL_OR_TRANS_DOES_NOT_EXIST,
+                "CODE_SIP_CALL_OR_TRANS_DOES_NOT_EXIST");
+        sImsCodeMap.put(CODE_SIP_LOOP_DETECTED, "CODE_SIP_LOOP_DETECTED");
+        sImsCodeMap.put(CODE_SIP_TOO_MANY_HOPS, "CODE_SIP_TOO_MANY_HOPS");
+        sImsCodeMap.put(CODE_SIP_AMBIGUOUS, "CODE_SIP_AMBIGUOUS");
+        sImsCodeMap.put(CODE_SIP_REQUEST_PENDING, "CODE_SIP_REQUEST_PENDING");
+        sImsCodeMap.put(CODE_SIP_UNDECIPHERABLE, "CODE_SIP_UNDECIPHERABLE");
+        sImsCodeMap.put(CODE_MEDIA_INIT_FAILED, "CODE_MEDIA_INIT_FAILED");
+        sImsCodeMap.put(CODE_MEDIA_NO_DATA, "CODE_MEDIA_NO_DATA");
+        sImsCodeMap.put(CODE_MEDIA_NOT_ACCEPTABLE, "CODE_MEDIA_NOT_ACCEPTABLE");
+        sImsCodeMap.put(CODE_MEDIA_UNSPECIFIED, "CODE_MEDIA_UNSPECIFIED");
+        sImsCodeMap.put(CODE_USER_TERMINATED, "CODE_USER_TERMINATED");
+        sImsCodeMap.put(CODE_USER_NOANSWER, "CODE_USER_NOANSWER");
+        sImsCodeMap.put(CODE_USER_IGNORE, "CODE_USER_IGNORE");
+        sImsCodeMap.put(CODE_USER_DECLINE, "CODE_USER_DECLINE");
+        sImsCodeMap.put(CODE_LOW_BATTERY, "CODE_LOW_BATTERY");
+        sImsCodeMap.put(CODE_BLACKLISTED_CALL_ID, "CODE_BLACKLISTED_CALL_ID");
+        sImsCodeMap.put(CODE_USER_TERMINATED_BY_REMOTE, "CODE_USER_TERMINATED_BY_REMOTE");
+        sImsCodeMap.put(CODE_USER_REJECTED_SESSION_MODIFICATION,
+                "CODE_USER_REJECTED_SESSION_MODIFICATION");
+        sImsCodeMap.put(CODE_USER_CANCELLED_SESSION_MODIFICATION,
+                "CODE_USER_CANCELLED_SESSION_MODIFICATION");
+        sImsCodeMap.put(CODE_SESSION_MODIFICATION_FAILED, "CODE_SESSION_MODIFICATION_FAILED");
+        sImsCodeMap.put(CODE_UT_NOT_SUPPORTED, "CODE_UT_NOT_SUPPORTED");
+        sImsCodeMap.put(CODE_UT_SERVICE_UNAVAILABLE, "CODE_UT_SERVICE_UNAVAILABLE");
+        sImsCodeMap.put(CODE_UT_OPERATION_NOT_ALLOWED, "CODE_UT_OPERATION_NOT_ALLOWED");
+        sImsCodeMap.put(CODE_UT_NETWORK_ERROR, "CODE_UT_NETWORK_ERROR");
+        sImsCodeMap.put(CODE_UT_CB_PASSWORD_MISMATCH, "CODE_UT_CB_PASSWORD_MISMATCH");
+        sImsCodeMap.put(CODE_UT_SS_MODIFIED_TO_DIAL, "CODE_UT_SS_MODIFIED_TO_DIAL");
+        sImsCodeMap.put(CODE_UT_SS_MODIFIED_TO_USSD, "CODE_UT_SS_MODIFIED_TO_USSD");
+        sImsCodeMap.put(CODE_UT_SS_MODIFIED_TO_SS, "CODE_UT_SS_MODIFIED_TO_SS");
+        sImsCodeMap.put(CODE_UT_SS_MODIFIED_TO_DIAL_VIDEO, "CODE_UT_SS_MODIFIED_TO_DIAL_VIDEO");
+        sImsCodeMap.put(CODE_ECBM_NOT_SUPPORTED, "CODE_ECBM_NOT_SUPPORTED");
+        sImsCodeMap.put(CODE_MULTIENDPOINT_NOT_SUPPORTED, "CODE_MULTIENDPOINT_NOT_SUPPORTED");
+        sImsCodeMap.put(CODE_REGISTRATION_ERROR, "CODE_REGISTRATION_ERROR");
+        sImsCodeMap.put(CODE_ANSWERED_ELSEWHERE, "CODE_ANSWERED_ELSEWHERE");
+        sImsCodeMap.put(CODE_CALL_PULL_OUT_OF_SYNC, "CODE_CALL_PULL_OUT_OF_SYNC");
+        sImsCodeMap.put(CODE_CALL_END_CAUSE_CALL_PULL, "CODE_CALL_END_CAUSE_CALL_PULL");
+        sImsCodeMap.put(CODE_CALL_DROP_IWLAN_TO_LTE_UNAVAILABLE,
+                "CODE_CALL_DROP_IWLAN_TO_LTE_UNAVAILABLE");
+        sImsCodeMap.put(CODE_REJECTED_ELSEWHERE, "CODE_REJECTED_ELSEWHERE");
+        sImsCodeMap.put(CODE_SUPP_SVC_FAILED, "CODE_SUPP_SVC_FAILED");
+        sImsCodeMap.put(CODE_SUPP_SVC_CANCELLED, "CODE_SUPP_SVC_CANCELLED");
+        sImsCodeMap.put(CODE_SUPP_SVC_REINVITE_COLLISION, "CODE_SUPP_SVC_REINVITE_COLLISION");
+        sImsCodeMap.put(CODE_IWLAN_DPD_FAILURE, "CODE_IWLAN_DPD_FAILURE");
+        sImsCodeMap.put(CODE_EPDG_TUNNEL_ESTABLISH_FAILURE, "CODE_EPDG_TUNNEL_ESTABLISH_FAILURE");
+        sImsCodeMap.put(CODE_EPDG_TUNNEL_REKEY_FAILURE, "CODE_EPDG_TUNNEL_REKEY_FAILURE");
+        sImsCodeMap.put(CODE_EPDG_TUNNEL_LOST_CONNECTION, "CODE_EPDG_TUNNEL_LOST_CONNECTION");
+        sImsCodeMap.put(CODE_MAXIMUM_NUMBER_OF_CALLS_REACHED,
+                "CODE_MAXIMUM_NUMBER_OF_CALLS_REACHED");
+        sImsCodeMap.put(CODE_REMOTE_CALL_DECLINE, "CODE_REMOTE_CALL_DECLINE");
+        sImsCodeMap.put(CODE_DATA_LIMIT_REACHED, "CODE_DATA_LIMIT_REACHED");
+        sImsCodeMap.put(CODE_DATA_DISABLED, "CODE_DATA_DISABLED");
+        sImsCodeMap.put(CODE_WIFI_LOST, "CODE_WIFI_LOST");
+        sImsCodeMap.put(CODE_IKEV2_AUTH_FAILURE, "CODE_IKEV2_AUTH_FAILURE");
+        sImsCodeMap.put(CODE_RADIO_OFF, "CODE_RADIO_OFF");
+        sImsCodeMap.put(CODE_NO_VALID_SIM, "CODE_NO_VALID_SIM");
+        sImsCodeMap.put(CODE_RADIO_INTERNAL_ERROR, "CODE_RADIO_INTERNAL_ERROR");
+        sImsCodeMap.put(CODE_NETWORK_RESP_TIMEOUT, "CODE_NETWORK_RESP_TIMEOUT");
+        sImsCodeMap.put(CODE_NETWORK_REJECT, "CODE_NETWORK_REJECT");
+        sImsCodeMap.put(CODE_RADIO_ACCESS_FAILURE, "CODE_RADIO_ACCESS_FAILURE");
+        sImsCodeMap.put(CODE_RADIO_LINK_FAILURE, "CODE_RADIO_LINK_FAILURE");
+        sImsCodeMap.put(CODE_RADIO_LINK_LOST, "CODE_RADIO_LINK_LOST");
+        sImsCodeMap.put(CODE_RADIO_UPLINK_FAILURE, "CODE_RADIO_UPLINK_FAILURE");
+        sImsCodeMap.put(CODE_RADIO_SETUP_FAILURE, "CODE_RADIO_SETUP_FAILURE");
+        sImsCodeMap.put(CODE_RADIO_RELEASE_NORMAL, "CODE_RADIO_RELEASE_NORMAL");
+        sImsCodeMap.put(CODE_RADIO_RELEASE_ABNORMAL, "CODE_RADIO_RELEASE_ABNORMAL");
+        sImsCodeMap.put(CODE_ACCESS_CLASS_BLOCKED, "CODE_ACCESS_CLASS_BLOCKED");
+        sImsCodeMap.put(CODE_NETWORK_DETACH, "CODE_NETWORK_DETACH");
+        sImsCodeMap.put(CODE_SIP_ALTERNATE_EMERGENCY_CALL, "CODE_SIP_ALTERNATE_EMERGENCY_CALL");
+        sImsCodeMap.put(CODE_UNOBTAINABLE_NUMBER, "CODE_UNOBTAINABLE_NUMBER");
+        sImsCodeMap.put(CODE_NO_CSFB_IN_CS_ROAM, "CODE_NO_CSFB_IN_CS_ROAM");
+        sImsCodeMap.put(CODE_REJECT_UNKNOWN, "CODE_REJECT_UNKNOWN");
+        sImsCodeMap.put(CODE_REJECT_ONGOING_CALL_WAITING_DISABLED,
+                "CODE_REJECT_ONGOING_CALL_WAITING_DISABLED");
+        sImsCodeMap.put(CODE_REJECT_CALL_ON_OTHER_SUB, "CODE_REJECT_CALL_ON_OTHER_SUB");
+        sImsCodeMap.put(CODE_REJECT_1X_COLLISION, "CODE_REJECT_1X_COLLISION");
+        sImsCodeMap.put(CODE_REJECT_SERVICE_NOT_REGISTERED, "CODE_REJECT_SERVICE_NOT_REGISTERED");
+        sImsCodeMap.put(CODE_REJECT_CALL_TYPE_NOT_ALLOWED, "CODE_REJECT_CALL_TYPE_NOT_ALLOWED");
+        sImsCodeMap.put(CODE_REJECT_ONGOING_E911_CALL, "CODE_REJECT_ONGOING_E911_CALL");
+        sImsCodeMap.put(CODE_REJECT_ONGOING_CALL_SETUP, "CODE_REJECT_ONGOING_CALL_SETUP");
+        sImsCodeMap.put(CODE_REJECT_MAX_CALL_LIMIT_REACHED, "CODE_REJECT_MAX_CALL_LIMIT_REACHED");
+        sImsCodeMap.put(CODE_REJECT_UNSUPPORTED_SIP_HEADERS, "CODE_REJECT_UNSUPPORTED_SIP_HEADERS");
+        sImsCodeMap.put(CODE_REJECT_UNSUPPORTED_SDP_HEADERS, "CODE_REJECT_UNSUPPORTED_SDP_HEADERS");
+        sImsCodeMap.put(CODE_REJECT_ONGOING_CALL_TRANSFER, "CODE_REJECT_ONGOING_CALL_TRANSFER");
+        sImsCodeMap.put(CODE_REJECT_INTERNAL_ERROR, "CODE_REJECT_INTERNAL_ERROR");
+        sImsCodeMap.put(CODE_REJECT_QOS_FAILURE, "CODE_REJECT_QOS_FAILURE");
+        sImsCodeMap.put(CODE_REJECT_ONGOING_HANDOVER, "CODE_REJECT_ONGOING_HANDOVER");
+        sImsCodeMap.put(CODE_REJECT_VT_TTY_NOT_ALLOWED, "CODE_REJECT_VT_TTY_NOT_ALLOWED");
+        sImsCodeMap.put(CODE_REJECT_ONGOING_CALL_UPGRADE, "CODE_REJECT_ONGOING_CALL_UPGRADE");
+        sImsCodeMap.put(CODE_REJECT_CONFERENCE_TTY_NOT_ALLOWED,
+                "CODE_REJECT_CONFERENCE_TTY_NOT_ALLOWED");
+        sImsCodeMap.put(CODE_REJECT_ONGOING_CONFERENCE_CALL, "CODE_REJECT_ONGOING_CONFERENCE_CALL");
+        sImsCodeMap.put(CODE_REJECT_VT_AVPF_NOT_ALLOWED, "CODE_REJECT_VT_AVPF_NOT_ALLOWED");
+        sImsCodeMap.put(CODE_REJECT_ONGOING_ENCRYPTED_CALL, "CODE_REJECT_ONGOING_ENCRYPTED_CALL");
+        sImsCodeMap.put(CODE_REJECT_ONGOING_CS_CALL, "CODE_REJECT_ONGOING_CS_CALL");
+        sImsCodeMap.put(CODE_NETWORK_CONGESTION, "CODE_NETWORK_CONGESTION");
+        sImsCodeMap.put(CODE_RETRY_ON_IMS_WITHOUT_RTT, "CODE_RETRY_ON_IMS_WITHOUT_RTT");
+        sImsCodeMap.put(CODE_OEM_CAUSE_1, "CODE_OEM_CAUSE_1");
+        sImsCodeMap.put(CODE_OEM_CAUSE_2, "CODE_OEM_CAUSE_2");
+        sImsCodeMap.put(CODE_OEM_CAUSE_3, "CODE_OEM_CAUSE_3");
+        sImsCodeMap.put(CODE_OEM_CAUSE_4, "CODE_OEM_CAUSE_4");
+        sImsCodeMap.put(CODE_OEM_CAUSE_5, "CODE_OEM_CAUSE_5");
+        sImsCodeMap.put(CODE_OEM_CAUSE_6, "CODE_OEM_CAUSE_6");
+        sImsCodeMap.put(CODE_OEM_CAUSE_7, "CODE_OEM_CAUSE_7");
+        sImsCodeMap.put(CODE_OEM_CAUSE_8, "CODE_OEM_CAUSE_8");
+        sImsCodeMap.put(CODE_OEM_CAUSE_9, "CODE_OEM_CAUSE_9");
+        sImsCodeMap.put(CODE_OEM_CAUSE_10, "CODE_OEM_CAUSE_10");
+        sImsCodeMap.put(CODE_OEM_CAUSE_11, "CODE_OEM_CAUSE_11");
+        sImsCodeMap.put(CODE_OEM_CAUSE_12, "CODE_OEM_CAUSE_12");
+        sImsCodeMap.put(CODE_OEM_CAUSE_13, "CODE_OEM_CAUSE_13");
+        sImsCodeMap.put(CODE_OEM_CAUSE_14, "CODE_OEM_CAUSE_14");
+        sImsCodeMap.put(CODE_OEM_CAUSE_15, "CODE_OEM_CAUSE_15");
+    }
+
     /**
      * Network string error messages.
      * mExtraMessage may have these values.
+     * @hide
      */
-    public static final String EXTRA_MSG_SERVICE_NOT_AUTHORIZED
-            = "Forbidden. Not Authorized for Service";
+    @SystemApi
+    public static final String EXTRA_MSG_SERVICE_NOT_AUTHORIZED =
+            "Forbidden. Not Authorized for Service";
 
 
     /*
@@ -1083,39 +1309,49 @@ public final class ImsReasonInfo implements Parcelable {
      * This value can be referred when the code is CODE_LOCAL_CALL_CS_RETRY_REQUIRED.
      */
     /**
-     * An extra that may be populated when the {@link CODE_LOCAL_CALL_CS_RETRY_REQUIRED} result has
+     * An extra that may be populated when the {@link #CODE_LOCAL_CALL_CS_RETRY_REQUIRED} result has
      * been returned.
      * <p>
      * Try to connect the call using CS
      */
     public static final int EXTRA_CODE_CALL_RETRY_NORMAL = 1;
     /**
-     * An extra that may be populated when the {@link CODE_LOCAL_CALL_CS_RETRY_REQUIRED} result has
+     * An extra that may be populated when the {@link #CODE_LOCAL_CALL_CS_RETRY_REQUIRED} result has
      * been returned.
      * <p>
      * Try to connect the call using CS and do not notify the user.
      */
     public static final int EXTRA_CODE_CALL_RETRY_SILENT_REDIAL = 2;
     /**
-     * An extra that may be populated when the {@link CODE_LOCAL_CALL_CS_RETRY_REQUIRED} result has
+     * An extra that may be populated when the {@link #CODE_LOCAL_CALL_CS_RETRY_REQUIRED} result has
      * been returned.
      * <p>
      * Try to connect the call using CS by using the settings.
      */
     public static final int EXTRA_CODE_CALL_RETRY_BY_SETTINGS = 3;
 
+    /**
+     * An extra that may be populated when the {@link #CODE_LOCAL_CALL_CS_RETRY_REQUIRED} result has
+     * been returned.
+     * <p>
+     * Try to connect the call using CS as emergency
+     */
+    public static final int EXTRA_CODE_CALL_RETRY_EMERGENCY = 4;
 
     // For main reason code
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.Q, publicAlternatives = "{@code "
+            + "#getCode()}")
     public int mCode;
     // For the extra code value; it depends on the code value.
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.Q, publicAlternatives = "{@code "
+            + "#getExtraCode()}")
     public int mExtraCode;
     // For the additional message of the reason info.
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.Q, publicAlternatives = "{@code "
+            + "#getExtraMessage()}")
     public String mExtraMessage;
 
     /** @hide */
@@ -1132,14 +1368,14 @@ public final class ImsReasonInfo implements Parcelable {
     }
 
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public ImsReasonInfo(int code, int extraCode) {
         mCode = code;
         mExtraCode = extraCode;
         mExtraMessage = null;
     }
 
-    public ImsReasonInfo(int code, int extraCode, String extraMessage) {
+    public ImsReasonInfo(@ImsCode int code, int extraCode, @Nullable String extraMessage) {
         mCode = code;
         mExtraCode = extraCode;
         mExtraMessage = extraMessage;
@@ -1163,15 +1399,19 @@ public final class ImsReasonInfo implements Parcelable {
      * @return an optional OEM specified string that provides extra information about the operation
      * result.
      */
-    public String getExtraMessage() {
+    public @Nullable String getExtraMessage() {
         return mExtraMessage;
     }
 
     /**
      * @return the string format of {@link ImsReasonInfo}
      */
+    @NonNull
+    @Override
     public String toString() {
-        return "ImsReasonInfo :: {" + mCode + ", " + mExtraCode + ", " + mExtraMessage + "}";
+        String imsCode = (sImsCodeMap.containsKey(mCode)) ? sImsCodeMap.get(mCode) : "UNKNOWN_CODE";
+        return "ImsReasonInfo :: {" + mCode + " : " + imsCode + ", "
+                + mExtraCode + ", " + mExtraMessage + "}";
     }
 
     @Override
@@ -1180,13 +1420,13 @@ public final class ImsReasonInfo implements Parcelable {
     }
 
     @Override
-    public void writeToParcel(Parcel out, int flags) {
+    public void writeToParcel(@NonNull Parcel out, int flags) {
         out.writeInt(mCode);
         out.writeInt(mExtraCode);
         out.writeString(mExtraMessage);
     }
 
-    public static final Creator<ImsReasonInfo> CREATOR = new Creator<ImsReasonInfo>() {
+    public static final @NonNull Creator<ImsReasonInfo> CREATOR = new Creator<ImsReasonInfo>() {
         @Override
         public ImsReasonInfo createFromParcel(Parcel in) {
             return new ImsReasonInfo(in);

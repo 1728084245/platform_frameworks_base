@@ -19,6 +19,8 @@ package com.android.internal.telecom;
 import android.app.PendingIntent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.ResultReceiver;
+import android.telecom.CallEndpoint;
 import android.telecom.ConnectionRequest;
 import android.telecom.DisconnectCause;
 import android.telecom.Logging.Session;
@@ -42,6 +44,12 @@ oneway interface IConnectionServiceAdapter {
             String callId,
             in ConnectionRequest request,
             in ParcelableConnection connection,
+            in Session.Info sessionInfo);
+
+    void handleCreateConferenceComplete(
+            String callId,
+            in ConnectionRequest request,
+            in ParcelableConference connection,
             in Session.Info sessionInfo);
 
     void setActive(String callId, in Session.Info sessionInfo);
@@ -78,7 +86,8 @@ oneway interface IConnectionServiceAdapter {
 
     void onPostDialChar(String callId, char nextChar, in Session.Info sessionInfo);
 
-    void queryRemoteConnectionServices(RemoteServiceCallback callback, in Session.Info sessionInfo);
+    void queryRemoteConnectionServices(RemoteServiceCallback callback, String callingPackage,
+    in Session.Info sessionInfo);
 
     void setVideoProvider(String callId, IVideoProvider videoProvider, in Session.Info sessionInfo);
 
@@ -106,6 +115,9 @@ oneway interface IConnectionServiceAdapter {
     void setAudioRoute(String callId, int audioRoute, String bluetoothAddress,
             in Session.Info sessionInfo);
 
+    void requestCallEndpointChange(String callId, in CallEndpoint endpoint,
+            in ResultReceiver callback, in Session.Info sessionInfo);
+
     void onConnectionEvent(String callId, String event, in Bundle extras,
     in Session.Info sessionInfo);
 
@@ -125,4 +137,9 @@ oneway interface IConnectionServiceAdapter {
     void resetConnectionTime(String callIdi, in Session.Info sessionInfo);
 
     void setConferenceState(String callId, boolean isConference, in Session.Info sessionInfo);
+
+    void setCallDirection(String callId, int direction, in Session.Info sessionInfo);
+
+    void queryLocation(String callId, long timeoutMillis, String provider,
+            in ResultReceiver callback, in Session.Info sessionInfo);
 }

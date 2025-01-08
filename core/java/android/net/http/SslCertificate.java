@@ -17,7 +17,7 @@
 package android.net.http;
 
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.os.Bundle;
 import android.text.format.DateFormat;
@@ -26,7 +26,7 @@ import android.view.View;
 import android.widget.TextView;
 
 import com.android.internal.util.HexDump;
-import com.android.org.bouncycastle.asn1.x509.X509Name;
+import com.android.internal.org.bouncycastle.asn1.x509.X509Name;
 
 import java.io.ByteArrayInputStream;
 import java.math.BigInteger;

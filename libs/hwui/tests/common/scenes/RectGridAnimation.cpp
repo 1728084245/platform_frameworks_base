@@ -16,6 +16,8 @@
 
 #include "TestSceneBase.h"
 
+#include <SkBlendMode.h>
+
 class RectGridAnimation;
 
 static TestScene::Registrar _RectGrid(TestScene::Info{
@@ -29,7 +31,7 @@ public:
     sp<RenderNode> card;
     void createContent(int width, int height, Canvas& canvas) override {
         canvas.drawColor(0xFFFFFFFF, SkBlendMode::kSrcOver);
-        canvas.insertReorderBarrier(true);
+        canvas.enableZ(true);
 
         card = TestUtils::createNode(50, 50, 250, 250, [](RenderProperties& props, Canvas& canvas) {
             canvas.drawColor(0xFFFF00FF, SkBlendMode::kSrcOver);
@@ -37,17 +39,17 @@ public:
             SkRegion region;
             for (int xOffset = 0; xOffset < 200; xOffset += 2) {
                 for (int yOffset = 0; yOffset < 200; yOffset += 2) {
-                    region.op(xOffset, yOffset, xOffset + 1, yOffset + 1, SkRegion::kUnion_Op);
+                    region.op({xOffset, yOffset, xOffset + 1, yOffset + 1}, SkRegion::kUnion_Op);
                 }
             }
 
-            SkPaint paint;
+            Paint paint;
             paint.setColor(0xff00ffff);
             canvas.drawRegion(region, paint);
         });
         canvas.drawRenderNode(card.get());
 
-        canvas.insertReorderBarrier(false);
+        canvas.enableZ(false);
     }
     void doFrame(int frameNr) override {
         int curFrame = frameNr % 150;

@@ -42,6 +42,8 @@ import android.util.Xml;
 
 import com.android.internal.util.FastXmlSerializer;
 import com.android.internal.util.XmlUtils;
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
@@ -84,9 +86,10 @@ public class SystemUpdateManagerService extends ISystemUpdateManager.Stub {
         }
     }
 
+    @android.annotation.EnforcePermission(android.Manifest.permission.RECOVERY)
     @Override
     public void updateSystemUpdateInfo(PersistableBundle infoBundle) {
-        mContext.enforceCallingOrSelfPermission(Manifest.permission.RECOVERY, TAG);
+        updateSystemUpdateInfo_enforcePermission();
 
         int status = infoBundle.getInt(KEY_STATUS, STATUS_UNKNOWN);
         if (status == STATUS_UNKNOWN) {
@@ -130,8 +133,7 @@ public class SystemUpdateManagerService extends ISystemUpdateManager.Stub {
     private Bundle loadSystemUpdateInfoLocked() {
         PersistableBundle loadedBundle = null;
         try (FileInputStream fis = mFile.openRead()) {
-            XmlPullParser parser = Xml.newPullParser();
-            parser.setInput(fis, StandardCharsets.UTF_8.name());
+            TypedXmlPullParser parser = Xml.resolvePullParser(fis);
             loadedBundle = readInfoFileLocked(parser);
         } catch (FileNotFoundException e) {
             Slog.i(TAG, "No existing info file " + mFile.getBaseFile());
@@ -200,7 +202,7 @@ public class SystemUpdateManagerService extends ISystemUpdateManager.Stub {
 
     // Performs I/O work only, without validating the loaded info.
     @Nullable
-    private PersistableBundle readInfoFileLocked(XmlPullParser parser)
+    private PersistableBundle readInfoFileLocked(TypedXmlPullParser parser)
             throws XmlPullParserException, IOException {
         int type;
         while ((type = parser.next()) != END_DOCUMENT) {
@@ -216,8 +218,7 @@ public class SystemUpdateManagerService extends ISystemUpdateManager.Stub {
         try {
             fos = mFile.startWrite();
 
-            XmlSerializer out = new FastXmlSerializer();
-            out.setOutput(fos, StandardCharsets.UTF_8.name());
+            TypedXmlSerializer out = Xml.resolveSerializer(fos);
             out.startDocument(null, true);
 
             out.startTag(null, TAG_INFO);

@@ -17,18 +17,25 @@
 #ifndef ANDROID_GRAPHICS_PAINT_H_
 #define ANDROID_GRAPHICS_PAINT_H_
 
-#include "Typeface.h"
-
-#include <cutils/compiler.h>
-
+#include <SkFont.h>
 #include <SkPaint.h>
+#include <SkSamplingOptions.h>
+#include <cutils/compiler.h>
+#include <minikin/FamilyVariant.h>
+#include <minikin/FontFamily.h>
+#include <minikin/FontFeature.h>
+#include <minikin/Hyphenator.h>
+#include <minikin/Layout.h>
+
 #include <string>
 
-#include <minikin/FontFamily.h>
+#include "Typeface.h"
 
 namespace android {
 
-class ANDROID_API Paint : public SkPaint {
+class BlurDrawLooper;
+
+class Paint : public SkPaint {
 public:
     // Default values for underlined and strikethrough text,
     // as defined by Skia in SkTextFormatParams.h.
@@ -45,13 +52,28 @@ public:
 
     Paint();
     Paint(const Paint& paint);
-    Paint(const SkPaint& paint);  // NOLINT(google-explicit-constructor)
     ~Paint();
 
     Paint& operator=(const Paint& other);
 
     friend bool operator==(const Paint& a, const Paint& b);
     friend bool operator!=(const Paint& a, const Paint& b) { return !(a == b); }
+
+    SkFont& getSkFont() { return mFont; }
+    const SkFont& getSkFont() const { return mFont; }
+
+    BlurDrawLooper* getLooper() const { return mLooper.get(); }
+    void setLooper(sk_sp<BlurDrawLooper> looper);
+
+    // These shadow the methods on SkPaint, but we need to so we can keep related
+    // attributes in-sync.
+
+    void reset();
+    void setAntiAlias(bool);
+
+    bool nothingToDraw() const { return !mLooper && SkPaint::nothingToDraw(); }
+
+    // End method shadowing
 
     void setLetterSpacing(float letterSpacing) { mLetterSpacing = letterSpacing; }
 
@@ -61,11 +83,15 @@ public:
 
     float getWordSpacing() const { return mWordSpacing; }
 
-    void setFontFeatureSettings(const std::string& fontFeatureSettings) {
-        mFontFeatureSettings = fontFeatureSettings;
+    void setFontFeatureSettings(std::string_view fontFeatures) {
+        mFontFeatureSettings = minikin::FontFeature::parse(fontFeatures);
     }
 
-    std::string getFontFeatureSettings() const { return mFontFeatureSettings; }
+    void resetFontFeatures() { mFontFeatureSettings.clear(); }
+
+    const std::vector<minikin::FontFeature>& getFontFeatureSettings() const {
+        return mFontFeatureSettings;
+    }
 
     void setMinikinLocaleListId(uint32_t minikinLocaleListId) {
         mMinikinLocaleListId = minikinLocaleListId;
@@ -73,30 +99,100 @@ public:
 
     uint32_t getMinikinLocaleListId() const { return mMinikinLocaleListId; }
 
-    void setFamilyVariant(minikin::FontFamily::Variant variant) { mFamilyVariant = variant; }
+    void resetFamilyVariant() { mFamilyVariant.reset(); }
+    void setFamilyVariant(minikin::FamilyVariant variant) { mFamilyVariant = variant; }
 
-    minikin::FontFamily::Variant getFamilyVariant() const { return mFamilyVariant; }
+    std::optional<minikin::FamilyVariant> getFamilyVariant() const { return mFamilyVariant; }
 
-    void setHyphenEdit(uint32_t hyphen) { mHyphenEdit = hyphen; }
+    void setStartHyphenEdit(uint32_t startHyphen) {
+        mHyphenEdit = minikin::packHyphenEdit(
+            static_cast<minikin::StartHyphenEdit>(startHyphen),
+            minikin::endHyphenEdit(mHyphenEdit));
+    }
 
-    uint32_t getHyphenEdit() const { return mHyphenEdit; }
+    void setEndHyphenEdit(uint32_t endHyphen) {
+        mHyphenEdit = minikin::packHyphenEdit(
+            minikin::startHyphenEdit(mHyphenEdit),
+            static_cast<minikin::EndHyphenEdit>(endHyphen));
+    }
+
+    minikin::StartHyphenEdit getStartHyphenEdit() const {
+        return minikin::startHyphenEdit(mHyphenEdit);
+    }
+
+    minikin::EndHyphenEdit getEndHyphenEdit() const {
+        return minikin::endHyphenEdit(mHyphenEdit);
+    }
 
     void setAndroidTypeface(Typeface* typeface) { mTypeface = typeface; }
 
     const Typeface* getAndroidTypeface() const { return mTypeface; }
 
+    enum Align {
+        kLeft_Align,
+        kCenter_Align,
+        kRight_Align,
+    };
+    Align getTextAlign() const { return mAlign; }
+    void setTextAlign(Align align) { mAlign = align; }
+
+    bool isStrikeThru() const { return mStrikeThru; }
+    void setStrikeThru(bool st) { mStrikeThru = st; }
+
+    bool isUnderline() const { return mUnderline; }
+    void setUnderline(bool u) { mUnderline = u; }
+
+    bool isDevKern() const { return mDevKern; }
+    void setDevKern(bool d) { mDevKern = d; }
+
+    minikin::RunFlag getRunFlag() const { return mRunFlag; }
+    void setRunFlag(minikin::RunFlag runFlag) { mRunFlag = runFlag; }
+
+    // Deprecated -- bitmapshaders will be taking this flag explicitly
+    bool isFilterBitmap() const { return mFilterBitmap; }
+    void setFilterBitmap(bool filter) { mFilterBitmap = filter; }
+
+    SkFilterMode filterMode() const {
+        return mFilterBitmap ? SkFilterMode::kLinear : SkFilterMode::kNearest;
+    }
+    SkSamplingOptions sampling() const {
+        return SkSamplingOptions(this->filterMode());
+    }
+
+    // The Java flags (Paint.java) no longer fit into the native apis directly.
+    // These methods handle converting to and from them and the native representations
+    // in android::Paint.
+
+    uint32_t getJavaFlags() const;
+    void setJavaFlags(uint32_t);
+
+    // Helpers that return or apply legacy java flags to SkPaint, ignoring all flags
+    // that are meant for SkFont or Paint (e.g. underline, strikethru)
+    // The only respected flags are : [ antialias, dither, filterBitmap ]
+    static uint32_t GetSkPaintJavaFlags(const SkPaint&);
+    static void SetSkPaintJavaFlags(SkPaint*, uint32_t flags);
+
 private:
+    SkFont mFont;
+    sk_sp<BlurDrawLooper> mLooper;
+
     float mLetterSpacing = 0;
     float mWordSpacing = 0;
-    std::string mFontFeatureSettings;
+    std::vector<minikin::FontFeature> mFontFeatureSettings;
     uint32_t mMinikinLocaleListId;
-    minikin::FontFamily::Variant mFamilyVariant;
+    std::optional<minikin::FamilyVariant> mFamilyVariant;
     uint32_t mHyphenEdit = 0;
     // The native Typeface object has the same lifetime of the Java Typeface
     // object. The Java Paint object holds a strong reference to the Java Typeface
     // object. Thus, following pointer can never be a dangling pointer. Note that
     // nullptr is valid: it means the default typeface.
     const Typeface* mTypeface = nullptr;
+    Align mAlign = kLeft_Align;
+    bool mFilterBitmap = false;
+    bool mStrikeThru = false;
+    bool mUnderline = false;
+    bool mDevKern = false;
+    minikin::RunFlag mRunFlag = minikin::RunFlag::NONE;
 };
 
 }  // namespace android

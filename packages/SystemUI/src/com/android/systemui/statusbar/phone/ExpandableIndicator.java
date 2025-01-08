@@ -18,7 +18,8 @@ import android.content.Context;
 import android.graphics.drawable.AnimatedVectorDrawable;
 import android.util.AttributeSet;
 import android.widget.ImageView;
-import com.android.systemui.R;
+
+import com.android.systemui.res.R;
 
 public class ExpandableIndicator extends ImageView {
 

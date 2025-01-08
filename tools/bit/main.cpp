@@ -33,6 +33,8 @@
 
 using namespace std;
 
+#define NATIVE_TESTS "NATIVE_TESTS"
+
 /**
  * An entry from the command line for something that will be built, installed,
  * and/or tested.
@@ -50,24 +52,22 @@ struct Target {
 
     int testPassCount;
     int testFailCount;
+    int testIgnoreCount;
     int unknownFailureCount; // unknown failure == "Process crashed", etc.
-    bool actionsWithNoTests;
 
     Target(bool b, bool i, bool t, const string& p);
 };
 
 Target::Target(bool b, bool i, bool t, const string& p)
-    :build(b),
-     install(i),
-     test(t),
-     pattern(p),
-     testActionCount(0),
-     testPassCount(0),
-     testFailCount(0),
-     unknownFailureCount(0),
-     actionsWithNoTests(false)
-{
-}
+      : build(b),
+        install(i),
+        test(t),
+        pattern(p),
+        testActionCount(0),
+        testPassCount(0),
+        testFailCount(0),
+        testIgnoreCount(0),
+        unknownFailureCount(0) {}
 
 /**
  * Command line options.
@@ -75,6 +75,9 @@ Target::Target(bool b, bool i, bool t, const string& p)
 struct Options {
     // For help
     bool runHelp;
+
+    // For refreshing module-info.json
+    bool runRefresh;
 
     // For tab completion
     bool runTab;
@@ -91,6 +94,7 @@ struct Options {
 
 Options::Options()
     :runHelp(false),
+     runRefresh(false),
      runTab(false),
      noRestart(false),
      reboot(false),
@@ -132,6 +136,32 @@ InstallApk::InstallApk(const string& filename, bool always)
 {
 }
 
+struct PushedFile
+{
+    TrackedFile file;
+    string dest;
+
+    PushedFile();
+    PushedFile(const PushedFile& that);
+    PushedFile(const string& filename, const string& dest);
+    ~PushedFile() {};
+};
+
+PushedFile::PushedFile()
+{
+}
+
+PushedFile::PushedFile(const PushedFile& that)
+    :file(that.file),
+     dest(that.dest)
+{
+}
+
+PushedFile::PushedFile(const string& f, const string& d)
+    :file(f),
+     dest(d)
+{
+}
 
 /**
  * Record for an test that is going to be launched.
@@ -156,13 +186,12 @@ struct TestAction {
 
     // The number of tests that failed
     int failCount;
+
+    // The number of tests that were ignored (because of @Ignore)
+    int ignoreCount;
 };
 
-TestAction::TestAction()
-    :passCount(0),
-     failCount(0)
-{
-}
+TestAction::TestAction() : passCount(0), failCount(0), ignoreCount(0) {}
 
 /**
  * Record for an activity that is going to be launched.
@@ -246,7 +275,7 @@ TestResults::OnTestStatus(TestStatus& status)
                 line << " of " << testCount;
             }
         }
-        line << ": " << m_currentAction->target->name << ':' << className << "\\#" << testName;
+        line << ": " << m_currentAction->target->name << ':' << className << "#" << testName;
         print_one_line("%s", line.str().c_str());
     } else if ((resultCode == -1) || (resultCode == -2)) {
         // test failed
@@ -254,14 +283,27 @@ TestResults::OnTestStatus(TestStatus& status)
         // all as "failures".
         m_currentAction->failCount++;
         m_currentAction->target->testFailCount++;
-        printf("%s\n%sFailed: %s:%s\\#%s%s\n", g_escapeClearLine, g_escapeRedBold,
-                m_currentAction->target->name.c_str(), className.c_str(),
-                testName.c_str(), g_escapeEndColor);
+        printf("%s\n%sFailed: %s:%s#%s%s\n", g_escapeClearLine, g_escapeRedBold,
+               m_currentAction->target->name.c_str(), className.c_str(), testName.c_str(),
+               g_escapeEndColor);
 
-        string stack = get_bundle_string(results, &found, "stack", NULL);
-        if (found) {
+        bool stackFound;
+        string stack = get_bundle_string(results, &stackFound, "stack", NULL);
+        if (status.has_logcat()) {
+            const string logcat = status.logcat();
+            if (logcat.length() > 0) {
+                printf("%s\n", logcat.c_str());
+            }
+        } else if (stackFound) {
             printf("%s\n", stack.c_str());
         }
+    } else if (resultCode == -3) {
+        // test ignored
+        m_currentAction->ignoreCount++;
+        m_currentAction->target->testIgnoreCount++;
+        printf("%s\n%sIgnored: %s:%s#%s%s\n", g_escapeClearLine, g_escapeYellowBold,
+               m_currentAction->target->name.c_str(), className.c_str(), testName.c_str(),
+               g_escapeEndColor);
     }
 }
 
@@ -365,11 +407,14 @@ print_usage(FILE* out) {
     fprintf(out, "      Builds and installs CtsProtoTestCases.apk, and runs all the\n");
     fprintf(out, "      tests in the ProtoOutputStreamBoolTest class.\n");
     fprintf(out, "\n");
-    fprintf(out, "    bit CtsProtoTestCases:.ProtoOutputStreamBoolTest\\#testWrite\n");
+    fprintf(out, "    bit CtsProtoTestCases:.ProtoOutputStreamBoolTest#testWrite\n");
     fprintf(out, "      Builds and installs CtsProtoTestCases.apk, and runs the testWrite\n");
     fprintf(out, "      test method on that class.\n");
     fprintf(out, "\n");
-    fprintf(out, "    bit CtsProtoTestCases:.ProtoOutputStreamBoolTest\\#testWrite,.ProtoOutputStreamBoolTest\\#testRepeated\n");
+    fprintf(out,
+            "    bit "
+            "CtsProtoTestCases:.ProtoOutputStreamBoolTest#testWrite,.ProtoOutputStreamBoolTest#"
+            "testRepeated\n");
     fprintf(out, "      Builds and installs CtsProtoTestCases.apk, and runs the testWrite\n");
     fprintf(out, "      and testRepeated test methods on that class.\n");
     fprintf(out, "\n");
@@ -390,6 +435,10 @@ print_usage(FILE* out) {
     fprintf(out, "      com.android.statusbartest/.NotificationBuilderTest activity.\n");
     fprintf(out, "\n");
     fprintf(out, "\n");
+    fprintf(out, "usage: bit --refresh\n");
+    fprintf(out, "\n");
+    fprintf(out, "  Update module-info.json, the cache of make goals that can be built.\n");
+    fprintf(out, "\n");
     fprintf(out, "usage: bit --tab ...\n");
     fprintf(out, "\n");
     fprintf(out, "  Lists the targets in a format for tab completion. To get tab\n");
@@ -408,6 +457,35 @@ print_usage(FILE* out) {
     fprintf(out, "\n");
 }
 
+/**
+ * Prints a possibly color-coded summary of test results. Example output:
+ *
+ *     "34 passed, 0 failed, 1 ignored\n"
+ */
+static void print_results(int passed, int failed, int ignored) {
+    char const* nothing = "";
+    char const* cp = nothing;
+    char const* cf = nothing;
+    char const* ci = nothing;
+
+    if (failed > 0) {
+        cf = g_escapeRedBold;
+    } else if (passed > 0 || ignored > 0) {
+        cp = passed > 0 ? g_escapeGreenBold : nothing;
+        ci = ignored > 0 ? g_escapeYellowBold : nothing;
+    } else {
+        cp = g_escapeYellowBold;
+        cf = g_escapeYellowBold;
+    }
+
+    if (ignored > 0) {
+        printf("%s%d passed%s, %s%d failed%s, %s%d ignored%s\n", cp, passed, g_escapeEndColor, cf,
+               failed, g_escapeEndColor, ci, ignored, g_escapeEndColor);
+    } else {
+        printf("%s%d passed%s, %s%d failed%s\n", cp, passed, g_escapeEndColor, cf, failed,
+               g_escapeEndColor);
+    }
+}
 
 /**
  * Sets the appropriate flag* variables. If there is a problem with the
@@ -419,6 +497,12 @@ parse_args(Options* options, int argc, const char** argv)
     // Help
     if (argc == 2 && (strcmp(argv[1],  "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
         options->runHelp = true;
+        return;
+    }
+
+    // Refresh
+    if (argc == 2 && strcmp(argv[1], "--refresh") == 0) {
+        options->runRefresh = true;
         return;
     }
 
@@ -623,12 +707,13 @@ run_phases(vector<Target*> targets, const Options& options)
     const string buildProduct = get_required_env("TARGET_PRODUCT", false);
     const string buildVariant = get_required_env("TARGET_BUILD_VARIANT", false);
     const string buildType = get_required_env("TARGET_BUILD_TYPE", false);
-
+    const string buildOut = get_out_dir();
     chdir_or_exit(buildTop.c_str());
 
-    const string buildDevice = get_build_var("TARGET_DEVICE", false);
-    const string buildId = get_build_var("BUILD_ID", false);
-    const string buildOut = get_out_dir();
+    BuildVars buildVars(buildOut, buildProduct, buildVariant, buildType);
+
+    const string buildDevice = buildVars.GetBuildVar("TARGET_DEVICE", false);
+    const string buildId = buildVars.GetBuildVar("BUILD_ID", false);
 
     // Get the modules for the targets
     map<string,Module> modules;
@@ -640,6 +725,9 @@ run_phases(vector<Target*> targets, const Options& options)
             target->module = mod->second;
         } else {
             print_error("Error: Could not find module: %s", target->name.c_str());
+            fprintf(stderr, "Try running %sbit --refresh%s if you recently added %s%s%s.\n",
+                    g_escapeBold, g_escapeEndColor,
+                    g_escapeBold, target->name.c_str(), g_escapeEndColor);
             err = 1;
         }
     }
@@ -656,12 +744,17 @@ run_phases(vector<Target*> targets, const Options& options)
         }
     }
 
+
     // Figure out whether we need to sync the system and which apks to install
-    string systemPath = buildOut + "/target/product/" + buildDevice + "/system/";
-    string dataPath = buildOut + "/target/product/" + buildDevice + "/data/";
+    string deviceTargetPath = buildOut + "/target/product/" + buildDevice;
+    string systemPath = deviceTargetPath + "/system/";
+    string dataPath = deviceTargetPath + "/data/";
+    string testPath = deviceTargetPath + "/testcases/";
     bool syncSystem = false;
     bool alwaysSyncSystem = false;
+    vector<string> systemFiles;
     vector<InstallApk> installApks;
+    vector<PushedFile> pushedFiles;
     for (size_t i=0; i<targets.size(); i++) {
         Target* target = targets[i];
         if (target->install) {
@@ -670,6 +763,7 @@ run_phases(vector<Target*> targets, const Options& options)
                 // System partition
                 if (starts_with(file, systemPath)) {
                     syncSystem = true;
+                    systemFiles.push_back(file);
                     if (!target->build) {
                         // If a system partition target didn't get built then
                         // it won't change we will always need to do adb sync
@@ -678,11 +772,17 @@ run_phases(vector<Target*> targets, const Options& options)
                     continue;
                 }
                 // Apk in the data partition
-                if (starts_with(file, dataPath) && ends_with(file, ".apk")) {
+                if (ends_with(file, ".apk")
+                        && (starts_with(file, dataPath) || starts_with(file, testPath))) {
                     // Always install it if we didn't build it because otherwise
                     // it will never have changed.
                     installApks.push_back(InstallApk(file, !target->build));
                     continue;
+                }
+                // If it's a native test module, push it.
+                if (target->module.HasClass(NATIVE_TESTS) && starts_with(file, dataPath)) {
+                    string installedPath(file.c_str() + deviceTargetPath.length());
+                    pushedFiles.push_back(PushedFile(file, installedPath));
                 }
             }
         }
@@ -690,6 +790,26 @@ run_phases(vector<Target*> targets, const Options& options)
     map<string,FileInfo> systemFilesBefore;
     if (syncSystem && !alwaysSyncSystem) {
         get_directory_contents(systemPath, &systemFilesBefore);
+    }
+
+    if (systemFiles.size() > 0){
+        print_info("System files:");
+        for (size_t i=0; i<systemFiles.size(); i++) {
+            printf("  %s\n", systemFiles[i].c_str());
+        }
+    }
+    if (pushedFiles.size() > 0){
+        print_info("Files to push:");
+        for (size_t i=0; i<pushedFiles.size(); i++) {
+            printf("  %s\n", pushedFiles[i].file.filename.c_str());
+            printf("    --> %s\n", pushedFiles[i].dest.c_str());
+        }
+    }
+    if (installApks.size() > 0){
+        print_info("APKs to install:");
+        for (size_t i=0; i<installApks.size(); i++) {
+            printf("  %s\n", installApks[i].file.filename.c_str());
+        }
     }
 
     //
@@ -728,7 +848,7 @@ run_phases(vector<Target*> targets, const Options& options)
 
             // Stop & Sync
             if (!options.noRestart) {
-                err = run_adb("shell", "stop", NULL);
+                err = run_adb("exec-out", "stop", NULL);
                 check_error(err);
             }
             err = run_adb("remount", NULL);
@@ -747,9 +867,9 @@ run_phases(vector<Target*> targets, const Options& options)
                 } else {
                     print_status("Restarting the runtime");
 
-                    err = run_adb("shell", "setprop", "sys.boot_completed", "0", NULL);
+                    err = run_adb("exec-out", "setprop", "sys.boot_completed", "0", NULL);
                     check_error(err);
-                    err = run_adb("shell", "start", NULL);
+                    err = run_adb("exec-out", "start", NULL);
                     check_error(err);
                 }
 
@@ -762,9 +882,28 @@ run_phases(vector<Target*> targets, const Options& options)
                     sleep(2);
                 }
                 sleep(1);
-                err = run_adb("shell", "wm", "dismiss-keyguard", NULL);
+                err = run_adb("exec-out", "wm", "dismiss-keyguard", NULL);
                 check_error(err);
             }
+        }
+    }
+
+    // Push files
+    if (pushedFiles.size() > 0) {
+        print_status("Pushing files");
+        for (size_t i=0; i<pushedFiles.size(); i++) {
+            const PushedFile& pushed = pushedFiles[i];
+            string dir = dirname(pushed.dest);
+            if (dir.length() == 0 || dir == "/") {
+                // This isn't really a file inside the data directory. Just skip it.
+                continue;
+            }
+            // TODO: if (!apk.file.fileInfo.exists || apk.file.HasChanged())
+            err = run_adb("exec-out", "mkdir", "-p", dir.c_str(), NULL);
+            check_error(err);
+            err = run_adb("push", pushed.file.filename.c_str(), pushed.dest.c_str(), NULL);
+            check_error(err);
+            // pushed.installed = true;
         }
     }
 
@@ -788,6 +927,74 @@ run_phases(vector<Target*> targets, const Options& options)
     // Actions
     //
 
+    // Whether there have been any tests run, so we can print a summary.
+    bool testsRun = false;
+
+    // Run the native tests.
+    // TODO: We don't have a good way of running these and capturing the output of
+    // them live.  It'll take some work.  On the other hand, if they're gtest tests,
+    // the output of gtest is not completely insane like the text output of the
+    // instrumentation tests.  So for now, we'll just live with that.
+    for (size_t i=0; i<targets.size(); i++) {
+        Target* target = targets[i];
+        if (target->test && target->module.HasClass(NATIVE_TESTS)) {
+            // We don't have a clear signal from the build system which of the installed
+            // files is actually the test, so we guess by looking for one with the same
+            // leaf name as the module that is executable.
+            for (size_t j=0; j<target->module.installed.size(); j++) {
+                string filename = target->module.installed[j];
+                if (!starts_with(filename, dataPath)) {
+                    // Native tests go into the data directory.
+                    continue;
+                }
+                if (leafname(filename) != target->module.name) {
+                    // This isn't the test executable.
+                    continue;
+                }
+                if (!is_executable(filename)) {
+                    continue;
+                }
+                string installedPath(filename.c_str() + deviceTargetPath.length());
+                printf("the magic one is: %s\n", filename.c_str());
+                printf("  and it's installed at: %s\n", installedPath.c_str());
+
+                // Convert bit-style actions to gtest test filter arguments
+                if (target->actions.size() > 0) {
+                    testsRun = true;
+                    target->testActionCount++;
+                    bool runAll = false;
+                    string filterArg("--gtest_filter=");
+                    for (size_t k=0; k<target->actions.size(); k++) {
+                        string actionString = target->actions[k];
+                        if (actionString == "*") {
+                            runAll = true;
+                        } else {
+                            filterArg += actionString;
+                            if (k != target->actions.size()-1) {
+                                // We would otherwise have to worry about this condition
+                                // being true, and appending an extra ':', but we know that
+                                // if the extra action is "*", then we'll just run all and
+                                // won't use filterArg anyway, so just keep this condition
+                                // simple.
+                                filterArg += ':';
+                            }
+                        }
+                    }
+                    if (runAll) {
+                        err = run_adb("exec-out", installedPath.c_str(), NULL);
+                    } else {
+                        err = run_adb("exec-out", installedPath.c_str(), filterArg.c_str(), NULL);
+                    }
+                    if (err == 0) {
+                        target->testPassCount++;
+                    } else {
+                        target->testFailCount++;
+                    }
+                }
+            }
+        }
+    }
+
     // Inspect the apks, and figure out what is an activity and what needs a test runner
     bool printedInspecting = false;
     vector<TestAction> testActions;
@@ -798,7 +1005,9 @@ run_phases(vector<Target*> targets, const Options& options)
             for (size_t j=0; j<target->module.installed.size(); j++) {
                 string filename = target->module.installed[j];
 
-                if (!ends_with(filename, ".apk")) {
+                // Skip of not apk in the data partition or test
+                if (!(ends_with(filename, ".apk")
+                        && (starts_with(filename, dataPath) || starts_with(filename, testPath)))) {
                     continue;
                 }
 
@@ -855,28 +1064,17 @@ run_phases(vector<Target*> targets, const Options& options)
     TestResults testResults;
     if (testActions.size() > 0) {
         print_status("Running tests");
+        testsRun = true;
         for (size_t i=0; i<testActions.size(); i++) {
             TestAction& action = testActions[i];
             testResults.SetCurrentAction(&action);
             err = run_instrumentation_test(action.packageName, action.runner, action.className,
                     &testResults);
             check_error(err);
-            if (action.passCount == 0 && action.failCount == 0) {
-                action.target->actionsWithNoTests = true;
-            }
             int total = action.passCount + action.failCount;
             printf("%sRan %d test%s for %s. ", g_escapeClearLine,
                     total, total > 1 ? "s" : "", action.target->name.c_str());
-            if (action.passCount == 0 && action.failCount == 0) {
-                printf("%s%d passed, %d failed%s\n", g_escapeYellowBold, action.passCount,
-                        action.failCount, g_escapeEndColor);
-            } else if (action.failCount >  0) {
-                printf("%d passed, %s%d failed%s\n", action.passCount, g_escapeRedBold,
-                        action.failCount, g_escapeEndColor);
-            } else {
-                printf("%s%d passed%s, %d failed\n", g_escapeGreenBold, action.passCount,
-                        g_escapeEndColor, action.failCount);
-            }
+            print_results(action.passCount, action.failCount, action.ignoreCount);
             if (!testResults.IsSuccess()) {
                 printf("\n%sTest didn't finish successfully: %s%s\n", g_escapeRedBold,
                         testResults.GetErrorMessage().c_str(), g_escapeEndColor);
@@ -899,7 +1097,7 @@ run_phases(vector<Target*> targets, const Options& options)
 
         const ActivityAction& action = activityActions[0];
         string componentName = action.packageName + "/" + action.className;
-        err = run_adb("shell", "am", "start", componentName.c_str(), NULL);
+        err = run_adb("exec-out", "am", "start", componentName.c_str(), NULL);
         check_error(err);
     }
 
@@ -952,7 +1150,7 @@ run_phases(vector<Target*> targets, const Options& options)
 
     // Tests
     bool hasErrors = false;
-    if (testActions.size() > 0) {
+    if (testsRun) {
         printf("%sRan tests:%s\n", g_escapeBold, g_escapeEndColor);
         size_t maxNameLength = 0;
         for (size_t i=0; i<targets.size(); i++) {
@@ -973,17 +1171,11 @@ run_phases(vector<Target*> targets, const Options& options)
                     printf("     %sUnknown failure, see above message.%s\n",
                             g_escapeRedBold, g_escapeEndColor);
                     hasErrors = true;
-                } else if (target->actionsWithNoTests) {
-                    printf("     %s%d passed, %d failed%s\n", g_escapeYellowBold,
-                            target->testPassCount, target->testFailCount, g_escapeEndColor);
-                    hasErrors = true;
-                } else if (target->testFailCount > 0) {
-                    printf("     %d passed, %s%d failed%s\n", target->testPassCount,
-                            g_escapeRedBold, target->testFailCount, g_escapeEndColor);
-                    hasErrors = true;
                 } else {
-                    printf("     %s%d passed%s, %d failed\n", g_escapeGreenBold,
-                            target->testPassCount, g_escapeEndColor, target->testFailCount);
+                    printf("   %s%s     ", target->name.c_str(),
+                           padding.c_str() + target->name.length());
+                    print_results(target->testPassCount, target->testFailCount,
+                                  target->testIgnoreCount);
                 }
             }
         }
@@ -999,18 +1191,49 @@ run_phases(vector<Target*> targets, const Options& options)
 }
 
 /**
+ * Refresh module-info.
+ */
+void
+run_refresh()
+{
+    int err;
+
+    print_status("Initializing");
+    const string buildTop = get_required_env("ANDROID_BUILD_TOP", false);
+    const string buildProduct = get_required_env("TARGET_PRODUCT", false);
+    const string buildVariant = get_required_env("TARGET_BUILD_VARIANT", false);
+    const string buildType = get_required_env("TARGET_BUILD_TYPE", false);
+    const string buildOut = get_out_dir();
+    chdir_or_exit(buildTop.c_str());
+
+    BuildVars buildVars(buildOut, buildProduct, buildVariant, buildType);
+
+    string buildDevice = buildVars.GetBuildVar("TARGET_DEVICE", false);
+
+    vector<string> goals;
+    goals.push_back(buildOut + "/target/product/" + buildDevice + "/module-info.json");
+
+    print_status("Refreshing module-info.json");
+    err = build_goals(goals);
+    check_error(err);
+}
+
+/**
  * Implement tab completion of the target names from the all modules file.
  */
 void
 run_tab_completion(const string& word)
 {
-    const string buildTop = get_required_env("ANDROID_BUILD_TOP", true);
+    const string buildTop = get_required_env("ANDROID_BUILD_TOP", false);
     const string buildProduct = get_required_env("TARGET_PRODUCT", false);
+    const string buildVariant = get_required_env("TARGET_BUILD_VARIANT", false);
+    const string buildType = get_required_env("TARGET_BUILD_TYPE", false);
     const string buildOut = get_out_dir();
-
     chdir_or_exit(buildTop.c_str());
 
-    string buildDevice = sniff_device_name(buildOut, buildProduct);
+    BuildVars buildVars(buildOut, buildProduct, buildVariant, buildType);
+
+    string buildDevice = buildVars.GetBuildVar("TARGET_DEVICE", false);
 
     map<string,Module> modules;
     read_modules(buildOut, buildDevice, &modules, true);
@@ -1037,6 +1260,9 @@ main(int argc, const char** argv)
     if (options.runHelp) {
         // Help
         print_usage(stdout);
+        exit(0);
+    } else if (options.runRefresh) {
+        run_refresh();
         exit(0);
     } else if (options.runTab) {
         run_tab_completion(options.tabPattern);

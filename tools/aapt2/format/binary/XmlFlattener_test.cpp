@@ -16,11 +16,10 @@
 
 #include "format/binary/XmlFlattener.h"
 
+#include "androidfw/BigBuffer.h"
 #include "androidfw/ResourceTypes.h"
-
 #include "link/Linkers.h"
 #include "test/Test.h"
-#include "util/BigBuffer.h"
 #include "util/Util.h"
 
 using ::aapt::test::StrEq;
@@ -59,13 +58,13 @@ class XmlFlattenerTest : public ::testing::Test {
                                      const XmlFlattenerOptions& options = {}) {
     using namespace android;  // For NO_ERROR on windows because it is a macro.
 
-    BigBuffer buffer(1024);
+    android::BigBuffer buffer(1024);
     XmlFlattener flattener(&buffer, options);
     if (!flattener.Consume(context_.get(), doc)) {
       return ::testing::AssertionFailure() << "failed to flatten XML Tree";
     }
 
-    std::unique_ptr<uint8_t[]> data = util::Copy(buffer);
+    std::unique_ptr<uint8_t[]> data = android::util::Copy(buffer);
     if (out_tree->setTo(data.get(), buffer.size(), true) != NO_ERROR) {
       return ::testing::AssertionFailure() << "flattened XML is corrupt";
     }
@@ -118,7 +117,7 @@ TEST_F(XmlFlattenerTest, FlattenXmlWithNoCompiledAttributes) {
   ASSERT_THAT(tree.getAttributeCount(), Eq(0u));
 
   ASSERT_THAT(tree.next(), Eq(android::ResXMLTree::TEXT));
-  EXPECT_THAT(tree.getText(&len), StrEq(u"Some text\\"));
+  EXPECT_THAT(tree.getText(&len), StrEq(u"Some text\\\\"));
 
   ASSERT_THAT(tree.next(), Eq(android::ResXMLTree::END_TAG));
   EXPECT_THAT(tree.getElementNamespace(&len), IsNull());
@@ -222,14 +221,14 @@ TEST_F(XmlFlattenerTest, FlattenNonStandardPackageId) {
             android:id="@id/foo"
             app:foo="@id/foo" />)");
 
-  XmlReferenceLinker linker;
+  XmlReferenceLinker linker(nullptr);
   ASSERT_TRUE(linker.Consume(context_.get(), doc.get()));
 
   // The tree needs a custom DynamicRefTable since it is not using a standard app ID (0x7f).
-  android::DynamicRefTable dynamic_ref_table;
-  dynamic_ref_table.addMapping(0x80, 0x80);
+  auto dynamic_ref_table = std::make_shared<android::DynamicRefTable>();
+  dynamic_ref_table->addMapping(0x80, 0x80);
 
-  android::ResXMLTree tree(&dynamic_ref_table);
+  auto tree = android::ResXMLTree(std::move(dynamic_ref_table));
   ASSERT_TRUE(Flatten(doc.get(), &tree));
 
   while (tree.next() != android::ResXMLTree::START_TAG) {
@@ -283,7 +282,7 @@ TEST_F(XmlFlattenerTest, ProcessEscapedStrings) {
   EXPECT_THAT(tree.getAttributeStringValue(idx, &len), StrEq(u"\""));
 
   ASSERT_THAT(tree.next(), Eq(android::ResXMLTree::TEXT));
-  EXPECT_THAT(tree.getText(&len), StrEq(u"\\d{5}"));
+  EXPECT_THAT(tree.getText(&len), StrEq(u"\\\\d{5}"));
 }
 
 TEST_F(XmlFlattenerTest, ProcessQuotes) {
@@ -360,6 +359,7 @@ I
    J
 
 </item>
+          <item>\t K \n </item>
           <item>
           </item>
       </root>)");
@@ -435,6 +435,12 @@ I
   EXPECT_THAT(tree.getElementName(&len), StrEq(u"item"));
   ASSERT_THAT(tree.next(), Eq(android::ResXMLTree::TEXT));
   EXPECT_THAT(tree.getText(&len), StrEq(u" J "));
+  ASSERT_THAT(tree.next(), Eq(android::ResXMLTree::END_TAG));
+
+  ASSERT_THAT(tree.next(), Eq(android::ResXMLTree::START_TAG));
+  EXPECT_THAT(tree.getElementName(&len), StrEq(u"item"));
+  ASSERT_THAT(tree.next(), Eq(android::ResXMLTree::TEXT));
+  EXPECT_THAT(tree.getText(&len), StrEq(u"\\t K \\n "));
   ASSERT_THAT(tree.next(), Eq(android::ResXMLTree::END_TAG));
 
   ASSERT_THAT(tree.next(), Eq(android::ResXMLTree::START_TAG));

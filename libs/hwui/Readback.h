@@ -16,37 +16,44 @@
 
 #pragma once
 
+#include <SkRefCnt.h>
+
+#include "CopyRequest.h"
+#include "Matrix.h"
 #include "Rect.h"
 #include "renderthread/RenderThread.h"
 
-#include <SkBitmap.h>
+class SkBitmap;
+class SkImage;
+struct SkRect;
 
 namespace android {
+class Bitmap;
 class GraphicBuffer;
 class Surface;
 namespace uirenderer {
 
-// Keep in sync with PixelCopy.java codes
-enum class CopyResult {
-    Success = 0,
-    UnknownError = 1,
-    Timeout = 2,
-    SourceEmpty = 3,
-    SourceInvalid = 4,
-    DestinationInvalid = 5,
-};
+class DeferredLayerUpdater;
+class Layer;
 
 class Readback {
 public:
+    explicit Readback(renderthread::RenderThread& thread) : mRenderThread(thread) {}
     /**
      * Copies the surface's most recently queued buffer into the provided bitmap.
      */
-    virtual CopyResult copySurfaceInto(Surface& surface, const Rect& srcRect, SkBitmap* bitmap) = 0;
-    virtual CopyResult copyGraphicBufferInto(GraphicBuffer* graphicBuffer, SkBitmap* bitmap) = 0;
+    void copySurfaceInto(ANativeWindow* window, const std::shared_ptr<CopyRequest>& request);
 
-protected:
-    explicit Readback(renderthread::RenderThread& thread) : mRenderThread(thread) {}
-    virtual ~Readback() {}
+    CopyResult copyHWBitmapInto(Bitmap* hwBitmap, SkBitmap* bitmap);
+    CopyResult copyImageInto(const sk_sp<SkImage>& image, SkBitmap* bitmap);
+
+    CopyResult copyLayerInto(DeferredLayerUpdater* layer, SkBitmap* bitmap);
+
+private:
+    CopyResult copyImageInto(const sk_sp<SkImage>& image, const Rect& srcRect, SkBitmap* bitmap);
+
+    bool copyLayerInto(Layer* layer, const SkRect* srcRect, const SkRect* dstRect,
+                       SkBitmap* bitmap);
 
     renderthread::RenderThread& mRenderThread;
 };

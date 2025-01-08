@@ -28,6 +28,41 @@
 
 namespace aapt {
 
+// A ValueTransformer that returns fully linked versions of resource and macro references.
+class ReferenceLinkerTransformer : public CloningValueTransformer {
+ public:
+  ReferenceLinkerTransformer(const CallSite& callsite, IAaptContext* context, SymbolTable* symbols,
+                             android::StringPool* string_pool, ResourceTable* table,
+                             xml::IPackageDeclStack* decl)
+      : CloningValueTransformer(string_pool),
+        callsite_(callsite),
+        context_(context),
+        symbols_(symbols),
+        table_(table),
+        package_decls_(decl) {
+  }
+
+  std::unique_ptr<Reference> TransformDerived(const Reference* value) override;
+  std::unique_ptr<Item> TransformItem(const Reference* value) override;
+  std::unique_ptr<Style> TransformDerived(const Style* value) override;
+
+  bool HasError() {
+    return error_;
+  }
+
+ private:
+  // Transform a RawString value into a more specific, appropriate value, based on the
+  // Attribute. If a non RawString value is passed in, this is an identity transform.
+  std::unique_ptr<Item> ParseValueWithAttribute(std::unique_ptr<Item> value, const Attribute* attr);
+
+  const CallSite& callsite_;
+  IAaptContext* context_;
+  SymbolTable* symbols_;
+  ResourceTable* table_;
+  xml::IPackageDeclStack* package_decls_;
+  bool error_ = false;
+};
+
 // Resolves all references to resources in the ResourceTable and assigns them IDs.
 // The ResourceTable must already have IDs assigned to each resource.
 // Once the ResourceTable is processed by this linker, it is ready to be flattened.
@@ -39,13 +74,16 @@ class ReferenceLinker : public IResourceTableConsumer {
   // package if the reference has no package name defined (implicit).
   // Returns nullptr if the symbol was not found.
   static const SymbolTable::Symbol* ResolveSymbol(const Reference& reference,
-                                                  const CallSite& callsite, SymbolTable* symbols);
+                                                  const CallSite& callsite,
+                                                  IAaptContext* context,
+                                                  SymbolTable* symbols);
 
   // Performs name mangling and looks up the resource in the symbol table. If the symbol is not
   // visible by the reference at the callsite, nullptr is returned.
   // `out_error` holds the error message.
   static const SymbolTable::Symbol* ResolveSymbolCheckVisibility(const Reference& reference,
                                                                  const CallSite& callsite,
+                                                                 IAaptContext* context,
                                                                  SymbolTable* symbols,
                                                                  std::string* out_error);
 
@@ -53,31 +91,43 @@ class ReferenceLinker : public IResourceTableConsumer {
   // That is, the return value will have a non-null value for ISymbolTable::Symbol::attribute.
   static const SymbolTable::Symbol* ResolveAttributeCheckVisibility(const Reference& reference,
                                                                     const CallSite& callsite,
+                                                                    IAaptContext* context,
                                                                     SymbolTable* symbols,
                                                                     std::string* out_error);
 
   // Resolves the attribute reference and returns an xml::AaptAttribute if successful.
   // If resolution fails, outError holds the error message.
-  static Maybe<xml::AaptAttribute> CompileXmlAttribute(const Reference& reference,
-                                                       const CallSite& callsite,
-                                                       SymbolTable* symbols,
-                                                       std::string* out_error);
+  static std::optional<xml::AaptAttribute> CompileXmlAttribute(const Reference& reference,
+                                                               const CallSite& callsite,
+                                                               IAaptContext* context,
+                                                               SymbolTable* symbols,
+                                                               std::string* out_error);
 
   // Writes the resource name to the DiagMessage, using the
   // "orig_name (aka <transformed_name>)" syntax.
-  static void WriteResourceName(const Reference& orig, const CallSite& callsite,
-                                const xml::IPackageDeclStack* decls, DiagMessage* out_msg);
+  /*static void WriteResourceName(const Reference& orig, const CallSite& callsite,
+                                const xml::IPackageDeclStack* decls, DiagMessage* out_msg);*/
 
   // Same as WriteResourceName but omits the 'attr' part.
   static void WriteAttributeName(const Reference& ref, const CallSite& callsite,
-                                 const xml::IPackageDeclStack* decls, DiagMessage* out_msg);
+                                 const xml::IPackageDeclStack* decls,
+                                 android::DiagMessage* out_msg);
 
-  // Transforms the package name of the reference to the fully qualified package name using
-  // the xml::IPackageDeclStack, then mangles and looks up the symbol. If the symbol is visible
-  // to the reference at the callsite, the reference is updated with an ID.
-  // Returns false on failure, and an error message is logged to the IDiagnostics in the context.
-  static bool LinkReference(const CallSite& callsite, Reference* reference, IAaptContext* context,
-                            SymbolTable* symbols, const xml::IPackageDeclStack* decls);
+  // Returns a fully linked version a resource reference.
+  //
+  // If the reference points to a non-macro resource, the xml::IPackageDeclStack is used to
+  // determine the fully qualified name of the referenced resource. If the symbol is visible
+  // to the reference at the callsite, a copy of the reference with an updated updated ID is
+  // returned.
+  //
+  // If the reference points to a macro, the ResourceTable is used to find the macro definition and
+  // substitute its contents in place of the reference.
+  //
+  // Returns nullptr on failure, and an error message is logged to the IDiagnostics in the context.
+  static std::unique_ptr<Item> LinkReference(const CallSite& callsite, const Reference& reference,
+                                             IAaptContext* context, SymbolTable* symbols,
+                                             ResourceTable* table,
+                                             const xml::IPackageDeclStack* decls);
 
   // Links all references in the ResourceTable.
   bool Consume(IAaptContext* context, ResourceTable* table) override;

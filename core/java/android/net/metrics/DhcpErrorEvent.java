@@ -16,8 +16,8 @@
 
 package android.net.metrics;
 
+import android.annotation.NonNull;
 import android.annotation.SystemApi;
-import android.annotation.TestApi;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.util.SparseArray;
@@ -27,9 +27,12 @@ import com.android.internal.util.MessageUtils;
 /**
  * Event class used to record error events when parsing DHCP response packets.
  * {@hide}
+ * @deprecated The event may not be sent in Android S and above. The events
+ * are logged by a single caller in the system using signature permissions
+ * and that caller is migrating to statsd.
  */
+@Deprecated
 @SystemApi
-@TestApi
 public final class DhcpErrorEvent implements IpConnectivityLog.Event {
     public static final int L2_ERROR   = 1;
     public static final int L3_ERROR   = 2;
@@ -93,7 +96,7 @@ public final class DhcpErrorEvent implements IpConnectivityLog.Event {
     }
 
     /** @hide */
-    public static final Parcelable.Creator<DhcpErrorEvent> CREATOR
+    public static final @android.annotation.NonNull Parcelable.Creator<DhcpErrorEvent> CREATOR
         = new Parcelable.Creator<DhcpErrorEvent>() {
         public DhcpErrorEvent createFromParcel(Parcel in) {
             return new DhcpErrorEvent(in);
@@ -108,6 +111,7 @@ public final class DhcpErrorEvent implements IpConnectivityLog.Event {
         return (0xFFFF0000 & errorCode) | (0xFF & option);
     }
 
+    @NonNull
     @Override
     public String toString() {
         return String.format("DhcpErrorEvent(%s)", Decoder.constants.get(errorCode));

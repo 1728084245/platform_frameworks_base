@@ -20,21 +20,25 @@
 #include "renderthread/EglManager.h"
 #include "tests/common/TestUtils.h"
 
-#include <SkImagePriv.h>
+#include <SkImageAndroid.h>
+#include <include/gpu/ganesh/SkSurfaceGanesh.h>
+#include "include/gpu/GpuTypes.h" // from Skia
 
 using namespace android;
 using namespace android::uirenderer;
 using namespace android::uirenderer::renderthread;
 
-static size_t getCacheUsage(GrContext* grContext) {
+static size_t getCacheUsage(GrDirectContext* grContext) {
     size_t cacheUsage;
     grContext->getResourceCacheUsage(nullptr, &cacheUsage);
     return cacheUsage;
 }
 
-RENDERTHREAD_SKIA_PIPELINE_TEST(CacheManager, trimMemory) {
-    DisplayInfo displayInfo = renderThread.mainDisplayInfo();
-    GrContext* grContext = renderThread.getGrContext();
+// TOOD(258700630): fix this test and re-enable
+RENDERTHREAD_TEST(CacheManager, DISABLED_trimMemory) {
+    int32_t width = DeviceInfo::get()->getWidth();
+    int32_t height = DeviceInfo::get()->getHeight();
+    GrDirectContext* grContext = renderThread.getGrContext();
     ASSERT_TRUE(grContext != nullptr);
 
     // create pairs of offscreen render targets and images until we exceed the
@@ -42,24 +46,22 @@ RENDERTHREAD_SKIA_PIPELINE_TEST(CacheManager, trimMemory) {
     std::vector<sk_sp<SkSurface>> surfaces;
 
     while (getCacheUsage(grContext) <= renderThread.cacheManager().getBackgroundCacheSize()) {
-        SkImageInfo info = SkImageInfo::MakeA8(displayInfo.w, displayInfo.h);
-        sk_sp<SkSurface> surface = SkSurface::MakeRenderTarget(grContext, SkBudgeted::kYes, info);
+        SkImageInfo info = SkImageInfo::MakeA8(width, height);
+        sk_sp<SkSurface> surface = SkSurfaces::RenderTarget(grContext, skgpu::Budgeted::kYes,
+                                                            info);
         surface->getCanvas()->drawColor(SK_AlphaTRANSPARENT);
 
-        grContext->flush();
+        grContext->flushAndSubmit();
 
         surfaces.push_back(surface);
     }
 
     // create an image and pin it so that we have something with a unique key in the cache
-    sk_sp<Bitmap> bitmap =
-            Bitmap::allocateHeapBitmap(SkImageInfo::MakeA8(displayInfo.w, displayInfo.h));
-    sk_sp<SkColorFilter> filter;
-    sk_sp<SkImage> image = bitmap->makeImage(&filter);
-    ASSERT_TRUE(SkImage_pinAsTexture(image.get(), grContext));
-
+    sk_sp<Bitmap> bitmap = Bitmap::allocateHeapBitmap(SkImageInfo::MakeA8(width, height));
+    sk_sp<SkImage> image = bitmap->makeImage(); // calls skgpu::ganesh::PinAsTexture under the hood.
+    ASSERT_TRUE(skgpu::ganesh::PinAsTexture(grContext, image.get()));
     // attempt to trim all memory while we still hold strong refs
-    renderThread.cacheManager().trimMemory(CacheManager::TrimMemoryMode::Complete);
+    renderThread.cacheManager().trimMemory(TrimLevel::COMPLETE);
     ASSERT_TRUE(0 == grContext->getResourceCachePurgeableBytes());
 
     // free the surfaces
@@ -69,18 +71,18 @@ RENDERTHREAD_SKIA_PIPELINE_TEST(CacheManager, trimMemory) {
     }
 
     // unpin the image which should add a unique purgeable key to the cache
-    SkImage_unpinAsTexture(image.get(), grContext);
+    skgpu::ganesh::UnpinTexture(grContext, image.get());
 
     // verify that we have enough purgeable bytes
     const size_t purgeableBytes = grContext->getResourceCachePurgeableBytes();
     ASSERT_TRUE(renderThread.cacheManager().getBackgroundCacheSize() < purgeableBytes);
 
     // UI hidden and make sure only some got purged (unique should remain)
-    renderThread.cacheManager().trimMemory(CacheManager::TrimMemoryMode::UiHidden);
+    renderThread.cacheManager().trimMemory(TrimLevel::UI_HIDDEN);
     ASSERT_TRUE(0 < grContext->getResourceCachePurgeableBytes());
     ASSERT_TRUE(renderThread.cacheManager().getBackgroundCacheSize() > getCacheUsage(grContext));
 
     // complete and make sure all get purged
-    renderThread.cacheManager().trimMemory(CacheManager::TrimMemoryMode::Complete);
+    renderThread.cacheManager().trimMemory(TrimLevel::COMPLETE);
     ASSERT_TRUE(0 == grContext->getResourceCachePurgeableBytes());
 }

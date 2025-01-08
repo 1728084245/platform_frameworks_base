@@ -16,22 +16,22 @@
 
 package android.telephony;
 
-import com.android.i18n.phonenumbers.NumberParseException;
-import com.android.i18n.phonenumbers.PhoneNumberUtil;
-import com.android.i18n.phonenumbers.PhoneNumberUtil.PhoneNumberFormat;
-import com.android.i18n.phonenumbers.Phonenumber.PhoneNumber;
-
+import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.NonNull;
+import android.annotation.Nullable;
+import android.annotation.SystemApi;
+import android.annotation.TestApi;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Resources;
 import android.database.Cursor;
-import android.location.CountryDetector;
 import android.net.Uri;
 import android.os.PersistableBundle;
-import android.os.SystemProperties;
 import android.provider.Contacts;
 import android.provider.ContactsContract;
+import android.sysprop.TelephonyProperties;
 import android.telecom.PhoneAccount;
 import android.text.Editable;
 import android.text.Spannable;
@@ -40,10 +40,16 @@ import android.text.TextUtils;
 import android.text.style.TtsSpan;
 import android.util.SparseIntArray;
 
-import static com.android.internal.telephony.TelephonyProperties.PROPERTY_OPERATOR_IDP_STRING;
+import com.android.i18n.phonenumbers.NumberParseException;
+import com.android.i18n.phonenumbers.PhoneNumberUtil;
+import com.android.i18n.phonenumbers.PhoneNumberUtil.PhoneNumberFormat;
+import com.android.i18n.phonenumbers.Phonenumber.PhoneNumber;
+import com.android.internal.telephony.flags.Flags;
+import com.android.telephony.Rlog;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.Arrays;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -108,6 +114,14 @@ public class PhoneNumberUtils {
     private static final String BCD_EF_ADN_EXTENDED = "*#,N;";
     private static final String BCD_CALLED_PARTY_EXTENDED = "*#abc";
 
+    private static final String PREFIX_WPS = "*272";
+
+    // WPS prefix when CLIR is being activated for the call.
+    private static final String PREFIX_WPS_CLIR_ACTIVATE = "*31#*272";
+
+    // WPS prefix when CLIR is being deactivated for the call.
+    private static final String PREFIX_WPS_CLIR_DEACTIVATE = "#31#*272";
+
     /*
      * global-phone-number = ["+"] 1*( DIGIT / written-sep )
      * written-sep         = ("-"/".")
@@ -164,6 +178,33 @@ public class PhoneNumberUtils {
         return c == 'w'||c == 'W';
     }
 
+    private static int sMinMatch = 0;
+
+    private static int getMinMatch() {
+        if (sMinMatch == 0) {
+            sMinMatch = Resources.getSystem().getInteger(
+                    com.android.internal.R.integer.config_phonenumber_compare_min_match);
+        }
+        return sMinMatch;
+    }
+
+    /**
+     * A Test API to get current sMinMatch.
+     * @hide
+     */
+    @TestApi
+    public static int getMinMatchForTest() {
+        return getMinMatch();
+    }
+
+    /**
+     * A Test API to set sMinMatch.
+     * @hide
+     */
+    @TestApi
+    public static void setMinMatchForTest(int minMatch) {
+        sMinMatch = minMatch;
+    }
 
     /** Returns true if ch is not dialable or alpha char */
     private static boolean isSeparator(char ch) {
@@ -188,6 +229,9 @@ public class PhoneNumberUtils {
         }
 
         String scheme = uri.getScheme();
+        if (scheme == null) {
+            return null;
+        }
 
         if (scheme.equals("tel") || scheme.equals("sip")) {
             return uri.getSchemeSpecificPart();
@@ -444,7 +488,9 @@ public class PhoneNumberUtils {
 
     /**
      * Compare phone numbers a and b, return true if they're identical enough for caller ID purposes.
+     * @deprecated use {@link #areSamePhoneNumber(String, String, String)} instead
      */
+    @Deprecated
     public static boolean compare(String a, String b) {
         // We've used loose comparation at least Eclair, which may change in the future.
 
@@ -455,7 +501,9 @@ public class PhoneNumberUtils {
      * Compare phone numbers a and b, and return true if they're identical
      * enough for caller ID purposes. Checks a resource to determine whether
      * to use a strict or loose comparison algorithm.
+     * @deprecated use {@link #areSamePhoneNumber(String, String, String)} instead
      */
+    @Deprecated
     public static boolean compare(Context context, String a, String b) {
         boolean useStrict = context.getResources().getBoolean(
                com.android.internal.R.bool.config_use_strict_phone_number_comparation);
@@ -475,7 +523,7 @@ public class PhoneNumberUtils {
      * enough for caller ID purposes.
      *
      * - Compares from right to left
-     * - requires MIN_MATCH (7) characters to match
+     * - requires minimum characters to match
      * - handles common trunk prefixes and international prefixes
      *   (basically, everything except the Russian trunk prefix)
      *
@@ -491,6 +539,7 @@ public class PhoneNumberUtils {
         int matched;
         int numNonDialableCharsInA = 0;
         int numNonDialableCharsInB = 0;
+        int minMatch = getMinMatch();
 
         if (a == null || b == null) return a == b;
 
@@ -530,12 +579,12 @@ public class PhoneNumberUtils {
             }
         }
 
-        if (matched < MIN_MATCH) {
+        if (matched < minMatch) {
             int effectiveALen = a.length() - numNonDialableCharsInA;
             int effectiveBLen = b.length() - numNonDialableCharsInB;
 
 
-            // if the number of dialable chars in a and b match, but the matched chars < MIN_MATCH,
+            // if the number of dialable chars in a and b match, but the matched chars < minMatch,
             // treat them as equal (i.e. 404-04 and 40404)
             if (effectiveALen == effectiveBLen && effectiveALen == matched) {
                 return true;
@@ -545,7 +594,7 @@ public class PhoneNumberUtils {
         }
 
         // At least one string has matched completely;
-        if (matched >= MIN_MATCH && (ia < 0 || ib < 0)) {
+        if (matched >= minMatch && (ia < 0 || ib < 0)) {
             return true;
         }
 
@@ -736,7 +785,7 @@ public class PhoneNumberUtils {
     }
 
     /**
-     * Returns the rightmost MIN_MATCH (5) characters in the network portion
+     * Returns the rightmost minimum matched characters in the network portion
      * in *reversed* order
      *
      * This can be used to do a database lookup against the column
@@ -747,7 +796,7 @@ public class PhoneNumberUtils {
     public static String
     toCallerIDMinMatch(String phoneNumber) {
         String np = extractNetworkPortionAlt(phoneNumber);
-        return internalGetStrippedReversed(np, MIN_MATCH);
+        return internalGetStrippedReversed(np, getMinMatch());
     }
 
     /**
@@ -1235,6 +1284,15 @@ public class PhoneNumberUtils {
 
     private static final String JAPAN_ISO_COUNTRY_CODE = "JP";
 
+    private static final String SINGAPORE_ISO_COUNTRY_CODE = "SG";
+
+    private static final String[] COUNTRY_CODES_TO_FORMAT_NATIONALLY = new String[] {
+            "KR", // Korea
+            "JP", // Japan
+            "SG", // Singapore
+            "TW", // Taiwan
+    };
+
     /**
      * Breaks the given number down and formats it according to the rules
      * for the country the number is from.
@@ -1488,10 +1546,14 @@ public class PhoneNumberUtils {
      * Formats the specified {@code phoneNumber} to the E.164 representation.
      *
      * @param phoneNumber the phone number to format.
-     * @param defaultCountryIso the ISO 3166-1 two letters country code.
+     * @param defaultCountryIso the ISO 3166-1 two letters country code in UPPER CASE.
      * @return the E.164 representation, or null if the given phone number is not valid.
      */
     public static String formatNumberToE164(String phoneNumber, String defaultCountryIso) {
+        if (defaultCountryIso != null) {
+            defaultCountryIso = defaultCountryIso.toUpperCase(Locale.ROOT);
+        }
+
         return formatNumberInternal(phoneNumber, defaultCountryIso, PhoneNumberFormat.E164);
     }
 
@@ -1499,10 +1561,14 @@ public class PhoneNumberUtils {
      * Formats the specified {@code phoneNumber} to the RFC3966 representation.
      *
      * @param phoneNumber the phone number to format.
-     * @param defaultCountryIso the ISO 3166-1 two letters country code.
+     * @param defaultCountryIso the ISO 3166-1 two letters country code in UPPER CASE.
      * @return the RFC3966 representation, or null if the given phone number is not valid.
      */
     public static String formatNumberToRFC3966(String phoneNumber, String defaultCountryIso) {
+        if (defaultCountryIso != null) {
+            defaultCountryIso = defaultCountryIso.toUpperCase(Locale.ROOT);
+        }
+
         return formatNumberInternal(phoneNumber, defaultCountryIso, PhoneNumberFormat.RFC3966);
     }
 
@@ -1553,6 +1619,10 @@ public class PhoneNumberUtils {
             return false;
         }
 
+        if (defaultCountryIso != null) {
+            defaultCountryIso = defaultCountryIso.toUpperCase(Locale.ROOT);
+        }
+
         PhoneNumberUtil util = PhoneNumberUtil.getInstance();
         try {
             PhoneNumber pn = util.parseAndKeepRawInput(phoneNumber, defaultCountryIso);
@@ -1581,34 +1651,62 @@ public class PhoneNumberUtils {
             return phoneNumber;
         }
 
+        if (defaultCountryIso != null) {
+            defaultCountryIso = defaultCountryIso.toUpperCase(Locale.ROOT);
+        }
+
+        Rlog.v(LOG_TAG, "formatNumber: defaultCountryIso: " + defaultCountryIso);
+
         PhoneNumberUtil util = PhoneNumberUtil.getInstance();
         String result = null;
         try {
             PhoneNumber pn = util.parseAndKeepRawInput(phoneNumber, defaultCountryIso);
 
-            if (KOREA_ISO_COUNTRY_CODE.equalsIgnoreCase(defaultCountryIso) &&
-                    (pn.getCountryCode() == util.getCountryCodeForRegion(KOREA_ISO_COUNTRY_CODE)) &&
-                    (pn.getCountryCodeSource() ==
-                            PhoneNumber.CountryCodeSource.FROM_NUMBER_WITH_PLUS_SIGN)) {
-                /**
-                 * Need to reformat any local Korean phone numbers (when the user is in Korea) with
-                 * country code to corresponding national format which would replace the leading
-                 * +82 with 0.
-                 */
-                result = util.format(pn, PhoneNumberUtil.PhoneNumberFormat.NATIONAL);
-            } else if (JAPAN_ISO_COUNTRY_CODE.equalsIgnoreCase(defaultCountryIso) &&
-                    pn.getCountryCode() == util.getCountryCodeForRegion(JAPAN_ISO_COUNTRY_CODE) &&
-                    (pn.getCountryCodeSource() ==
-                            PhoneNumber.CountryCodeSource.FROM_NUMBER_WITH_PLUS_SIGN)) {
-                /**
-                 * Need to reformat Japanese phone numbers (when user is in Japan) with the national
-                 * dialing format.
-                 */
-                result = util.format(pn, PhoneNumberUtil.PhoneNumberFormat.NATIONAL);
+            if (Flags.nationalCountryCodeFormattingForLocalCalls()) {
+                if (Arrays.asList(COUNTRY_CODES_TO_FORMAT_NATIONALLY).contains(defaultCountryIso)
+                        && pn.getCountryCode() == util.getCountryCodeForRegion(defaultCountryIso)
+                        && pn.getCountryCodeSource()
+                        == PhoneNumber.CountryCodeSource.FROM_NUMBER_WITH_PLUS_SIGN) {
+                    return util.format(pn, PhoneNumberUtil.PhoneNumberFormat.NATIONAL);
+                } else {
+                    return util.formatInOriginalFormat(pn, defaultCountryIso);
+                }
             } else {
-                result = util.formatInOriginalFormat(pn, defaultCountryIso);
+                if (KOREA_ISO_COUNTRY_CODE.equalsIgnoreCase(defaultCountryIso) && (
+                        pn.getCountryCode() == util.getCountryCodeForRegion(KOREA_ISO_COUNTRY_CODE))
+                        && (pn.getCountryCodeSource()
+                        == PhoneNumber.CountryCodeSource.FROM_NUMBER_WITH_PLUS_SIGN)) {
+                    /**
+                     * Need to reformat any local Korean phone numbers (when the user is in
+                     * Korea) with country code to corresponding national format which would
+                     * replace the leading +82 with 0.
+                     */
+                    result = util.format(pn, PhoneNumberUtil.PhoneNumberFormat.NATIONAL);
+                } else if (JAPAN_ISO_COUNTRY_CODE.equalsIgnoreCase(defaultCountryIso)
+                        && pn.getCountryCode() == util.getCountryCodeForRegion(
+                        JAPAN_ISO_COUNTRY_CODE) && (pn.getCountryCodeSource()
+                        == PhoneNumber.CountryCodeSource.FROM_NUMBER_WITH_PLUS_SIGN)) {
+                    /**
+                     * Need to reformat Japanese phone numbers (when user is in Japan) with the
+                     * national dialing format.
+                     */
+                    result = util.format(pn, PhoneNumberUtil.PhoneNumberFormat.NATIONAL);
+                } else if (Flags.removeCountryCodeFromLocalSingaporeCalls() && (
+                        SINGAPORE_ISO_COUNTRY_CODE.equalsIgnoreCase(defaultCountryIso)
+                                && pn.getCountryCode() == util.getCountryCodeForRegion(
+                                SINGAPORE_ISO_COUNTRY_CODE) && (pn.getCountryCodeSource()
+                                == PhoneNumber.CountryCodeSource.FROM_NUMBER_WITH_PLUS_SIGN))) {
+                    /*
+                     * Need to reformat Singaporean phone numbers (when the user is in Singapore)
+                     * with the country code (+65) removed to comply with Singaporean regulations.
+                     */
+                    result = util.format(pn, PhoneNumberUtil.PhoneNumberFormat.NATIONAL);
+                } else {
+                    result = util.formatInOriginalFormat(pn, defaultCountryIso);
+                }
             }
         } catch (NumberParseException e) {
+            if (DBG) log("formatNumber: NumberParseException caught " + e);
         }
         return result;
     }
@@ -1633,6 +1731,10 @@ public class PhoneNumberUtils {
      */
     public static String formatNumber(
             String phoneNumber, String phoneNumberE164, String defaultCountryIso) {
+        if (defaultCountryIso != null) {
+            defaultCountryIso = defaultCountryIso.toUpperCase(Locale.ROOT);
+        }
+
         int len = phoneNumber.length();
         for (int i = 0; i < len; i++) {
             if (!isDialable(phoneNumber.charAt(i))) {
@@ -1709,26 +1811,6 @@ public class PhoneNumberUtils {
         return normalizedDigits.toString();
     }
 
-    // Three and four digit phone numbers for either special services,
-    // or 3-6 digit addresses from the network (eg carrier-originated SMS messages) should
-    // not match.
-    //
-    // This constant used to be 5, but SMS short codes has increased in length and
-    // can be easily 6 digits now days. Most countries have SMS short code length between
-    // 3 to 6 digits. The exceptions are
-    //
-    // Australia: Short codes are six or eight digits in length, starting with the prefix "19"
-    //            followed by an additional four or six digits and two.
-    // Czechia: Codes are seven digits in length for MO and five (not billed) or
-    //            eight (billed) for MT direction
-    //
-    // see http://en.wikipedia.org/wiki/Short_code#Regional_differences for reference
-    //
-    // However, in order to loose match 650-555-1212 and 555-1212, we need to set the min match
-    // to 7.
-    @UnsupportedAppUsage
-    static final int MIN_MATCH = 7;
-
     /**
      * Checks a given number against the list of
      * emergency numbers provided by the RIL and SIM card.
@@ -1763,265 +1845,21 @@ public class PhoneNumberUtils {
     public static boolean isEmergencyNumber(int subId, String number) {
         // Return true only if the specified number *exactly* matches
         // one of the emergency numbers listed by the RIL / SIM.
-        return isEmergencyNumberInternal(subId, number, true /* useExactMatch */);
+        return isEmergencyNumberInternal(subId, number);
     }
 
     /**
-     * Checks if given number might *potentially* result in
-     * a call to an emergency service on the current network.
-     *
-     * Specifically, this method will return true if the specified number
-     * is an emergency number according to the list managed by the RIL or
-     * SIM, *or* if the specified number simply starts with the same
-     * digits as any of the emergency numbers listed in the RIL / SIM.
-     *
-     * This method is intended for internal use by the phone app when
-     * deciding whether to allow ACTION_CALL intents from 3rd party apps
-     * (where we're required to *not* allow emergency calls to be placed.)
-     *
-     * @param number the number to look up.
-     * @return true if the number is in the list of emergency numbers
-     *         listed in the RIL / SIM, *or* if the number starts with the
-     *         same digits as any of those emergency numbers.
-     *
-     * @deprecated Please use {@link TelephonyManager#isPotentialEmergencyNumber(String)}
-     *             instead.
-     *
-     * @hide
-     */
-    @Deprecated
-    public static boolean isPotentialEmergencyNumber(String number) {
-        return isPotentialEmergencyNumber(getDefaultVoiceSubId(), number);
-    }
-
-    /**
-     * Checks if given number might *potentially* result in
-     * a call to an emergency service on the current network.
-     *
-     * Specifically, this method will return true if the specified number
-     * is an emergency number according to the list managed by the RIL or
-     * SIM, *or* if the specified number simply starts with the same
-     * digits as any of the emergency numbers listed in the RIL / SIM.
-     *
-     * This method is intended for internal use by the phone app when
-     * deciding whether to allow ACTION_CALL intents from 3rd party apps
-     * (where we're required to *not* allow emergency calls to be placed.)
+     * Helper function for isEmergencyNumber(String, String) and.
      *
      * @param subId the subscription id of the SIM.
      * @param number the number to look up.
-     * @return true if the number is in the list of emergency numbers
-     *         listed in the RIL / SIM, *or* if the number starts with the
-     *         same digits as any of those emergency numbers.
-     *
-     * @deprecated Please use {@link TelephonyManager#isPotentialEmergencyNumber(String)}
-     *             instead.
-     *
-     * @hide
-     */
-    @UnsupportedAppUsage
-    @Deprecated
-    public static boolean isPotentialEmergencyNumber(int subId, String number) {
-        // Check against the emergency numbers listed by the RIL / SIM,
-        // and *don't* require an exact match.
-        return isEmergencyNumberInternal(subId, number, false /* useExactMatch */);
-    }
-
-    /**
-     * Helper function for isEmergencyNumber(String) and
-     * isPotentialEmergencyNumber(String).
-     *
-     * @param number the number to look up.
-     *
-     * @param useExactMatch if true, consider a number to be an emergency
-     *           number only if it *exactly* matches a number listed in
-     *           the RIL / SIM.  If false, a number is considered to be an
-     *           emergency number if it simply starts with the same digits
-     *           as any of the emergency numbers listed in the RIL / SIM.
-     *           (Setting useExactMatch to false allows you to identify
-     *           number that could *potentially* result in emergency calls
-     *           since many networks will actually ignore trailing digits
-     *           after a valid emergency number.)
-     *
-     * @return true if the number is in the list of emergency numbers
-     *         listed in the RIL / sim, otherwise return false.
-     */
-    private static boolean isEmergencyNumberInternal(String number, boolean useExactMatch) {
-        return isEmergencyNumberInternal(getDefaultVoiceSubId(), number, useExactMatch);
-    }
-
-    /**
-     * Helper function for isEmergencyNumber(String) and
-     * isPotentialEmergencyNumber(String).
-     *
-     * @param subId the subscription id of the SIM.
-     * @param number the number to look up.
-     *
-     * @param useExactMatch if true, consider a number to be an emergency
-     *           number only if it *exactly* matches a number listed in
-     *           the RIL / SIM.  If false, a number is considered to be an
-     *           emergency number if it simply starts with the same digits
-     *           as any of the emergency numbers listed in the RIL / SIM.
-     *           (Setting useExactMatch to false allows you to identify
-     *           number that could *potentially* result in emergency calls
-     *           since many networks will actually ignore trailing digits
-     *           after a valid emergency number.)
-     *
-     * @return true if the number is in the list of emergency numbers
-     *         listed in the RIL / sim, otherwise return false.
-     */
-    private static boolean isEmergencyNumberInternal(int subId, String number,
-            boolean useExactMatch) {
-        return isEmergencyNumberInternal(subId, number, null, useExactMatch);
-    }
-
-    /**
-     * Checks if a given number is an emergency number for a specific country.
-     *
-     * @param number the number to look up.
-     * @param defaultCountryIso the specific country which the number should be checked against
-     * @return if the number is an emergency number for the specific country, then return true,
-     * otherwise false
-     *
-     * @deprecated Please use {@link TelephonyManager#isEmergencyNumber(String)}
-     *             instead.
-     *
-     * @hide
-     */
-    @Deprecated
-    @UnsupportedAppUsage
-    public static boolean isEmergencyNumber(String number, String defaultCountryIso) {
-            return isEmergencyNumber(getDefaultVoiceSubId(), number, defaultCountryIso);
-    }
-
-    /**
-     * Checks if a given number is an emergency number for a specific country.
-     *
-     * @param subId the subscription id of the SIM.
-     * @param number the number to look up.
-     * @param defaultCountryIso the specific country which the number should be checked against
-     * @return if the number is an emergency number for the specific country, then return true,
-     * otherwise false
-     *
-     * @deprecated Please use {@link TelephonyManager#isEmergencyNumber(String)}
-     *             instead.
-     *
-     * @hide
-     */
-    @Deprecated
-    public static boolean isEmergencyNumber(int subId, String number, String defaultCountryIso) {
-        return isEmergencyNumberInternal(subId, number,
-                                         defaultCountryIso,
-                                         true /* useExactMatch */);
-    }
-
-    /**
-     * Checks if a given number might *potentially* result in a call to an
-     * emergency service, for a specific country.
-     *
-     * Specifically, this method will return true if the specified number
-     * is an emergency number in the specified country, *or* if the number
-     * simply starts with the same digits as any emergency number for that
-     * country.
-     *
-     * This method is intended for internal use by the phone app when
-     * deciding whether to allow ACTION_CALL intents from 3rd party apps
-     * (where we're required to *not* allow emergency calls to be placed.)
-     *
-     * @param number the number to look up.
-     * @param defaultCountryIso the specific country which the number should be checked against
-     * @return true if the number is an emergency number for the specific
-     *         country, *or* if the number starts with the same digits as
-     *         any of those emergency numbers.
-     *
-     * @deprecated Please use {@link TelephonyManager#isPotentialEmergencyNumber(String)}
-     *             instead.
-     *
-     * @hide
-     */
-    @Deprecated
-    public static boolean isPotentialEmergencyNumber(String number, String defaultCountryIso) {
-        return isPotentialEmergencyNumber(getDefaultVoiceSubId(), number, defaultCountryIso);
-    }
-
-    /**
-     * Checks if a given number might *potentially* result in a call to an
-     * emergency service, for a specific country.
-     *
-     * Specifically, this method will return true if the specified number
-     * is an emergency number in the specified country, *or* if the number
-     * simply starts with the same digits as any emergency number for that
-     * country.
-     *
-     * This method is intended for internal use by the phone app when
-     * deciding whether to allow ACTION_CALL intents from 3rd party apps
-     * (where we're required to *not* allow emergency calls to be placed.)
-     *
-     * @param subId the subscription id of the SIM.
-     * @param number the number to look up.
-     * @param defaultCountryIso the specific country which the number should be checked against
-     * @return true if the number is an emergency number for the specific
-     *         country, *or* if the number starts with the same digits as
-     *         any of those emergency numbers.
-     *
-     * @deprecated Please use {@link TelephonyManager#isPotentialEmergencyNumber(String)}
-     *             instead.
-     *
-     * @hide
-     */
-    @Deprecated
-    public static boolean isPotentialEmergencyNumber(int subId, String number,
-            String defaultCountryIso) {
-        return isEmergencyNumberInternal(subId, number,
-                                         defaultCountryIso,
-                                         false /* useExactMatch */);
-    }
-
-    /**
-     * Helper function for isEmergencyNumber(String, String) and
-     * isPotentialEmergencyNumber(String, String).
-     *
-     * @param number the number to look up.
-     * @param defaultCountryIso the specific country which the number should be checked against
-     * @param useExactMatch if true, consider a number to be an emergency
-     *           number only if it *exactly* matches a number listed in
-     *           the RIL / SIM.  If false, a number is considered to be an
-     *           emergency number if it simply starts with the same digits
-     *           as any of the emergency numbers listed in the RIL / SIM.
-     *
-     * @return true if the number is an emergency number for the specified country.
-     */
-    private static boolean isEmergencyNumberInternal(String number,
-                                                     String defaultCountryIso,
-                                                     boolean useExactMatch) {
-        return isEmergencyNumberInternal(getDefaultVoiceSubId(), number, defaultCountryIso,
-                useExactMatch);
-    }
-
-    /**
-     * Helper function for isEmergencyNumber(String, String) and
-     * isPotentialEmergencyNumber(String, String).
-     *
-     * @param subId the subscription id of the SIM.
-     * @param number the number to look up.
-     * @param defaultCountryIso the specific country which the number should be checked against
-     * @param useExactMatch if true, consider a number to be an emergency
-     *           number only if it *exactly* matches a number listed in
-     *           the RIL / SIM.  If false, a number is considered to be an
-     *           emergency number if it simply starts with the same digits
-     *           as any of the emergency numbers listed in the RIL / SIM.
-     *
      * @return true if the number is an emergency number for the specified country.
      * @hide
      */
-    private static boolean isEmergencyNumberInternal(int subId, String number,
-                                                     String defaultCountryIso,
-                                                     boolean useExactMatch) {
+    private static boolean isEmergencyNumberInternal(int subId, String number) {
+        //TODO: remove subid later. Keep it for now in case we need it later.
         try {
-            if (useExactMatch) {
                 return TelephonyManager.getDefault().isEmergencyNumber(number);
-            } else {
-                return TelephonyManager.getDefault().isPotentialEmergencyNumber(number);
-            }
         } catch (RuntimeException ex) {
             Rlog.e(LOG_TAG, "isEmergencyNumberInternal: RuntimeException: " + ex);
         }
@@ -2041,154 +1879,7 @@ public class PhoneNumberUtils {
      */
     @Deprecated
     public static boolean isLocalEmergencyNumber(Context context, String number) {
-        return isLocalEmergencyNumber(context, getDefaultVoiceSubId(), number);
-    }
-
-    /**
-     * Checks if a given number is an emergency number for the country that the user is in.
-     *
-     * @param subId the subscription id of the SIM.
-     * @param number the number to look up.
-     * @param context the specific context which the number should be checked against
-     * @return true if the specified number is an emergency number for the country the user
-     * is currently in.
-     *
-     * @deprecated Please use {@link TelephonyManager#isEmergencyNumber(String)}
-     *             instead.
-     *
-     * @hide
-     */
-    @Deprecated
-    @UnsupportedAppUsage
-    public static boolean isLocalEmergencyNumber(Context context, int subId, String number) {
-        return isLocalEmergencyNumberInternal(subId, number,
-                                              context,
-                                              true /* useExactMatch */);
-    }
-
-    /**
-     * Checks if a given number might *potentially* result in a call to an
-     * emergency service, for the country that the user is in. The current
-     * country is determined using the CountryDetector.
-     *
-     * Specifically, this method will return true if the specified number
-     * is an emergency number in the current country, *or* if the number
-     * simply starts with the same digits as any emergency number for the
-     * current country.
-     *
-     * This method is intended for internal use by the phone app when
-     * deciding whether to allow ACTION_CALL intents from 3rd party apps
-     * (where we're required to *not* allow emergency calls to be placed.)
-     *
-     * @param number the number to look up.
-     * @param context the specific context which the number should be checked against
-     * @return true if the specified number is an emergency number for a local country, based on the
-     *              CountryDetector.
-     *
-     * @see android.location.CountryDetector
-     *
-     * @deprecated Please use {@link TelephonyManager#isPotentialEmergencyNumber(String)}
-     *             instead.
-     *
-     * @hide
-     */
-    @Deprecated
-    @UnsupportedAppUsage
-    public static boolean isPotentialLocalEmergencyNumber(Context context, String number) {
-        return isPotentialLocalEmergencyNumber(context, getDefaultVoiceSubId(), number);
-    }
-
-    /**
-     * Checks if a given number might *potentially* result in a call to an
-     * emergency service, for the country that the user is in. The current
-     * country is determined using the CountryDetector.
-     *
-     * Specifically, this method will return true if the specified number
-     * is an emergency number in the current country, *or* if the number
-     * simply starts with the same digits as any emergency number for the
-     * current country.
-     *
-     * This method is intended for internal use by the phone app when
-     * deciding whether to allow ACTION_CALL intents from 3rd party apps
-     * (where we're required to *not* allow emergency calls to be placed.)
-     *
-     * @param subId the subscription id of the SIM.
-     * @param number the number to look up.
-     * @param context the specific context which the number should be checked against
-     * @return true if the specified number is an emergency number for a local country, based on the
-     *              CountryDetector.
-     *
-     * @deprecated Please use {@link TelephonyManager#isPotentialEmergencyNumber(String)}
-     *             instead.
-     *
-     * @hide
-     */
-    @UnsupportedAppUsage
-    @Deprecated
-    public static boolean isPotentialLocalEmergencyNumber(Context context, int subId,
-            String number) {
-        return isLocalEmergencyNumberInternal(subId, number,
-                                              context,
-                                              false /* useExactMatch */);
-    }
-
-    /**
-     * Helper function for isLocalEmergencyNumber() and
-     * isPotentialLocalEmergencyNumber().
-     *
-     * @param number the number to look up.
-     * @param context the specific context which the number should be checked against
-     * @param useExactMatch if true, consider a number to be an emergency
-     *           number only if it *exactly* matches a number listed in
-     *           the RIL / SIM.  If false, a number is considered to be an
-     *           emergency number if it simply starts with the same digits
-     *           as any of the emergency numbers listed in the RIL / SIM.
-     *
-     * @return true if the specified number is an emergency number for a
-     *              local country, based on the CountryDetector.
-     *
-     * @see android.location.CountryDetector
-     * @hide
-     */
-    private static boolean isLocalEmergencyNumberInternal(String number,
-                                                          Context context,
-                                                          boolean useExactMatch) {
-        return isLocalEmergencyNumberInternal(getDefaultVoiceSubId(), number, context,
-                useExactMatch);
-    }
-
-    /**
-     * Helper function for isLocalEmergencyNumber() and
-     * isPotentialLocalEmergencyNumber().
-     *
-     * @param subId the subscription id of the SIM.
-     * @param number the number to look up.
-     * @param context the specific context which the number should be checked against
-     * @param useExactMatch if true, consider a number to be an emergency
-     *           number only if it *exactly* matches a number listed in
-     *           the RIL / SIM.  If false, a number is considered to be an
-     *           emergency number if it simply starts with the same digits
-     *           as any of the emergency numbers listed in the RIL / SIM.
-     *
-     * @return true if the specified number is an emergency number for a
-     *              local country, based on the CountryDetector.
-     * @hide
-     */
-    private static boolean isLocalEmergencyNumberInternal(int subId, String number,
-                                                          Context context,
-                                                          boolean useExactMatch) {
-        String countryIso;
-        CountryDetector detector = (CountryDetector) context.getSystemService(
-                Context.COUNTRY_DETECTOR);
-        if (detector != null && detector.detectCountry() != null) {
-            countryIso = detector.detectCountry().getCountryIso();
-        } else {
-            Locale locale = context.getResources().getConfiguration().locale;
-            countryIso = locale.getCountry();
-            Rlog.w(LOG_TAG, "No CountryDetector; falling back to countryIso based on locale: "
-                    + countryIso);
-        }
-        return isEmergencyNumberInternal(subId, number, countryIso, useExactMatch);
+        return isEmergencyNumberInternal(getDefaultVoiceSubId(), number);
     }
 
     /**
@@ -2234,8 +1925,9 @@ public class PhoneNumberUtils {
      * to read the VM number.
      * @hide
      */
-    @UnsupportedAppUsage
-    public static boolean isVoiceMailNumber(Context context, int subId, String number) {
+    @SystemApi
+    public static boolean isVoiceMailNumber(@NonNull Context context, int subId,
+            @Nullable String number) {
         String vmNumber, mdn;
         try {
             final TelephonyManager tm;
@@ -2641,7 +2333,7 @@ public class PhoneNumberUtils {
             ps = NANP_IDP_STRING;
         } else {
             // in case, there is no IDD is found, we shouldn't convert it.
-            ps = SystemProperties.get(PROPERTY_OPERATOR_IDP_STRING, PLUS_SIGN_STRING);
+            ps = TelephonyProperties.operator_idp_string().orElse(PLUS_SIGN_STRING);
         }
         return ps;
     }
@@ -2721,8 +2413,8 @@ public class PhoneNumberUtils {
      * @param number
      * @return true if number contains @
      */
-    @UnsupportedAppUsage
-    public static boolean isUriNumber(String number) {
+    @SystemApi
+    public static boolean isUriNumber(@Nullable String number) {
         // Note we allow either "@" or "%40" to indicate a URI, in case
         // the passed-in string is URI-escaped.  (Neither "@" nor "%40"
         // will ever be found in a legal PSTN number.)
@@ -2739,8 +2431,8 @@ public class PhoneNumberUtils {
      *
      * @hide
      */
-    @UnsupportedAppUsage
-    public static String getUsernameFromUriNumber(String number) {
+    @SystemApi
+    public static @NonNull String getUsernameFromUriNumber(@NonNull String number) {
         // The delimiter between username and domain name can be
         // either "@" or "%40" (the URI-escaped equivalent.)
         int delimiterIndex = number.indexOf('@');
@@ -3212,7 +2904,7 @@ public class PhoneNumberUtils {
         }
 
         // The conversion map is not defined (this is default). Skip conversion.
-        if (sConvertToEmergencyMap == null || sConvertToEmergencyMap.length == 0 ) {
+        if (sConvertToEmergencyMap == null || sConvertToEmergencyMap.length == 0) {
             return number;
         }
 
@@ -3247,5 +2939,64 @@ public class PhoneNumberUtils {
             }
         }
         return number;
+    }
+
+    /**
+     * Determines if two phone numbers are the same.
+     * <p>
+     * Matching is based on <a href="https://github.com/google/libphonenumber>libphonenumber</a>.
+     * Unlike {@link #compare(String, String)}, matching takes into account national
+     * dialing plans rather than simply matching the last 7 digits of the two phone numbers. As a
+     * result, it is expected that some numbers which would match using the previous method will no
+     * longer match using this new approach.
+     *
+     * @param number1
+     * @param number2
+     * @param defaultCountryIso The lowercase two letter ISO 3166-1 country code. Used when parsing
+     *                          the phone numbers where it is not possible to determine the country
+     *                          associated with a phone number based on the number alone. It
+     *                          is recommended to pass in
+     *                          {@link TelephonyManager#getNetworkCountryIso()}.
+     * @return True if the two given phone number are same.
+     */
+    public static boolean areSamePhoneNumber(@NonNull String number1,
+            @NonNull String number2, @NonNull String defaultCountryIso) {
+        PhoneNumberUtil util = PhoneNumberUtil.getInstance();
+        PhoneNumber n1;
+        PhoneNumber n2;
+
+        if (defaultCountryIso != null) {
+            defaultCountryIso = defaultCountryIso.toUpperCase(Locale.ROOT);
+        }
+
+        try {
+            n1 = util.parseAndKeepRawInput(number1, defaultCountryIso);
+            n2 = util.parseAndKeepRawInput(number2, defaultCountryIso);
+        } catch (NumberParseException e) {
+            return false;
+        }
+
+        PhoneNumberUtil.MatchType matchType = util.isNumberMatch(n1, n2);
+        if (matchType == PhoneNumberUtil.MatchType.EXACT_MATCH
+                || matchType == PhoneNumberUtil.MatchType.NSN_MATCH) {
+            return true;
+        } else if (matchType == PhoneNumberUtil.MatchType.SHORT_NSN_MATCH) {
+            return (n1.getNationalNumber() == n2.getNationalNumber()
+                    && n1.getCountryCode() == n2.getCountryCode());
+        } else {
+            return false;
+        }
+    }
+
+    /**
+     * Check if the number is for Wireless Priority Service call.
+     * @param number  The phone number used for WPS call.
+     * @return {@code true} if number matches WPS pattern and {@code false} otherwise.
+     */
+    @FlaggedApi(Flags.FLAG_ENABLE_WPS_CHECK_API_FLAG)
+    public static boolean isWpsCallNumber(@NonNull String number) {
+        return (number != null) && (number.startsWith(PREFIX_WPS)
+                || number.startsWith(PREFIX_WPS_CLIR_ACTIVATE)
+                || number.startsWith(PREFIX_WPS_CLIR_DEACTIVATE));
     }
 }

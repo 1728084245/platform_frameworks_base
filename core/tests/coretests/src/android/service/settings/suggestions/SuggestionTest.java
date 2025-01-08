@@ -24,9 +24,10 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
 import android.os.Parcel;
-import android.support.test.InstrumentationRegistry;
-import android.support.test.filters.SmallTest;
-import android.support.test.runner.AndroidJUnit4;
+
+import androidx.test.InstrumentationRegistry;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -47,7 +48,8 @@ public class SuggestionTest {
     public void setUp() {
         final Context context = InstrumentationRegistry.getContext();
         mTestIntent = PendingIntent.getActivity(context, 0 /* requestCode */,
-                new Intent(), 0 /* flags */);
+                new Intent().setPackage(context.getPackageName()),
+                PendingIntent.FLAG_MUTABLE /* flags */);
         mIcon = Icon.createWithBitmap(Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888));
     }
 

@@ -29,6 +29,7 @@ import android.text.format.DateUtils;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.View;
+import android.view.inspector.InspectableProperty;
 import android.widget.RemoteViews.RemoteView;
 
 import com.android.internal.R;
@@ -115,6 +116,8 @@ public class Chronometer extends TextView {
 
         final TypedArray a = context.obtainStyledAttributes(
                 attrs, com.android.internal.R.styleable.Chronometer, defStyleAttr, defStyleRes);
+        saveAttributeDataForStyleable(context, com.android.internal.R.styleable.Chronometer,
+                attrs, a, defStyleAttr, defStyleRes);
         setFormat(a.getString(R.styleable.Chronometer_format));
         setCountDown(a.getBoolean(R.styleable.Chronometer_countDown, false));
         a.recycle();
@@ -145,6 +148,7 @@ public class Chronometer extends TextView {
      *
      * @see #setCountDown(boolean)
      */
+    @InspectableProperty
     public boolean isCountDown() {
         return mCountDown;
     }
@@ -206,6 +210,7 @@ public class Chronometer extends TextView {
     /**
      * Returns the current format string as set through {@link #setFormat}.
      */
+    @InspectableProperty
     public String getFormat() {
         return mFormat;
     }
@@ -284,8 +289,7 @@ public class Chronometer extends TextView {
 
     private synchronized void updateText(long now) {
         mNow = now;
-        long seconds = mCountDown ? mBase - now : now - mBase;
-        seconds /= 1000;
+        long seconds = Math.round((mCountDown ? mBase - now - 499 : now - mBase) / 1000f);
         boolean negative = false;
         if (seconds < 0) {
             seconds = -seconds;
@@ -323,7 +327,7 @@ public class Chronometer extends TextView {
             if (running) {
                 updateText(SystemClock.elapsedRealtime());
                 dispatchChronometerTick();
-                postDelayed(mTickRunnable, 1000);
+                postTickOnNextSecond();
             } else {
                 removeCallbacks(mTickRunnable);
             }
@@ -337,10 +341,26 @@ public class Chronometer extends TextView {
             if (mRunning) {
                 updateText(SystemClock.elapsedRealtime());
                 dispatchChronometerTick();
-                postDelayed(mTickRunnable, 1000);
+                postTickOnNextSecond();
             }
         }
     };
+
+    private void postTickOnNextSecond() {
+        long nowMillis = mNow;
+        long delayMillis;
+        if (mCountDown) {
+            delayMillis = (mBase - nowMillis) % 1000;
+            if (delayMillis <= 0) {
+                delayMillis += 1000;
+            }
+        } else {
+            delayMillis = 1000 - (Math.abs(nowMillis - mBase) % 1000);
+        }
+        // Aim for 1 millisecond into the next second so we don't update exactly on the second
+        delayMillis++;
+        postDelayed(mTickRunnable, delayMillis);
+    }
 
     void dispatchChronometerTick() {
         if (mOnChronometerTickListener != null) {

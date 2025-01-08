@@ -21,9 +21,9 @@ import android.content.ContentResolver;
 import android.database.Cursor;
 import android.net.Uri;
 import android.test.ProviderTestCase2;
-import android.test.suitebuilder.annotation.LargeTest;
-import android.test.suitebuilder.annotation.MediumTest;
-import android.test.suitebuilder.annotation.Suppress;
+
+import androidx.test.filters.MediumTest;
+import androidx.test.filters.Suppress;
 
 /**
  * ProviderTestCase that performs unit tests of SearchRecentSuggestionsProvider.
@@ -316,7 +316,7 @@ public class SearchRecentSuggestionsProviderTest extends ProviderTestCase2<TestP
     private void checkResultCounts(String queryString, int minRows, int maxRows,
             String matchDisplay1, String matchDisplay2) {
 
-        // get the cursor and apply sanity checks to result
+        // get the cursor and apply validity checks to result
         Cursor c = getQueryCursor(queryString);
         assertNotNull(c);
         assertTrue("Insufficient rows in filtered cursor", c.getCount() >= minRows);

@@ -22,12 +22,12 @@ import static android.system.OsConstants.SO_BINDTODEVICE;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.annotation.TestApi;
-import android.net.NetworkUtils;
 import android.system.ErrnoException;
 import android.system.NetlinkSocketAddress;
 import android.system.Os;
 import android.system.PacketSocketAddress;
+
+import com.android.internal.net.NetworkUtilsInternal;
 
 import libcore.io.IoBridge;
 
@@ -40,7 +40,6 @@ import java.net.SocketAddress;
  * @hide
  */
 @SystemApi
-@TestApi
 public final class SocketUtils {
     /**
      * Create a raw datagram socket that is bound to an interface.
@@ -53,7 +52,7 @@ public final class SocketUtils {
         // of struct ifreq is a NULL-terminated interface name.
         // TODO: add a setsockoptString()
         Os.setsockoptIfreq(socket, SOL_SOCKET, SO_BINDTODEVICE, iface);
-        NetworkUtils.protectFromVpn(socket);
+        NetworkUtilsInternal.protectFromVpn(socket);
     }
 
     /**
@@ -66,6 +65,10 @@ public final class SocketUtils {
 
     /**
      * Make socket address that packet sockets can bind to.
+     *
+     * @param protocol the layer 2 protocol of the packets to receive. One of the {@code ETH_P_*}
+     *                 constants in {@link android.system.OsConstants}.
+     * @param ifIndex the interface index on which packets will be received.
      */
     @NonNull
     public static SocketAddress makePacketSocketAddress(int protocol, int ifIndex) {
@@ -77,11 +80,33 @@ public final class SocketUtils {
 
     /**
      * Make a socket address that packet socket can send packets to.
+     * @deprecated Use {@link #makePacketSocketAddress(int, int, byte[])} instead.
+     *
+     * @param ifIndex the interface index on which packets will be sent.
+     * @param hwAddr the hardware address to which packets will be sent.
      */
+    @Deprecated
     @NonNull
     public static SocketAddress makePacketSocketAddress(int ifIndex, @NonNull byte[] hwAddr) {
         return new PacketSocketAddress(
                 0 /* sll_protocol */,
+                ifIndex /* sll_ifindex */,
+                hwAddr /* sll_addr */);
+    }
+
+    /**
+     * Make a socket address that a packet socket can send packets to.
+     *
+     * @param protocol the layer 2 protocol of the packets to send. One of the {@code ETH_P_*}
+     *                 constants in {@link android.system.OsConstants}.
+     * @param ifIndex the interface index on which packets will be sent.
+     * @param hwAddr the hardware address to which packets will be sent.
+     */
+    @NonNull
+    public static SocketAddress makePacketSocketAddress(int protocol, int ifIndex,
+            @NonNull byte[] hwAddr) {
+        return new PacketSocketAddress(
+                protocol /* sll_protocol */,
                 ifIndex /* sll_ifindex */,
                 hwAddr /* sll_addr */);
     }

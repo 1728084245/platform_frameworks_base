@@ -15,6 +15,10 @@
  */
 package com.android.systemui.statusbar.policy;
 
+import android.app.admin.DeviceAdminInfo;
+import android.content.ComponentName;
+import android.graphics.drawable.Drawable;
+
 import com.android.systemui.Dumpable;
 import com.android.systemui.statusbar.policy.SecurityController.SecurityControllerCallback;
 
@@ -24,13 +28,28 @@ public interface SecurityController extends CallbackController<SecurityControlle
     boolean isDeviceManaged();
     boolean hasProfileOwner();
     boolean hasWorkProfile();
+    /** Whether the work profile is turned on. */
+    boolean isWorkProfileOn();
+    /** Whether this device is organization-owned with a work profile **/
+    boolean isProfileOwnerOfOrganizationOwnedDevice();
     String getDeviceOwnerName();
     String getProfileOwnerName();
     CharSequence getDeviceOwnerOrganizationName();
     CharSequence getWorkProfileOrganizationName();
+
+    boolean isFinancedDevice();
+
+    /** Device owner component even if not on this user. **/
+    ComponentName getDeviceOwnerComponentOnAnyUser();
+    // TODO(b/259908270): remove
+    /** Device owner type for a device owner. **/
+    @Deprecated
+    int getDeviceOwnerType(ComponentName admin);
     boolean isNetworkLoggingEnabled();
     boolean isVpnEnabled();
     boolean isVpnRestricted();
+    /** Whether the VPN network is validated. */
+    boolean isVpnValidated();
     /** Whether the VPN app should use branded VPN iconography.  */
     boolean isVpnBranded();
     String getPrimaryVpnName();
@@ -38,6 +57,14 @@ public interface SecurityController extends CallbackController<SecurityControlle
     boolean hasCACertInCurrentUser();
     boolean hasCACertInWorkProfile();
     void onUserSwitched(int newUserId);
+    /** Whether or not parental controls is enabled */
+    boolean isParentalControlsEnabled();
+    /** DeviceAdminInfo for active admin */
+    DeviceAdminInfo getDeviceAdminInfo();
+    /** Icon for admin */
+    Drawable getIcon(DeviceAdminInfo info);
+    /** Label for admin */
+    CharSequence getLabel(DeviceAdminInfo info);
 
     public interface SecurityControllerCallback {
         void onStateChanged();

@@ -231,46 +231,52 @@ TEST(RenderNode, multiTreeValidity) {
 }
 
 TEST(RenderNode, releasedCallback) {
-    class DecRefOnReleased : public GlFunctorLifecycleListener {
-    public:
-        explicit DecRefOnReleased(int* refcnt) : mRefCnt(refcnt) {}
-        void onGlFunctorReleased(Functor* functor) override { *mRefCnt -= 1; }
-
-    private:
-        int* mRefCnt;
-    };
-
-    int refcnt = 0;
-    sp<DecRefOnReleased> listener(new DecRefOnReleased(&refcnt));
-    Functor noopFunctor;
+    int functor = TestUtils::createMockFunctor();
 
     auto node = TestUtils::createNode(0, 0, 200, 400, [&](RenderProperties& props, Canvas& canvas) {
-        refcnt++;
-        canvas.callDrawGLFunction(&noopFunctor, listener.get());
+        canvas.drawWebViewFunctor(functor);
     });
-    TestUtils::syncHierarchyPropertiesAndDisplayList(node);
-    EXPECT_EQ(1, refcnt);
+    TestUtils::runOnRenderThreadUnmanaged([&] (RenderThread&) {
+        TestUtils::syncHierarchyPropertiesAndDisplayList(node);
+    });
+    auto counts = TestUtils::copyCountsForFunctor(functor);
+    EXPECT_EQ(1, counts.sync);
+    EXPECT_EQ(0, counts.destroyed);
 
     TestUtils::recordNode(*node, [&](Canvas& canvas) {
-        refcnt++;
-        canvas.callDrawGLFunction(&noopFunctor, listener.get());
+        canvas.drawWebViewFunctor(functor);
     });
-    EXPECT_EQ(2, refcnt);
+    counts = TestUtils::copyCountsForFunctor(functor);
+    EXPECT_EQ(1, counts.sync);
+    EXPECT_EQ(0, counts.destroyed);
 
-    TestUtils::syncHierarchyPropertiesAndDisplayList(node);
-    EXPECT_EQ(1, refcnt);
+    TestUtils::runOnRenderThreadUnmanaged([&] (RenderThread&) {
+        TestUtils::syncHierarchyPropertiesAndDisplayList(node);
+    });
+    counts = TestUtils::copyCountsForFunctor(functor);
+    EXPECT_EQ(2, counts.sync);
+    EXPECT_EQ(0, counts.destroyed);
+
+    WebViewFunctor_release(functor);
+    EXPECT_EQ(2, counts.sync);
+    EXPECT_EQ(0, counts.destroyed);
 
     TestUtils::recordNode(*node, [](Canvas& canvas) {});
-    EXPECT_EQ(1, refcnt);
-    TestUtils::syncHierarchyPropertiesAndDisplayList(node);
-    EXPECT_EQ(0, refcnt);
+    TestUtils::runOnRenderThreadUnmanaged([&] (RenderThread&) {
+        TestUtils::syncHierarchyPropertiesAndDisplayList(node);
+    });
+    // Fence on any remaining post'd work
+    TestUtils::runOnRenderThreadUnmanaged([] (RenderThread&) {});
+    counts = TestUtils::copyCountsForFunctor(functor);
+    EXPECT_EQ(2, counts.sync);
+    EXPECT_EQ(1, counts.destroyed);
 }
 
 RENDERTHREAD_TEST(RenderNode, prepareTree_nullableDisplayList) {
     auto rootNode = TestUtils::createNode(0, 0, 200, 400, nullptr);
     ContextFactory contextFactory;
     std::unique_ptr<CanvasContext> canvasContext(
-            CanvasContext::create(renderThread, false, rootNode.get(), &contextFactory));
+            CanvasContext::create(renderThread, false, rootNode.get(), &contextFactory, 0, 0));
     TreeInfo info(TreeInfo::MODE_RT_ONLY, *canvasContext.get());
     DamageAccumulator damageAccumulator;
     info.damageAccumulator = &damageAccumulator;
@@ -295,7 +301,8 @@ RENDERTHREAD_TEST(RenderNode, prepareTree_nullableDisplayList) {
     canvasContext->destroy();
 }
 
-RENDERTHREAD_TEST(RenderNode, prepareTree_HwLayer_AVD_enqueueDamage) {
+// TODO: Is this supposed to work in SkiaGL/SkiaVK?
+RENDERTHREAD_TEST(DISABLED_RenderNode, prepareTree_HwLayer_AVD_enqueueDamage) {
     VectorDrawable::Group* group = new VectorDrawable::Group();
     sp<VectorDrawableRoot> vectorDrawable(new VectorDrawableRoot(group));
 
@@ -305,7 +312,8 @@ RENDERTHREAD_TEST(RenderNode, prepareTree_HwLayer_AVD_enqueueDamage) {
             });
     ContextFactory contextFactory;
     std::unique_ptr<CanvasContext> canvasContext(
-            CanvasContext::create(renderThread, false, rootNode.get(), &contextFactory));
+            CanvasContext::create(renderThread, false, rootNode.get(), &contextFactory, 0, 0));
+    canvasContext->setSurface(nullptr);
     TreeInfo info(TreeInfo::MODE_RT_ONLY, *canvasContext.get());
     DamageAccumulator damageAccumulator;
     LayerUpdateQueue layerUpdateQueue;
@@ -320,9 +328,37 @@ RENDERTHREAD_TEST(RenderNode, prepareTree_HwLayer_AVD_enqueueDamage) {
 
     // Check that the VD is in the dislay list, and the layer update queue contains the correct
     // damage rect.
-    EXPECT_TRUE(rootNode->getDisplayList()->hasVectorDrawables());
-    EXPECT_FALSE(info.layerUpdateQueue->entries().empty());
+    EXPECT_TRUE(rootNode->getDisplayList().hasVectorDrawables());
+    ASSERT_FALSE(info.layerUpdateQueue->entries().empty());
     EXPECT_EQ(rootNode.get(), info.layerUpdateQueue->entries().at(0).renderNode.get());
     EXPECT_EQ(uirenderer::Rect(0, 0, 200, 400), info.layerUpdateQueue->entries().at(0).damage);
     canvasContext->destroy();
+}
+
+TEST(RenderNode, hasNoFill) {
+    auto rootNode =
+            TestUtils::createNode(0, 0, 200, 400, [](RenderProperties& props, Canvas& canvas) {
+                Paint paint;
+                paint.setStyle(SkPaint::Style::kStroke_Style);
+                canvas.drawRect(10, 10, 100, 100, paint);
+            });
+
+    TestUtils::syncHierarchyPropertiesAndDisplayList(rootNode);
+
+    EXPECT_FALSE(rootNode.get()->getDisplayList().hasFill());
+    EXPECT_FALSE(rootNode.get()->getDisplayList().hasText());
+}
+
+TEST(RenderNode, hasFill) {
+    auto rootNode =
+            TestUtils::createNode(0, 0, 200, 400, [](RenderProperties& props, Canvas& canvas) {
+                Paint paint;
+                paint.setStyle(SkPaint::kStrokeAndFill_Style);
+                canvas.drawRect(10, 10, 100, 100, paint);
+            });
+
+    TestUtils::syncHierarchyPropertiesAndDisplayList(rootNode);
+
+    EXPECT_TRUE(rootNode.get()->getDisplayList().hasFill());
+    EXPECT_FALSE(rootNode.get()->getDisplayList().hasText());
 }

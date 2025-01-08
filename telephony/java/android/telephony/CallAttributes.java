@@ -17,10 +17,11 @@
 package android.telephony;
 
 import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.SystemApi;
 import android.os.Parcel;
 import android.os.Parcelable;
-import android.telephony.TelephonyManager.NetworkType;
+import android.telephony.Annotation.NetworkType;
 
 import java.util.Objects;
 
@@ -28,8 +29,10 @@ import java.util.Objects;
  * Contains information about a call's attributes as passed up from the HAL. If there are multiple
  * ongoing calls, the CallAttributes will pertain to the call in the foreground.
  * @hide
+ * @deprecated use {@link CallState} for call information for each call.
  */
 @SystemApi
+@Deprecated
 public final class CallAttributes implements Parcelable {
     private PreciseCallState mPreciseCallState;
     @NetworkType
@@ -44,6 +47,7 @@ public final class CallAttributes implements Parcelable {
         this.mCallQuality = callQuality;
     }
 
+    @NonNull
     @Override
     public String toString() {
         return "mPreciseCallState=" + mPreciseCallState + " mNetworkType=" + mNetworkType
@@ -51,9 +55,9 @@ public final class CallAttributes implements Parcelable {
     }
 
     private CallAttributes(Parcel in) {
-        this.mPreciseCallState = in.readParcelable(PreciseCallState.class.getClassLoader());
+        this.mPreciseCallState = in.readParcelable(PreciseCallState.class.getClassLoader(), android.telephony.PreciseCallState.class);
         this.mNetworkType = in.readInt();
-        this.mCallQuality = in.readParcelable(CallQuality.class.getClassLoader());
+        this.mCallQuality = in.readParcelable(CallQuality.class.getClassLoader(), android.telephony.CallQuality.class);
     }
 
     // getters
@@ -109,7 +113,7 @@ public final class CallAttributes implements Parcelable {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (o == null || !(o instanceof CallAttributes) || hashCode() != o.hashCode()) {
             return false;
         }
@@ -128,20 +132,20 @@ public final class CallAttributes implements Parcelable {
     /**
      * {@link Parcelable#describeContents}
      */
-    public @Parcelable.ContentsFlags int describeContents() {
+    public int describeContents() {
         return 0;
     }
 
     /**
      * {@link Parcelable#writeToParcel}
      */
-    public void writeToParcel(Parcel dest, @Parcelable.WriteFlags int flags) {
+    public void writeToParcel(Parcel dest, int flags) {
         dest.writeParcelable(mPreciseCallState, flags);
         dest.writeInt(mNetworkType);
         dest.writeParcelable(mCallQuality, flags);
     }
 
-    public static final Parcelable.Creator<CallAttributes> CREATOR = new Parcelable.Creator() {
+    public static final @android.annotation.NonNull Parcelable.Creator<CallAttributes> CREATOR = new Parcelable.Creator() {
         public CallAttributes createFromParcel(Parcel in) {
             return new CallAttributes(in);
         }

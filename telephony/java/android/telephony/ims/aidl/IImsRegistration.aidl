@@ -28,4 +28,10 @@ interface IImsRegistration {
    int getRegistrationTechnology();
    oneway void addRegistrationCallback(IImsRegistrationCallback c);
    oneway void removeRegistrationCallback(IImsRegistrationCallback c);
+   oneway void addEmergencyRegistrationCallback(IImsRegistrationCallback c);
+   oneway void removeEmergencyRegistrationCallback(IImsRegistrationCallback c);
+   oneway void triggerFullNetworkRegistration(int sipCode, String sipReason);
+   oneway void triggerUpdateSipDelegateRegistration();
+   oneway void triggerSipDelegateDeregistration();
+   oneway void triggerDeregistration(int reason);
 }

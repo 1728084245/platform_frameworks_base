@@ -17,6 +17,16 @@
 // ==========================================================
 // Build the host executable: protoc-gen-javastream
 // ==========================================================
+
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_base_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_base_license"],
+}
+
 cc_defaults {
     name: "protoc-gen-stream-defaults",
     srcs: [
@@ -29,8 +39,34 @@ cc_defaults {
         "-Werror",
     ],
 
-    shared_libs: ["libprotoc"],
+    static_libs: ["libprotoc"],
 }
+
+// ==========================================================
+// Build the host static library: java_streaming_proto_lib
+// ==========================================================
+
+cc_library_host_static {
+    name: "java_streaming_proto_lib",
+    defaults: ["protoc-gen-stream-defaults"],
+    target: {
+        darwin: {
+            cflags: ["-D_DARWIN_UNLIMITED_STREAMS"],
+        },
+    },
+    cflags: [
+        "-Wno-format-y2k",
+        "-DSTATIC_ANDROIDFW_FOR_TOOLS",
+    ],
+
+    srcs: [
+        "java/java_proto_stream_code_generator.cpp",
+    ],
+}
+
+// ==========================================================
+// Build the host executable: protoc-gen-javastream
+// ==========================================================
 
 cc_binary_host {
     name: "protoc-gen-javastream",
@@ -39,7 +75,12 @@ cc_binary_host {
     ],
 
     defaults: ["protoc-gen-stream-defaults"],
+    static_libs: ["java_streaming_proto_lib"],
 }
+
+// ==========================================================
+// Build the host executable: protoc-gen-cppstream
+// ==========================================================
 
 cc_binary_host {
     name: "protoc-gen-cppstream",
@@ -51,16 +92,33 @@ cc_binary_host {
 }
 
 // ==========================================================
+// Build the host tests: StreamingProtoTest
+// ==========================================================
+
+cc_test_host {
+    name: "StreamingProtoTest",
+    defaults: ["protoc-gen-stream-defaults"],
+    srcs: [
+        "test/unit/**/*.cpp",
+    ],
+    static_libs: [
+        "java_streaming_proto_lib",
+        "libgmock",
+        "libgtest",
+    ],
+}
+
+// ==========================================================
 // Build the java test
 // ==========================================================
+
 java_library {
-    name: "StreamingProtoTest",
+    name: "StreamingProtoJavaIntegrationTest",
     srcs: [
-        "test/**/*.java",
-        "test/**/*.proto",
+        "test/integration/**/*.java",
+        "test/integration/**/*.proto",
     ],
     proto: {
-        plugin: "javastream",
+        type: "stream",
     },
-    static_libs: ["libprotobuf-java-lite"],
 }

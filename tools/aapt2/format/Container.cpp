@@ -19,6 +19,8 @@
 #include "android-base/scopeguard.h"
 #include "android-base/stringprintf.h"
 
+#include "trace/TraceBuffer.h"
+
 using ::android::base::StringPrintf;
 using ::google::protobuf::io::CodedInputStream;
 using ::google::protobuf::io::CodedOutputStream;
@@ -28,6 +30,7 @@ namespace aapt {
 
 constexpr const static uint32_t kContainerFormatMagic = 0x54504141u;
 constexpr const static uint32_t kContainerFormatVersion = 1u;
+constexpr const static size_t kPaddingAlignment = 4u;
 
 ContainerWriter::ContainerWriter(ZeroCopyOutputStream* out, size_t entry_count)
     : out_(out), total_entry_count_(entry_count), current_entry_count_(0u) {
@@ -47,11 +50,17 @@ ContainerWriter::ContainerWriter(ZeroCopyOutputStream* out, size_t entry_count)
   }
 }
 
-inline static void WritePadding(int padding, CodedOutputStream* out) {
-  if (padding < 4) {
-    const uint32_t zero = 0u;
-    out->WriteRaw(&zero, padding);
-  }
+inline static size_t CalculatePaddingForAlignment(size_t size) {
+  size_t overage = size % kPaddingAlignment;
+  return overage == 0 ? 0 : kPaddingAlignment - overage;
+}
+
+inline static void WritePadding(size_t padding, CodedOutputStream* out) {
+  CHECK(padding < kPaddingAlignment);
+  const uint32_t zero = 0u;
+  static_assert(sizeof(zero) >= kPaddingAlignment, "Not enough source bytes for padding");
+
+  out->WriteRaw(&zero, padding);
 }
 
 bool ContainerWriter::AddResTableEntry(const pb::ResourceTable& table) {
@@ -67,8 +76,8 @@ bool ContainerWriter::AddResTableEntry(const pb::ResourceTable& table) {
   coded_out.WriteLittleEndian32(kResTable);
 
   // Write the aligned size.
-  const ::google::protobuf::uint64 size = table.ByteSize();
-  const int padding = 4 - (size % 4);
+  const size_t size = table.ByteSizeLong();
+  const int padding = CalculatePaddingForAlignment(size);
   coded_out.WriteLittleEndian64(size);
 
   // Write the table.
@@ -85,7 +94,7 @@ bool ContainerWriter::AddResTableEntry(const pb::ResourceTable& table) {
 }
 
 bool ContainerWriter::AddResFileEntry(const pb::internal::CompiledFile& file,
-                                      io::KnownSizeInputStream* in) {
+                                      android::KnownSizeInputStream* in) {
   if (current_entry_count_ >= total_entry_count_) {
     error_ = "too many entries being serialized";
     return false;
@@ -100,10 +109,10 @@ bool ContainerWriter::AddResFileEntry(const pb::internal::CompiledFile& file,
   coded_out.WriteLittleEndian32(kResFile);
 
   // Write the aligned size.
-  const ::google::protobuf::uint32 header_size = file.ByteSize();
-  const int header_padding = 4 - (header_size % 4);
+  const size_t header_size = file.ByteSizeLong();
+  const int header_padding = CalculatePaddingForAlignment(header_size);
   const ::google::protobuf::uint64 data_size = in->TotalSize();
-  const int data_padding = 4 - (data_size % 4);
+  const int data_padding = CalculatePaddingForAlignment(data_size);
   coded_out.WriteLittleEndian64(kResFileEntryHeaderSize + header_size + header_padding + data_size +
                                 data_padding);
 
@@ -171,6 +180,7 @@ ContainerEntryType ContainerReaderEntry::Type() const {
 }
 
 bool ContainerReaderEntry::GetResTable(pb::ResourceTable* out_table) {
+  TRACE_CALL();
   CHECK(type_ == ContainerEntryType::kResTable) << "reading a kResTable when the type is kResFile";
   if (length_ > std::numeric_limits<int>::max()) {
     reader_->error_ = StringPrintf("entry length %zu is too large", length_);
@@ -254,13 +264,14 @@ std::string ContainerReaderEntry::GetError() const {
   return reader_->GetError();
 }
 
-ContainerReader::ContainerReader(io::InputStream* in)
+ContainerReader::ContainerReader(android::InputStream* in)
     : in_(in),
       adaptor_(in),
       coded_in_(&adaptor_),
       total_entry_count_(0u),
       current_entry_count_(0u),
       entry_(this) {
+  TRACE_CALL();
   ::google::protobuf::uint32 magic;
   if (!coded_in_.ReadLittleEndian32(&magic)) {
     std::ostringstream error;
@@ -270,7 +281,8 @@ ContainerReader::ContainerReader(io::InputStream* in)
   }
 
   if (magic != kContainerFormatMagic) {
-    error_ = "magic value doesn't match AAPT";
+    error_ =
+        StringPrintf("magic value is 0x%08x but AAPT expects 0x%08x", magic, kContainerFormatMagic);
     return;
   }
 

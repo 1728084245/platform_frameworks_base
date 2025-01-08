@@ -25,7 +25,7 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
-import android.support.v7.app.AppCompatActivity;
+import androidx.appcompat.app.AppCompatActivity;
 import android.view.View;
 
 /**
@@ -66,18 +66,29 @@ public class FullscreenOverdrawActivity extends AppCompatActivity {
             return PixelFormat.OPAQUE;
         }
     }
+
+    private ObjectAnimator mObjectAnimator;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         OverdrawDrawable overdraw = new OverdrawDrawable();
         getWindow().setBackgroundDrawable(overdraw);
-
         setContentView(new View(this));
 
-        ObjectAnimator objectAnimator = ObjectAnimator.ofInt(overdraw, "colorValue", 0, 255);
-        objectAnimator.setRepeatMode(ValueAnimator.REVERSE);
-        objectAnimator.setRepeatCount(ValueAnimator.INFINITE);
-        objectAnimator.start();
+        mObjectAnimator = ObjectAnimator.ofInt(overdraw, "colorValue", 0, 255);
+        mObjectAnimator.setRepeatMode(ValueAnimator.REVERSE);
+        mObjectAnimator.setRepeatCount(ValueAnimator.INFINITE);
+
+        mObjectAnimator.start();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (mObjectAnimator != null) {
+            mObjectAnimator.cancel();
+        }
     }
 }

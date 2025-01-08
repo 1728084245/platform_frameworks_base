@@ -19,21 +19,23 @@ package com.android.benchmark.app;
 import android.content.Intent;
 import android.os.AsyncTask;
 import android.os.Bundle;
-import android.support.design.widget.FloatingActionButton;
-import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
 import android.view.LayoutInflater;
-import android.view.View;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.ExpandableListView;
 import android.widget.Toast;
 
-import com.android.benchmark.registry.BenchmarkRegistry;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.Toolbar;
+
 import com.android.benchmark.R;
+import com.android.benchmark.registry.BenchmarkRegistry;
 import com.android.benchmark.results.GlobalResultsStore;
+
+import com.google.android.material.floatingactionbutton.FloatingActionButton;
 
 import java.io.IOException;
 import java.util.LinkedList;
@@ -138,9 +140,9 @@ public class HomeActivity extends AppCompatActivity implements Button.OnClickLis
         handleNextBenchmark();
     }
 
+    @SuppressWarnings("MissingSuperCall") // TODO: Fix me
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-
     }
 
     private void handleNextBenchmark() {

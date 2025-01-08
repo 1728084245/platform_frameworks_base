@@ -17,24 +17,32 @@
 package android.graphics;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
 import android.content.res.AssetManager;
 import android.content.res.Resources;
-import android.graphics.Paint;
-import android.graphics.Typeface;
-import android.support.test.InstrumentationRegistry;
-import android.support.test.runner.AndroidJUnit4;
-import android.test.suitebuilder.annotation.LargeTest;
-import android.test.suitebuilder.annotation.MediumTest;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.graphics.fonts.FontFamily;
+import android.graphics.fonts.SystemFonts;
+import android.os.SharedMemory;
+import android.text.FontConfig;
+import android.util.ArrayMap;
+
+import androidx.test.InstrumentationRegistry;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.LargeTest;
+import androidx.test.filters.MediumTest;
+import androidx.test.filters.SmallTest;
 
 import com.android.frameworks.coretests.R;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.nio.ByteOrder;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Random;
 
 @RunWith(AndroidJUnit4.class)
@@ -51,6 +59,10 @@ public class TypefaceTest {
         Typeface.create(Typeface.MONOSPACE, 0)
     };
 
+    private static final int[] STYLES = {
+        Typeface.NORMAL, Typeface.BOLD, Typeface.ITALIC, Typeface.BOLD_ITALIC,
+    };
+
     @SmallTest
     @Test
     public void testBasic() throws Exception {
@@ -59,6 +71,16 @@ public class TypefaceTest {
         assertTrue("basic", Typeface.SANS_SERIF != null);
         assertTrue("basic", Typeface.SERIF != null);
         assertTrue("basic", Typeface.MONOSPACE != null);
+    }
+
+    @SmallTest
+    @Test
+    public void testDefaults() {
+        for (int style : STYLES) {
+            String msg = "style = " + style;
+            assertNotNull(msg, Typeface.defaultFromStyle(style));
+            assertEquals(msg, style, Typeface.defaultFromStyle(style).getStyle());
+        }
     }
 
     @SmallTest
@@ -172,4 +194,86 @@ public class TypefaceTest {
 
     }
 
+    @SmallTest
+    @Test
+    public void testSerialize() throws Exception {
+        FontConfig fontConfig = SystemFonts.getSystemPreinstalledFontConfig();
+        Map<String, FontFamily[]> fallbackMap = SystemFonts.buildSystemFallback(fontConfig);
+        Map<String, Typeface> systemFontMap = SystemFonts.buildSystemTypefaces(fontConfig,
+                fallbackMap);
+        SharedMemory sharedMemory = Typeface.serializeFontMap(systemFontMap);
+        Map<String, Typeface> copiedFontMap = new ArrayMap<>();
+        try {
+            Typeface.deserializeFontMap(sharedMemory.mapReadOnly().order(ByteOrder.BIG_ENDIAN),
+                    copiedFontMap);
+            assertEquals(systemFontMap.size(), copiedFontMap.size());
+            for (String key : systemFontMap.keySet()) {
+                assertTrue(copiedFontMap.containsKey(key));
+                Typeface original = systemFontMap.get(key);
+                Typeface copied = copiedFontMap.get(key);
+                assertEquals(original.getStyle(), copied.getStyle());
+                assertEquals(original.getWeight(), copied.getWeight());
+                assertEquals(measureText(original, "hello"), measureText(copied, "hello"), 1e-6);
+            }
+        } finally {
+            for (Typeface typeface : copiedFontMap.values()) {
+                typeface.releaseNativeObjectForTest();
+            }
+        }
+    }
+
+    @SmallTest
+    @Test
+    public void testSetSystemFontMap() throws Exception {
+
+        // Typeface.setSystemFontMap mutate the returned map. So copying for the backup.
+        HashMap<String, Typeface> backup = new HashMap<>(Typeface.getSystemFontMap());
+
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        Resources res = context.getResources();
+        Map<String, Typeface> fontMap = Map.of(
+                "sans-serif", Typeface.create(res.getFont(R.font.samplefont), Typeface.NORMAL),
+                "serif", Typeface.create(res.getFont(R.font.samplefont2), Typeface.NORMAL),
+                "monospace", Typeface.create(res.getFont(R.font.samplefont3), Typeface.NORMAL),
+                "sample", Typeface.create(res.getFont(R.font.samplefont4), Typeface.NORMAL),
+                "sample-italic", Typeface.create(res.getFont(R.font.samplefont4), Typeface.ITALIC));
+
+        try {
+            Typeface.setSystemFontMap(fontMap);
+
+            // Test public static final fields
+            assertEquals(fontMap.get("sans-serif"), Typeface.DEFAULT);
+            assertEquals(Typeface.BOLD, Typeface.DEFAULT_BOLD.getStyle());
+            assertEquals(fontMap.get("sans-serif"), Typeface.SANS_SERIF);
+            assertEquals(fontMap.get("serif"), Typeface.SERIF);
+            assertEquals(fontMap.get("monospace"), Typeface.MONOSPACE);
+
+            // Test defaults
+            assertEquals(fontMap.get("sans-serif"), Typeface.defaultFromStyle(Typeface.NORMAL));
+            for (int style : STYLES) {
+                String msg = "style = " + style;
+                assertNotNull(msg, Typeface.defaultFromStyle(style));
+                assertEquals(msg, style, Typeface.defaultFromStyle(style).getStyle());
+            }
+
+            // Test create()
+            assertEquals(fontMap.get("sample"), Typeface.create("sample", Typeface.NORMAL));
+            assertEquals(
+                    fontMap.get("sample-italic"),
+                    Typeface.create("sample-italic", Typeface.ITALIC));
+        } finally {
+            // This tests breaks many default font configuration and break the assumption of the
+            // subsequent test cases. To recover the original configuration, call the
+            // setSystemFontMap function with the original data even if it is a test target.
+            // Ideally, this test should be isolated and app should be restart after this test
+            // been executed.
+            Typeface.setSystemFontMap(backup);
+        }
+    }
+
+    private static float measureText(Typeface typeface, String text) {
+        Paint paint = new Paint();
+        paint.setTypeface(typeface);
+        return paint.measureText(text);
+    }
 }

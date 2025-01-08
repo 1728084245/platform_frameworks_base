@@ -18,8 +18,9 @@ package android.net;
 
 import static android.util.Patterns.GOOD_IRI_CHAR;
 
+import android.annotation.NonNull;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Build;
 
 import java.util.Locale;
@@ -132,6 +133,7 @@ public class WebAddress {
         if (mScheme.equals("")) mScheme = "http";
     }
 
+    @NonNull
     @Override
     public String toString() {
         String port = "";
@@ -159,7 +161,7 @@ public class WebAddress {
     }
 
     /** {@hide} */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void setHost(String host) {
       mHost = host;
     }
@@ -199,7 +201,7 @@ public class WebAddress {
     }
 
     /** {@hide} */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public String getAuthInfo() {
       return mAuthInfo;
     }

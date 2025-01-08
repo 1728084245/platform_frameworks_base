@@ -16,17 +16,18 @@
 */
 -->
 <resources>
-
-    <!-- ======================================== -->
-    <!-- The following resources were recently moved from sw600dp; there may
-         be situations where they don't sync up perfectly with PhoneStatusBar. -->
-    <!-- ======================================== -->
-
     <!-- gap on either side of status bar notification icons -->
-    <dimen name="status_bar_icon_padding">1dp</dimen>
-    <!-- The minimum height of the notification panel window -->
-    <dimen name="notification_panel_min_height">770dp</dimen>
-    <!-- Bottom margin (from display edge) for status bar panels -->
-    <dimen name="panel_float">56dp</dimen>
+    <dimen name="status_bar_icon_horizontal_margin">1sp</dimen>
+
+    <dimen name="controls_header_horizontal_padding">28dp</dimen>
+    <dimen name="controls_content_margin_horizontal">40dp</dimen>
+    <dimen name="controls_content_padding">32dp</dimen>
+    <dimen name="control_list_vertical_spacing">16dp</dimen>
+    <dimen name="control_list_horizontal_spacing">16dp</dimen>
+
+    <dimen name="large_screen_shade_header_height">56dp</dimen>
+
+    <!-- Biometric Auth pattern view size, better to align keyguard_security_width -->
+    <dimen name="biometric_auth_pattern_view_size">348dp</dimen>
 </resources>
 

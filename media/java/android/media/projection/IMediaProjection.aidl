@@ -17,15 +17,84 @@
 package android.media.projection;
 
 import android.media.projection.IMediaProjectionCallback;
+import android.media.projection.StopReason;
+import android.os.IBinder;
+import android.app.ActivityOptions.LaunchCookie;
 
 /** {@hide} */
 interface IMediaProjection {
     void start(IMediaProjectionCallback callback);
-    void stop();
+    void stop(StopReason stopReason);
+
     boolean canProjectAudio();
     boolean canProjectVideo();
     boolean canProjectSecureVideo();
+
+    @EnforcePermission("MANAGE_MEDIA_PROJECTION")
+    @JavaPassthrough(annotation = "@android.annotation.RequiresPermission(android.Manifest"
+            + ".permission.MANAGE_MEDIA_PROJECTION)")
     int applyVirtualDisplayFlags(int flags);
+
     void registerCallback(IMediaProjectionCallback callback);
+
     void unregisterCallback(IMediaProjectionCallback callback);
+
+    /**
+     * Returns the {@link LaunchCookie} identifying the task to record. Will always be set
+     * regardless of starting a new task or recent task
+     */
+    @EnforcePermission("MANAGE_MEDIA_PROJECTION")
+    @JavaPassthrough(annotation = "@android.annotation.RequiresPermission(android.Manifest"
+            + ".permission.MANAGE_MEDIA_PROJECTION)")
+    LaunchCookie getLaunchCookie();
+
+    /**
+     * Returns the taskId identifying the task to record. Will only be set in the case of
+     * launching a recent task, otherwise set to -1.
+     */
+    @EnforcePermission("MANAGE_MEDIA_PROJECTION")
+    @JavaPassthrough(annotation = "@android.annotation.RequiresPermission(android.Manifest"
+            + ".permission.MANAGE_MEDIA_PROJECTION)")
+    int getTaskId();
+
+    /**
+     * Updates the {@link LaunchCookie} identifying the task to record.
+     */
+    @EnforcePermission("MANAGE_MEDIA_PROJECTION")
+    @JavaPassthrough(annotation = "@android.annotation.RequiresPermission(android.Manifest"
+            + ".permission.MANAGE_MEDIA_PROJECTION)")
+    void setLaunchCookie(in LaunchCookie launchCookie);
+
+    /**
+     * Updates the taskId identifying the task to record.
+     */
+    @EnforcePermission("MANAGE_MEDIA_PROJECTION")
+    @JavaPassthrough(annotation = "@android.annotation.RequiresPermission(android.Manifest"
+            + ".permission.MANAGE_MEDIA_PROJECTION)")
+    void setTaskId(in int taskId);
+
+
+    /**
+     * Returns {@code true} if this token is still valid. A token is valid as long as the token
+     * hasn't timed out before it was used, and the token is only used once.
+     *
+     * <p>If the {@link IMediaProjection} is not valid, then either throws an exception if the
+     * target SDK is at least {@code U}, or returns {@code false} for target SDK below {@code U}.
+     *
+     * @throws IllegalStateException If the caller's target SDK is at least {@code U} and the
+     * projection is not valid.
+     */
+    @EnforcePermission("MANAGE_MEDIA_PROJECTION")
+    @JavaPassthrough(annotation = "@android.annotation.RequiresPermission(android.Manifest"
+            + ".permission.MANAGE_MEDIA_PROJECTION)")
+    boolean isValid();
+
+    /**
+     * Sets that {@link MediaProjection#createVirtualDisplay} has been invoked with this token (it
+     * should only be called once).
+     */
+    @EnforcePermission("MANAGE_MEDIA_PROJECTION")
+    @JavaPassthrough(annotation = "@android.annotation.RequiresPermission(android.Manifest"
+            + ".permission.MANAGE_MEDIA_PROJECTION)")
+    void notifyVirtualDisplayCreated(int displayId);
 }

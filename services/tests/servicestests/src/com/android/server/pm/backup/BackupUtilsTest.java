@@ -25,8 +25,8 @@ import static org.mockito.Mockito.mock;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManagerInternal;
-import android.content.pm.PackageParser;
 import android.content.pm.Signature;
+import android.content.pm.SigningDetails;
 import android.content.pm.SigningInfo;
 import android.platform.test.annotations.Presubmit;
 import android.test.MoreAsserts;
@@ -95,10 +95,9 @@ public class BackupUtilsTest {
         PackageInfo packageInfo = new PackageInfo();
         packageInfo.packageName = "test";
         packageInfo.signingInfo = new SigningInfo(
-                new PackageParser.SigningDetails(
+                new SigningDetails(
                         new Signature[] {SIGNATURE_1},
-                        PackageParser.SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
-                        null,
+                        SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
                         null,
                         null));
         packageInfo.applicationInfo = new ApplicationInfo();
@@ -115,10 +114,9 @@ public class BackupUtilsTest {
         PackageInfo packageInfo = new PackageInfo();
         packageInfo.packageName = "test";
         packageInfo.signingInfo = new SigningInfo(
-                new PackageParser.SigningDetails(
+                new SigningDetails(
                         new Signature[] {SIGNATURE_1},
-                        PackageParser.SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
-                        null,
+                        SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
                         null,
                         null));
         packageInfo.applicationInfo = new ApplicationInfo();
@@ -199,10 +197,9 @@ public class BackupUtilsTest {
         PackageInfo packageInfo = new PackageInfo();
         packageInfo.packageName = "test";
         packageInfo.signingInfo = new SigningInfo(
-                new PackageParser.SigningDetails(
+                new SigningDetails(
                         new Signature[] {SIGNATURE_1, SIGNATURE_2, SIGNATURE_3},
-                        PackageParser.SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
-                        null,
+                        SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
                         null,
                         null));
         packageInfo.applicationInfo = new ApplicationInfo();
@@ -222,10 +219,9 @@ public class BackupUtilsTest {
         PackageInfo packageInfo = new PackageInfo();
         packageInfo.packageName = "test";
         packageInfo.signingInfo = new SigningInfo(
-                new PackageParser.SigningDetails(
+                new SigningDetails(
                         new Signature[] {SIGNATURE_1, SIGNATURE_2, SIGNATURE_3},
-                        PackageParser.SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
-                        null,
+                        SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
                         null,
                         null));
         packageInfo.applicationInfo = new ApplicationInfo();
@@ -244,10 +240,9 @@ public class BackupUtilsTest {
         PackageInfo packageInfo = new PackageInfo();
         packageInfo.packageName = "test";
         packageInfo.signingInfo = new SigningInfo(
-                new PackageParser.SigningDetails(
+                new SigningDetails(
                         new Signature[] {SIGNATURE_1, SIGNATURE_2},
-                        PackageParser.SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
-                        null,
+                        SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
                         null,
                         null));
         packageInfo.applicationInfo = new ApplicationInfo();
@@ -267,10 +262,9 @@ public class BackupUtilsTest {
         PackageInfo packageInfo = new PackageInfo();
         packageInfo.packageName = "test";
         packageInfo.signingInfo = new SigningInfo(
-                new PackageParser.SigningDetails(
+                new SigningDetails(
                         new Signature[] {SIGNATURE_1, SIGNATURE_2, SIGNATURE_3},
-                        PackageParser.SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
-                        null,
+                        SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
                         null,
                         null));
         packageInfo.applicationInfo = new ApplicationInfo();
@@ -291,10 +285,9 @@ public class BackupUtilsTest {
         PackageInfo packageInfo = new PackageInfo();
         packageInfo.packageName = "test";
         packageInfo.signingInfo = new SigningInfo(
-                new PackageParser.SigningDetails(
+                new SigningDetails(
                         new Signature[] {SIGNATURE_1},
-                        PackageParser.SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
-                        null,
+                        SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
                         null,
                         null));
         packageInfo.applicationInfo = new ApplicationInfo();
@@ -316,10 +309,9 @@ public class BackupUtilsTest {
         PackageInfo packageInfo = new PackageInfo();
         packageInfo.packageName = "test";
         packageInfo.signingInfo = new SigningInfo(
-                new PackageParser.SigningDetails(
+                new SigningDetails(
                         new Signature[] {SIGNATURE_1, SIGNATURE_2},
-                        PackageParser.SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
-                        null,
+                        SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
                         null,
                         null));
         packageInfo.applicationInfo = new ApplicationInfo();
@@ -344,10 +336,9 @@ public class BackupUtilsTest {
         PackageInfo packageInfo = new PackageInfo();
         packageInfo.packageName = "test";
         packageInfo.signingInfo = new SigningInfo(
-                new PackageParser.SigningDetails(
+                new SigningDetails(
                         new Signature[] {SIGNATURE_1, SIGNATURE_2},
-                        PackageParser.SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
-                        null,
+                        SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
                         null,
                         null));
         packageInfo.applicationInfo = new ApplicationInfo();

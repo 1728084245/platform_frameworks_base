@@ -36,7 +36,7 @@ public class ParcelableCallAnalytics implements Parcelable {
         public static final int RECEIVE_REMOTE_SESSION_MODIFY_REQUEST = 2;
         public static final int RECEIVE_REMOTE_SESSION_MODIFY_RESPONSE = 3;
 
-        public static final Parcelable.Creator<VideoEvent> CREATOR =
+        public static final @android.annotation.NonNull Parcelable.Creator<VideoEvent> CREATOR =
                 new Parcelable.Creator<VideoEvent> () {
 
                     @Override
@@ -111,6 +111,8 @@ public class ParcelableCallAnalytics implements Parcelable {
         public static final int FILTERING_INITIATED = 106;
         public static final int FILTERING_COMPLETED = 107;
         public static final int FILTERING_TIMED_OUT = 108;
+        public static final int DND_CHECK_INITIATED = 109;
+        public static final int DND_CHECK_COMPLETED = 110;
 
         public static final int SKIP_RINGING = 200;
         public static final int SILENCE = 201;
@@ -135,7 +137,7 @@ public class ParcelableCallAnalytics implements Parcelable {
         public static final int REQUEST_PULL = 500;
 
 
-        public static final Parcelable.Creator<AnalyticsEvent> CREATOR =
+        public static final @android.annotation.NonNull Parcelable.Creator<AnalyticsEvent> CREATOR =
                 new Parcelable.Creator<AnalyticsEvent> () {
 
                     @Override
@@ -195,12 +197,13 @@ public class ParcelableCallAnalytics implements Parcelable {
         public static final int BLOCK_CHECK_FINISHED_TIMING = 9;
         public static final int FILTERING_COMPLETED_TIMING = 10;
         public static final int FILTERING_TIMED_OUT_TIMING = 11;
+        public static final int DND_PRE_CALL_PRE_CHECK_TIMING = 12;
         /** {@hide} */
         public static final int START_CONNECTION_TO_REQUEST_DISCONNECT_TIMING = 12;
 
         public static final int INVALID = 999999;
 
-        public static final Parcelable.Creator<EventTiming> CREATOR =
+        public static final @android.annotation.NonNull Parcelable.Creator<EventTiming> CREATOR =
                 new Parcelable.Creator<EventTiming> () {
 
                     @Override
@@ -258,33 +261,12 @@ public class ParcelableCallAnalytics implements Parcelable {
     public static final int SIP_PHONE = 0x8;
     public static final int THIRD_PARTY_PHONE = 0x10;
 
-    /**
-     * Indicating the call source is not specified.
-     *
-     * @hide
-     */
-    public static final int CALL_SOURCE_UNSPECIFIED = 0;
-
-    /**
-     * Indicating the call is initiated via emergency dialer's dialpad.
-     *
-     * @hide
-     */
-    public static final int CALL_SOURCE_EMERGENCY_DIALPAD = 1;
-
-    /**
-     * Indicating the call is initiated via emergency dialer's shortcut button.
-     *
-     * @hide
-     */
-    public static final int CALL_SOURCE_EMERGENCY_SHORTCUT = 2;
-
     public static final long MILLIS_IN_5_MINUTES = 1000 * 60 * 5;
     public static final long MILLIS_IN_1_SECOND = 1000;
 
     public static final int STILL_CONNECTED = -1;
 
-    public static final Parcelable.Creator<ParcelableCallAnalytics> CREATOR =
+    public static final @android.annotation.NonNull Parcelable.Creator<ParcelableCallAnalytics> CREATOR =
             new Parcelable.Creator<ParcelableCallAnalytics> () {
 
                 @Override
@@ -343,7 +325,7 @@ public class ParcelableCallAnalytics implements Parcelable {
     private List<VideoEvent> videoEvents;
 
     // The source where user initiated this call. ONE OF the CALL_SOURCE_* constants.
-    private int callSource = CALL_SOURCE_UNSPECIFIED;
+    private int callSource = TelecomManager.CALL_SOURCE_UNSPECIFIED;
 
     public ParcelableCallAnalytics(long startTimeMillis, long callDurationMillis, int callType,
             boolean isAdditionalCall, boolean isInterrupted, int callTechnologies,
@@ -380,7 +362,7 @@ public class ParcelableCallAnalytics implements Parcelable {
         eventTimings = new ArrayList<>();
         in.readTypedList(eventTimings, EventTiming.CREATOR);
         isVideoCall = readByteAsBoolean(in);
-        videoEvents = new LinkedList<>();
+        videoEvents = new ArrayList<>();
         in.readTypedList(videoEvents, VideoEvent.CREATOR);
         callSource = in.readInt();
     }

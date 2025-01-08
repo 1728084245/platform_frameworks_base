@@ -1,41 +1,144 @@
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_base_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_base_license"],
+}
+
 android_library {
-
     name: "SettingsLib",
-
-    libs: [
-        "androidx.annotation_annotation",
-        "androidx.legacy_legacy-support-v4",
-        "androidx.recyclerview_recyclerview",
-        "androidx.preference_preference",
-        "androidx.appcompat_appcompat",
-        "androidx.lifecycle_lifecycle-runtime",
+    defaults: [
+        "SettingsLintDefaults",
+        "SettingsLibAvatarPickerDefaults",
     ],
 
-    // ANDROIDMK TRANSLATION ERROR: unsupported assignment to LOCAL_SHARED_JAVA_LIBRARIES
-    // LOCAL_SHARED_JAVA_LIBRARIES := androidx.lifecycle_lifecycle-common
+    static_libs: [
+        "androidx.localbroadcastmanager_localbroadcastmanager",
+        "androidx.room_room-runtime",
+        "androidx.sqlite_sqlite",
+        "zxing-core",
+        "guava",
 
+        "WifiTrackerLibRes",
+        "//frameworks/libs/systemui:iconloader",
+        "setupdesign",
+
+        "SettingsLibActionBarShadow",
+        "SettingsLibActionButtonsPreference",
+        "SettingsLibAdaptiveIcon",
+        "SettingsLibAppPreference",
+        "SettingsLibBannerMessagePreference",
+        "SettingsLibBarChartPreference",
+        "SettingsLibButtonPreference",
+        "SettingsLibCollapsingToolbarBaseActivity",
+        "SettingsLibDeviceStateRotationLock",
+        "SettingsLibDisplayUtils",
+        "SettingsLibEmergencyNumber",
+        "SettingsLibEntityHeaderWidgets",
+        "SettingsLibFooterPreference",
+        "SettingsLibHelpUtils",
+        "SettingsLibIllustrationPreference",
+        "SettingsLibLayoutPreference",
+        "SettingsLibMainSwitchPreference",
+        "SettingsLibProfileSelector",
+        "SettingsLibProgressBar",
+        "SettingsLibRestrictedLockUtils",
+        "SettingsLibSearchWidget",
+        "SettingsLibSelectorWithWidgetPreference",
+        "SettingsLibSettingsSpinner",
+        "SettingsLibSettingsTransition",
+        "SettingsLibTopIntroPreference",
+        "SettingsLibTwoTargetPreference",
+        "SettingsLibUsageProgressBarPreference",
+        "SettingsLibUtils",
+        "settingslib_media_flags_lib",
+        "settingslib_flags_lib",
+    ],
+
+    plugins: ["androidx.room_room-compiler-plugin"],
+    use_resource_processor: true,
     resource_dirs: ["res"],
 
-    srcs: ["src/**/*.java"],
+    srcs: [
+        "src/**/*.java",
+        "src/**/*.kt",
+        "src/**/I*.aidl",
+    ],
+}
 
-    min_sdk_version: "21",
-
+// defaults for lint option
+java_defaults {
+    name: "SettingsLintDefaults",
+    lint: {
+        extra_check_modules: [
+            "SettingsLibLintChecker",
+        ],
+    },
 }
 
 // NOTE: Keep this module in sync with ./common.mk
 java_defaults {
     name: "SettingsLibDefaults",
     static_libs: [
-        "androidx.annotation_annotation",
-        "androidx.lifecycle_lifecycle-common",
-        "androidx.legacy_legacy-support-v4",
-        "androidx.lifecycle_lifecycle-runtime",
-        "androidx.recyclerview_recyclerview",
-        "androidx.preference_preference",
-        "androidx.appcompat_appcompat",
-        "androidx.legacy_legacy-preference-v14",
         "SettingsLib",
     ],
 }
 
-// For the test package.
+aconfig_declarations {
+    name: "settingslib_media_flags",
+    package: "com.android.settingslib.media.flags",
+    container: "system",
+    srcs: [
+        "aconfig/settingslib_media_flag_declarations.aconfig",
+    ],
+}
+
+java_aconfig_library {
+    name: "settingslib_media_flags_lib",
+    aconfig_declarations: "settingslib_media_flags",
+}
+
+aconfig_declarations {
+    name: "settingslib_flags",
+    package: "com.android.settingslib.flags",
+    container: "system",
+    srcs: [
+        "aconfig/settingslib.aconfig",
+    ],
+}
+
+java_aconfig_library {
+    name: "settingslib_flags_lib",
+    aconfig_declarations: "settingslib_flags",
+}
+
+soong_config_module_type {
+    name: "avatar_picker_java_defaults",
+    module_type: "java_defaults",
+    config_namespace: "SettingsLib",
+    bool_variables: [
+        "legacy_avatar_picker_app_enabled",
+    ],
+    properties: [
+        "static_libs",
+        "manifest",
+    ],
+}
+
+soong_config_bool_variable {
+    name: "legacy_avatar_picker_app_enabled",
+}
+
+avatar_picker_java_defaults {
+    name: "SettingsLibAvatarPickerDefaults",
+    soong_config_variables: {
+        // If flag is enabled, add the library
+        legacy_avatar_picker_app_enabled: {
+            static_libs: [
+                "SettingsLibAvatarPicker",
+            ],
+        },
+    },
+}

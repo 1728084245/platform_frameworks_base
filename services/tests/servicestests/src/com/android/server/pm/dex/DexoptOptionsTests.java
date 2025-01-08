@@ -23,6 +23,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import android.platform.test.annotations.Presubmit;
+
 import androidx.test.filters.SmallTest;
 import androidx.test.runner.AndroidJUnit4;
 
@@ -32,6 +34,7 @@ import com.android.server.pm.PackageManagerServiceCompilerMapping;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+@Presubmit
 @RunWith(AndroidJUnit4.class)
 @SmallTest
 public class DexoptOptionsTests {
@@ -49,11 +52,11 @@ public class DexoptOptionsTests {
         assertFalse(opt.isBootComplete());
         assertFalse(opt.isCheckForProfileUpdates());
         assertFalse(opt.isDexoptOnlySecondaryDex());
-        assertFalse(opt.isDexoptOnlySharedDex());
         assertFalse(opt.isDowngrade());
         assertFalse(opt.isForce());
         assertFalse(opt.isDexoptIdleBackgroundJob());
         assertFalse(opt.isDexoptInstallWithDexMetadata());
+        assertFalse(opt.isDexoptInstallForRestore());
     }
 
     @Test
@@ -63,11 +66,11 @@ public class DexoptOptionsTests {
                 DexoptOptions.DEXOPT_BOOT_COMPLETE |
                 DexoptOptions.DEXOPT_CHECK_FOR_PROFILES_UPDATES |
                 DexoptOptions.DEXOPT_ONLY_SECONDARY_DEX |
-                DexoptOptions.DEXOPT_ONLY_SHARED_DEX |
                 DexoptOptions.DEXOPT_DOWNGRADE  |
                 DexoptOptions.DEXOPT_AS_SHARED_LIBRARY |
                 DexoptOptions.DEXOPT_IDLE_BACKGROUND_JOB |
-                DexoptOptions.DEXOPT_INSTALL_WITH_DEX_METADATA_FILE;
+                DexoptOptions.DEXOPT_INSTALL_WITH_DEX_METADATA_FILE |
+                DexoptOptions.DEXOPT_FOR_RESTORE;
 
         DexoptOptions opt = new DexoptOptions(mPackageName, mCompilerFilter, flags);
         assertEquals(mPackageName, opt.getPackageName());
@@ -76,12 +79,12 @@ public class DexoptOptionsTests {
         assertTrue(opt.isBootComplete());
         assertTrue(opt.isCheckForProfileUpdates());
         assertTrue(opt.isDexoptOnlySecondaryDex());
-        assertTrue(opt.isDexoptOnlySharedDex());
         assertTrue(opt.isDowngrade());
         assertTrue(opt.isForce());
         assertTrue(opt.isDexoptAsSharedLibrary());
         assertTrue(opt.isDexoptIdleBackgroundJob());
         assertTrue(opt.isDexoptInstallWithDexMetadata());
+        assertTrue(opt.isDexoptInstallForRestore());
     }
 
     @Test
@@ -93,7 +96,7 @@ public class DexoptOptionsTests {
 
         int[] reasons = new int[] {
                 PackageManagerService.REASON_FIRST_BOOT,
-                PackageManagerService.REASON_BOOT,
+                PackageManagerService.REASON_POST_BOOT,
                 PackageManagerService.REASON_INSTALL,
                 PackageManagerService.REASON_BACKGROUND_DEXOPT,
                 PackageManagerService.REASON_AB_OTA,
@@ -107,7 +110,6 @@ public class DexoptOptionsTests {
             assertTrue(opt.isBootComplete());
             assertTrue(opt.isCheckForProfileUpdates());
             assertFalse(opt.isDexoptOnlySecondaryDex());
-            assertFalse(opt.isDexoptOnlySharedDex());
             assertFalse(opt.isDowngrade());
             assertTrue(opt.isForce());
             assertFalse(opt.isDexoptAsSharedLibrary());
@@ -125,7 +127,6 @@ public class DexoptOptionsTests {
         assertTrue(opt.isBootComplete());
         assertFalse(opt.isCheckForProfileUpdates());
         assertFalse(opt.isDexoptOnlySecondaryDex());
-        assertFalse(opt.isDexoptOnlySharedDex());
         assertFalse(opt.isDowngrade());
         assertTrue(opt.isForce());
         assertFalse(opt.isDexoptAsSharedLibrary());

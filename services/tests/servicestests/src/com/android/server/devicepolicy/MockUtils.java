@@ -15,17 +15,17 @@
  */
 package com.android.server.devicepolicy;
 
-import com.google.common.base.Objects;
-
-import com.android.internal.util.Preconditions;
-import com.android.server.pm.UserRestrictionsUtils;
-
 import android.content.ComponentName;
 import android.content.Intent;
 import android.os.BaseBundle;
 import android.os.Bundle;
 import android.os.UserHandle;
 import android.util.ArraySet;
+
+import com.android.server.pm.RestrictionsSet;
+import com.android.server.pm.UserRestrictionsUtils;
+
+import com.google.common.base.Objects;
 
 import org.hamcrest.BaseMatcher;
 import org.hamcrest.Description;
@@ -107,12 +107,52 @@ public class MockUtils {
     }
 
     public static Bundle checkUserRestrictions(String... keys) {
-        final Bundle expected = DpmTestUtils.newRestrictions(Preconditions.checkNotNull(keys));
+        final Bundle expected = DpmTestUtils.newRestrictions(
+                java.util.Objects.requireNonNull(keys));
+        return checkUserRestrictions(expected);
+    }
+
+    public static Bundle checkUserRestrictions(Bundle expected) {
+        return createUserRestrictionsBundleMatcher(expected);
+    }
+
+    private static Bundle createUserRestrictionsBundleMatcher(Bundle expected) {
         final Matcher<Bundle> m = new BaseMatcher<Bundle>() {
             @Override
             public boolean matches(Object item) {
-                if (item == null) return false;
+                if (item == null) {
+                    return false;
+                }
                 return UserRestrictionsUtils.areEqual((Bundle) item, expected);
+            }
+
+            @Override
+            public void describeTo(Description description) {
+                description.appendText("User restrictions=" + getRestrictionsAsString(expected));
+            }
+        };
+        return MockitoHamcrest.argThat(m);
+    }
+
+    public static RestrictionsSet checkUserRestrictions(int userId, String... keys) {
+        final RestrictionsSet expected = DpmTestUtils.newRestrictions(userId,
+                java.util.Objects.requireNonNull(keys));
+        return checkUserRestrictions(userId, expected);
+    }
+
+    public static RestrictionsSet checkUserRestrictions(int userId, RestrictionsSet expected) {
+        return createUserRestrictionsSetMatcher(userId, expected);
+    }
+
+    private static RestrictionsSet createUserRestrictionsSetMatcher(
+            int userId, RestrictionsSet expected) {
+        final Matcher<RestrictionsSet> m = new BaseMatcher<RestrictionsSet>() {
+            @Override
+            public boolean matches(Object item) {
+                if (item == null) return false;
+                RestrictionsSet actual = (RestrictionsSet) item;
+                return UserRestrictionsUtils.areEqual(expected.getRestrictions(userId),
+                        actual.getRestrictions(userId));
             }
 
             @Override
@@ -145,6 +185,23 @@ public class MockUtils {
             }
         };
         return MockitoHamcrest.argThat(m);
+    }
+
+    private static String getRestrictionsAsString(RestrictionsSet r) {
+        final StringBuilder sb = new StringBuilder();
+        sb.append("{");
+
+        if (r != null) {
+            String sep = "";
+            for (int i = 0; i < r.size(); i++) {
+                sb.append(sep);
+                sep = ",";
+                sb.append(
+                        String.format("%s= %s", r.keyAt(i), getRestrictionsAsString(r.valueAt(i))));
+            }
+        }
+        sb.append("}");
+        return sb.toString();
     }
 
     private static String getRestrictionsAsString(Bundle b) {

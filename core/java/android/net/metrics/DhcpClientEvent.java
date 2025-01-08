@@ -17,9 +17,10 @@
 package android.net.metrics;
 
 import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.text.TextUtils;
@@ -27,9 +28,12 @@ import android.text.TextUtils;
 /**
  * An event recorded when a DhcpClient state machine transitions to a new state.
  * {@hide}
+ * @deprecated The event may not be sent in Android S and above. The events
+ * are logged by a single caller in the system using signature permissions
+ * and that caller is migrating to statsd.
  */
+@Deprecated
 @SystemApi
-@TestApi
 public final class DhcpClientEvent implements IpConnectivityLog.Event {
 
     // Names for recording DhcpClient pseudo-state transitions.
@@ -39,7 +43,7 @@ public final class DhcpClientEvent implements IpConnectivityLog.Event {
     /** @hide */
     public final int durationMs;
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private DhcpClientEvent(String msg, int durationMs) {
         this.msg = msg;
         this.durationMs = durationMs;
@@ -97,13 +101,14 @@ public final class DhcpClientEvent implements IpConnectivityLog.Event {
         return 0;
     }
 
+    @NonNull
     @Override
     public String toString() {
         return String.format("DhcpClientEvent(%s, %dms)", msg, durationMs);
     }
 
     @Override
-    public boolean equals(Object obj) {
+    public boolean equals(@Nullable Object obj) {
         if (obj == null || !(obj.getClass().equals(DhcpClientEvent.class))) return false;
         final DhcpClientEvent other = (DhcpClientEvent) obj;
         return TextUtils.equals(msg, other.msg)
@@ -111,7 +116,7 @@ public final class DhcpClientEvent implements IpConnectivityLog.Event {
     }
 
     /** @hide */
-    public static final Parcelable.Creator<DhcpClientEvent> CREATOR
+    public static final @android.annotation.NonNull Parcelable.Creator<DhcpClientEvent> CREATOR
         = new Parcelable.Creator<DhcpClientEvent>() {
         public DhcpClientEvent createFromParcel(Parcel in) {
             return new DhcpClientEvent(in);

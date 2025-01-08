@@ -22,7 +22,9 @@ import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
 import android.animation.PropertyValuesHolder;
 import android.animation.RectEvaluator;
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.NonNull;
+import android.annotation.Nullable;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Bitmap;
@@ -32,6 +34,7 @@ import android.graphics.PointF;
 import android.graphics.Rect;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.os.Build;
 import android.util.AttributeSet;
 import android.util.Property;
 import android.view.View;
@@ -109,7 +112,7 @@ public class ChangeBounds extends Transition {
                 }
             };
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
     private static final Property<View, PointF> BOTTOM_RIGHT_ONLY_PROPERTY =
             new Property<View, PointF>(PointF.class, "bottomRight") {
                 @Override
@@ -144,7 +147,7 @@ public class ChangeBounds extends Transition {
                 }
             };
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
     private static final Property<View, PointF> POSITION_PROPERTY =
             new Property<View, PointF>(PointF.class, "position") {
                 @Override
@@ -273,9 +276,11 @@ public class ChangeBounds extends Transition {
         return parentMatches;
     }
 
+    @Nullable
     @Override
-    public Animator createAnimator(final ViewGroup sceneRoot, TransitionValues startValues,
-            TransitionValues endValues) {
+    public Animator createAnimator(@NonNull final ViewGroup sceneRoot,
+            @Nullable TransitionValues startValues,
+            @Nullable TransitionValues endValues) {
         if (startValues == null || endValues == null) {
             return null;
         }

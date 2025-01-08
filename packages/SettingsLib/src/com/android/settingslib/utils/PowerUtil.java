@@ -16,14 +16,17 @@
 
 package com.android.settingslib.utils;
 
+import static java.lang.Math.abs;
+
 import android.content.Context;
 import android.icu.text.DateFormat;
 import android.icu.text.MeasureFormat;
 import android.icu.text.MeasureFormat.FormatWidth;
 import android.icu.util.Measure;
 import android.icu.util.MeasureUnit;
-import androidx.annotation.Nullable;
 import android.text.TextUtils;
+
+import androidx.annotation.Nullable;
 
 import com.android.settingslib.R;
 
@@ -32,7 +35,7 @@ import java.util.Date;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
-/** Utility class for keeping power related strings consistent**/
+/** Utility class for keeping power related strings consistent. **/
 public class PowerUtil {
 
     private static final long SEVEN_MINUTES_MILLIS = TimeUnit.MINUTES.toMillis(7);
@@ -40,52 +43,52 @@ public class PowerUtil {
     private static final long ONE_DAY_MILLIS = TimeUnit.DAYS.toMillis(1);
     private static final long TWO_DAYS_MILLIS = TimeUnit.DAYS.toMillis(2);
     private static final long ONE_HOUR_MILLIS = TimeUnit.HOURS.toMillis(1);
+    private static final long ONE_MIN_MILLIS = TimeUnit.MINUTES.toMillis(1);
 
     /**
-     * This method produces the text used in various places throughout the system to describe the
-     * remaining battery life of the phone in a consistent manner.
+     * Method to produce a shortened string describing the remaining battery. Suitable for Quick
+     * Settings and other areas where space is constrained.
+     *
+     * @param context context to fetch descriptions from
+     * @param drainTimeMs The estimated time remaining before the phone dies in milliseconds.
+     *
+     * @return a properly formatted and localized short string describing how much time remains
+     * before the battery runs out.
+     */
+    @Nullable
+    public static String getBatteryRemainingShortStringFormatted(
+            Context context, long drainTimeMs) {
+        if (drainTimeMs <= 0) {
+            return null;
+        }
+
+        if (drainTimeMs <= ONE_DAY_MILLIS) {
+            return getRegularTimeRemainingShortString(context, drainTimeMs);
+        } else {
+            return getMoreThanOneDayShortString(context, drainTimeMs,
+                R.string.power_remaining_duration_only_short);
+        }
+    }
+
+    /**
+     * This method produces the text used in Settings battery tip to describe the effect after
+     * use the tip.
      *
      * @param context
      * @param drainTimeMs The estimated time remaining before the phone dies in milliseconds.
-     * @param percentageString An optional percentage of battery remaining string.
-     * @param basedOnUsage Whether this estimate is based on usage or simple extrapolation.
-     * @return a properly formatted and localized string describing how much time remains
-     * before the battery runs out.
+     * @return a properly formatted and localized string
      */
-    public static String getBatteryRemainingStringFormatted(Context context, long drainTimeMs,
-            @Nullable String percentageString, boolean basedOnUsage) {
-        if (drainTimeMs > 0) {
-            if (drainTimeMs <= SEVEN_MINUTES_MILLIS) {
-                // show a imminent shutdown warning if less than 7 minutes remain
-                return getShutdownImminentString(context, percentageString);
-            } else if (drainTimeMs <= FIFTEEN_MINUTES_MILLIS) {
-                // show a less than 15 min remaining warning if appropriate
-                CharSequence timeString = StringUtil.formatElapsedTime(context,
-                        FIFTEEN_MINUTES_MILLIS,
-                        false /* withSeconds */);
-                return getUnderFifteenString(context, timeString, percentageString);
-            } else if (drainTimeMs >= TWO_DAYS_MILLIS) {
-                // just say more than two day if over 48 hours
-                return getMoreThanTwoDaysString(context, percentageString);
-            } else if (drainTimeMs >= ONE_DAY_MILLIS) {
-                // show remaining days & hours if more than a day
-                return getMoreThanOneDayString(context, drainTimeMs,
-                        percentageString, basedOnUsage);
-            } else {
-                // show the time of day we think you'll run out
-                return getRegularTimeRemainingString(context, drainTimeMs,
-                        percentageString, basedOnUsage);
-            }
+    public static String getBatteryTipStringFormatted(Context context, long drainTimeMs) {
+        if (drainTimeMs <= 0) {
+            return null;
         }
-        return null;
-    }
-
-    private static String getShutdownImminentString(Context context, String percentageString) {
-        return TextUtils.isEmpty(percentageString)
-                ? context.getString(R.string.power_remaining_duration_only_shutdown_imminent)
-                : context.getString(
-                        R.string.power_remaining_duration_shutdown_imminent,
-                        percentageString);
+        if (drainTimeMs <= ONE_DAY_MILLIS) {
+            return context.getString(R.string.power_suggestion_battery_run_out,
+                getDateTimeStringFromMs(context, drainTimeMs));
+        } else {
+            return getMoreThanOneDayShortString(context, drainTimeMs,
+                R.string.power_remaining_only_more_than_subtext);
+        }
     }
 
     private static String getUnderFifteenString(Context context, CharSequence timeString,
@@ -104,7 +107,7 @@ public class PowerUtil {
         final long roundedTimeMs = roundTimeToNearestThreshold(drainTimeMs, ONE_HOUR_MILLIS);
         CharSequence timeString = StringUtil.formatElapsedTime(context,
                 roundedTimeMs,
-                false /* withSeconds */);
+                false /* withSeconds */, true /* collapseTimeUnit */);
 
         if (TextUtils.isEmpty(percentageString)) {
             int id = basedOnUsage
@@ -117,6 +120,15 @@ public class PowerUtil {
                     : R.string.power_discharging_duration;
             return context.getString(id, timeString, percentageString);
         }
+    }
+
+    private static String getMoreThanOneDayShortString(Context context, long drainTimeMs,
+            int resId) {
+        final long roundedTimeMs = roundTimeToNearestThreshold(drainTimeMs, ONE_HOUR_MILLIS);
+        CharSequence timeString = StringUtil.formatElapsedTime(context, roundedTimeMs,
+                false /* withSeconds */, false /* collapseTimeUnit */);
+
+        return context.getString(resId, timeString);
     }
 
     private static String getMoreThanTwoDaysString(Context context, String percentageString) {
@@ -136,6 +148,38 @@ public class PowerUtil {
 
     private static String getRegularTimeRemainingString(Context context, long drainTimeMs,
             String percentageString, boolean basedOnUsage) {
+
+        CharSequence timeString = StringUtil.formatElapsedTime(context,
+                drainTimeMs, false /* withSeconds */, true /* collapseTimeUnit */);
+
+        if (TextUtils.isEmpty(percentageString)) {
+            int id = basedOnUsage
+                    ? R.string.power_remaining_duration_only_enhanced
+                    : R.string.power_remaining_duration_only;
+            return context.getString(id, timeString);
+        } else {
+            int id = basedOnUsage
+                    ? R.string.power_discharging_duration_enhanced
+                    : R.string.power_discharging_duration;
+            return context.getString(id, timeString, percentageString);
+        }
+    }
+
+    private static CharSequence getDateTimeStringFromMs(Context context, long drainTimeMs) {
+        // Get the time of day we think device will die rounded to the nearest 15 min.
+        final long roundedTimeOfDayMs =
+                roundTimeToNearestThreshold(
+                        System.currentTimeMillis() + drainTimeMs,
+                        FIFTEEN_MINUTES_MILLIS);
+
+        // convert the time to a properly formatted string.
+        String skeleton = android.text.format.DateFormat.getTimeFormatString(context);
+        DateFormat fmt = DateFormat.getInstanceForSkeleton(skeleton);
+        Date date = Date.from(Instant.ofEpochMilli(roundedTimeOfDayMs));
+        return fmt.format(date);
+    }
+
+    private static String getRegularTimeRemainingShortString(Context context, long drainTimeMs) {
         // Get the time of day we think device will die rounded to the nearest 15 min.
         final long roundedTimeOfDayMs =
                 roundTimeToNearestThreshold(
@@ -148,17 +192,7 @@ public class PowerUtil {
         Date date = Date.from(Instant.ofEpochMilli(roundedTimeOfDayMs));
         CharSequence timeString = fmt.format(date);
 
-        if (TextUtils.isEmpty(percentageString)) {
-            int id = basedOnUsage
-                    ? R.string.power_discharge_by_only_enhanced
-                    : R.string.power_discharge_by_only;
-            return context.getString(id, timeString);
-        } else {
-            int id = basedOnUsage
-                    ? R.string.power_discharge_by_enhanced
-                    : R.string.power_discharge_by;
-            return context.getString(id, timeString, percentageString);
-        }
+        return context.getString(R.string.power_discharge_by_only_short, timeString);
     }
 
     public static long convertUsToMs(long timeUs) {
@@ -180,13 +214,34 @@ public class PowerUtil {
      * @return The rounded value as a long
      */
     public static long roundTimeToNearestThreshold(long drainTime, long threshold) {
-        long time = Math.abs(drainTime);
-        long multiple = Math.abs(threshold);
+        long time = abs(drainTime);
+        long multiple = abs(threshold);
         final long remainder = time % multiple;
         if (remainder < multiple / 2) {
             return time - remainder;
         } else {
             return time - remainder + multiple;
         }
+    }
+
+    /** Gets the target time string in a short format. */
+    public static String getTargetTimeShortString(
+            Context context, long targetTimeOffsetMs, long currentTimeMs) {
+        long targetTimeMs = currentTimeMs + targetTimeOffsetMs;
+        if (targetTimeOffsetMs >= FIFTEEN_MINUTES_MILLIS) {
+            targetTimeMs = roundUpTimeToNextThreshold(targetTimeMs, FIFTEEN_MINUTES_MILLIS);
+        }
+
+        // convert the time to a properly formatted string.
+        String skeleton = android.text.format.DateFormat.getTimeFormatString(context);
+        DateFormat fmt = DateFormat.getInstanceForSkeleton(skeleton);
+        Date date = Date.from(Instant.ofEpochMilli(targetTimeMs));
+        return fmt.format(date);
+    }
+
+    private static long roundUpTimeToNextThreshold(long timeMs, long threshold) {
+        var time = abs(timeMs);
+        var multiple = abs(threshold);
+        return ((time + multiple - 1) / multiple) * multiple;
     }
 }

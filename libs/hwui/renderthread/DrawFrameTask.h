@@ -16,23 +16,30 @@
 #ifndef DRAWFRAMETASK_H
 #define DRAWFRAMETASK_H
 
-#include <vector>
-
 #include <utils/Condition.h>
 #include <utils/Mutex.h>
 #include <utils/StrongPointer.h>
 
-#include "RenderTask.h"
+#include <optional>
+#include <vector>
 
 #include "../FrameInfo.h"
 #include "../Rect.h"
 #include "../TreeInfo.h"
+#include "RenderTask.h"
+#include "SkColorSpace.h"
+#include "SwapBehavior.h"
+#include "utils/TimeUtils.h"
+#ifdef __ANDROID__  // Layoutlib does not support hardware acceleration
+#include <android/hardware_buffer.h>
+#endif
+#include "HardwareBufferRenderParams.h"
 
 namespace android {
+
 namespace uirenderer {
 
 class DeferredLayerUpdater;
-class DisplayList;
 class RenderNode;
 
 namespace renderthread {
@@ -75,13 +82,25 @@ public:
 
     void run();
 
-    void setFrameCallback(std::function<void(int64_t)>&& callback) {
+    void setFrameCallback(std::function<std::function<void(bool)>(int32_t, int64_t)>&& callback) {
         mFrameCallback = std::move(callback);
     }
 
-    void setFrameCompleteCallback(std::function<void(int64_t)>&& callback) {
+    void setFrameCommitCallback(std::function<void(bool)>&& callback) {
+        mFrameCommitCallback = std::move(callback);
+    }
+
+    void setFrameCompleteCallback(std::function<void()>&& callback) {
         mFrameCompleteCallback = std::move(callback);
     }
+
+    void forceDrawNextFrame() { mForceDrawFrame = true; }
+
+    void setHardwareBufferRenderParams(const HardwareBufferRenderParams& params) {
+        mHardwareBufferParams = params;
+    }
+
+    void setRenderSdrHdrRatio(float ratio) { mRenderSdrHdrRatio = ratio; }
 
 private:
     void postAndWait();
@@ -95,6 +114,7 @@ private:
     CanvasContext* mContext;
     RenderNode* mTargetNode = nullptr;
     Rect mContentDrawBounds;
+    float mRenderSdrHdrRatio = 1.f;
 
     /*********************************************
      *  Single frame data
@@ -106,8 +126,12 @@ private:
 
     int64_t mFrameInfo[UI_THREAD_FRAME_INFO_SIZE];
 
-    std::function<void(int64_t)> mFrameCallback;
-    std::function<void(int64_t)> mFrameCompleteCallback;
+    HardwareBufferRenderParams mHardwareBufferParams;
+    std::function<std::function<void(bool)>(int32_t, int64_t)> mFrameCallback;
+    std::function<void(bool)> mFrameCommitCallback;
+    std::function<void()> mFrameCompleteCallback;
+
+    bool mForceDrawFrame = false;
 };
 
 } /* namespace renderthread */

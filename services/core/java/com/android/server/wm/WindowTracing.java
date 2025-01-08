@@ -17,72 +17,176 @@
 package com.android.server.wm;
 
 import static android.os.Build.IS_USER;
-import static com.android.server.wm.WindowManagerTraceFileProto.ENTRY;
-import static com.android.server.wm.WindowManagerTraceFileProto.MAGIC_NUMBER;
-import static com.android.server.wm.WindowManagerTraceFileProto.MAGIC_NUMBER_H;
-import static com.android.server.wm.WindowManagerTraceFileProto.MAGIC_NUMBER_L;
+
 import static com.android.server.wm.WindowManagerTraceProto.ELAPSED_REALTIME_NANOS;
 import static com.android.server.wm.WindowManagerTraceProto.WHERE;
 import static com.android.server.wm.WindowManagerTraceProto.WINDOW_MANAGER_SERVICE;
 
-import android.content.Context;
-import android.os.ShellCommand;
-import android.os.SystemClock;
-import android.os.Trace;
 import android.annotation.Nullable;
+import android.os.ShellCommand;
+import android.os.Trace;
 import android.util.Log;
 import android.util.proto.ProtoOutputStream;
+import android.view.Choreographer;
 
-import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.protolog.LegacyProtoLogImpl;
+import com.android.internal.protolog.ProtoLog;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.OutputStream;
 import java.io.PrintWriter;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * A class that allows window manager to dump its state continuously to a trace file, such that a
+ * A class that allows window manager to dump its state continuously, such that a
  * time series of window manager state can be analyzed after the fact.
  */
-class WindowTracing {
+abstract class WindowTracing {
+    protected static final String TAG = "WindowTracing";
+    protected static final String WHERE_START_TRACING = "trace.enable";
+    protected static final String WHERE_ON_FRAME = "onFrame";
 
-    private static final String TAG = "WindowTracing";
-    private static final long MAGIC_NUMBER_VALUE = ((long) MAGIC_NUMBER_H << 32) | MAGIC_NUMBER_L;
+    private final WindowManagerService mService;
+    private final Choreographer mChoreographer;
+    private final WindowManagerGlobalLock mGlobalLock;
 
-    private final Object mLock = new Object();
-    private final File mTraceFile;
-    private final BlockingQueue<ProtoOutputStream> mWriteQueue = new ArrayBlockingQueue<>(200);
+    private final Choreographer.FrameCallback mFrameCallback = (frameTimeNanos) ->
+            log(WHERE_ON_FRAME);
 
-    private boolean mEnabled;
-    private volatile boolean mEnabledLockFree;
+    private AtomicBoolean mScheduled = new AtomicBoolean(false);
 
-    WindowTracing(File file) {
-        mTraceFile = file;
+
+    static WindowTracing createDefaultAndStartLooper(WindowManagerService service,
+            Choreographer choreographer) {
+        if (!android.tracing.Flags.perfettoWmTracing()) {
+            return new WindowTracingLegacy(service, choreographer);
+        }
+        return new WindowTracingPerfetto(service, choreographer);
     }
 
-    void startTrace(@Nullable PrintWriter pw) throws IOException {
-        if (IS_USER){
+    protected WindowTracing(WindowManagerService service, Choreographer choreographer,
+            WindowManagerGlobalLock globalLock) {
+        mChoreographer = choreographer;
+        mService = service;
+        mGlobalLock = globalLock;
+    }
+
+    void startTrace(@Nullable PrintWriter pw) {
+        if (IS_USER) {
             logAndPrintln(pw, "Error: Tracing is not supported on user builds.");
             return;
         }
-        synchronized (mLock) {
-            logAndPrintln(pw, "Start tracing to " + mTraceFile + ".");
-            mWriteQueue.clear();
-            mTraceFile.delete();
-            try (OutputStream os = new FileOutputStream(mTraceFile)) {
-                mTraceFile.setReadable(true, false);
-                ProtoOutputStream proto = new ProtoOutputStream(os);
-                proto.write(MAGIC_NUMBER, MAGIC_NUMBER_VALUE);
-                proto.flush();
-            }
-            mEnabled = mEnabledLockFree = true;
+        if (!android.tracing.Flags.perfettoProtologTracing()) {
+            ((LegacyProtoLogImpl) ProtoLog.getSingleInstance()).startProtoLog(pw);
+        }
+        startTraceInternal(pw);
+    }
+
+    void stopTrace(@Nullable PrintWriter pw) {
+        if (IS_USER) {
+            logAndPrintln(pw, "Error: Tracing is not supported on user builds.");
+            return;
+        }
+        if (!android.tracing.Flags.perfettoProtologTracing()) {
+            ((LegacyProtoLogImpl) ProtoLog.getSingleInstance()).stopProtoLog(pw, true);
+        }
+        stopTraceInternal(pw);
+    }
+
+    /**
+     * If legacy tracing is enabled (either WM or ProtoLog):
+     * 1. Stop tracing
+     * 2. Write trace to disk (to be picked by dumpstate)
+     * 3. Restart tracing
+     *
+     * @param pw Print writer
+     */
+    void saveForBugreport(@Nullable PrintWriter pw) {
+        if (IS_USER) {
+            logAndPrintln(pw, "Error: Tracing is not supported on user builds.");
+            return;
+        }
+        if (!android.tracing.Flags.perfettoProtologTracing()
+                && ProtoLog.getSingleInstance().isProtoEnabled()) {
+            ((LegacyProtoLogImpl) ProtoLog.getSingleInstance()).stopProtoLog(pw, true);
+            ((LegacyProtoLogImpl) ProtoLog.getSingleInstance()).startProtoLog(pw);
+        }
+        saveForBugreportInternal(pw);
+    }
+
+    abstract void setLogLevel(@WindowTracingLogLevel int logLevel, PrintWriter pw);
+    abstract void setLogFrequency(boolean onFrame, PrintWriter pw);
+    abstract void setBufferCapacity(int capacity, PrintWriter pw);
+    abstract boolean isEnabled();
+    abstract int onShellCommand(ShellCommand shell);
+    abstract String getStatus();
+
+    /**
+     * If tracing is enabled, log the current state or schedule the next frame to be logged,
+     * according to the configuration in the derived tracing class.
+     *
+     * @param where Logging point descriptor
+     */
+    void logState(String where) {
+        if (!isEnabled()) {
+            return;
+        }
+
+        if (shouldLogOnTransaction()) {
+            log(where);
+        }
+
+        if (shouldLogOnFrame()) {
+            schedule();
         }
     }
 
-    private void logAndPrintln(@Nullable PrintWriter pw, String msg) {
+    /**
+     * Schedule the log to trace the next frame
+     */
+    private void schedule() {
+        if (!mScheduled.compareAndSet(false, true)) {
+            return;
+        }
+
+        mChoreographer.postFrameCallback(mFrameCallback);
+    }
+
+    /**
+     * Write the current frame to proto
+     *
+     * @param os Proto stream buffer
+     * @param logLevel Log level
+     * @param where Logging point descriptor
+     * @param elapsedRealtimeNanos Timestamp
+     */
+    protected void dumpToProto(ProtoOutputStream os, @WindowTracingLogLevel int logLevel,
+            String where, long elapsedRealtimeNanos) {
+        Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "traceStateLocked");
+        try {
+            os.write(ELAPSED_REALTIME_NANOS, elapsedRealtimeNanos);
+            os.write(WHERE, where);
+
+            long token = os.start(WINDOW_MANAGER_SERVICE);
+            synchronized (mGlobalLock) {
+                Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "dumpDebugLocked");
+                try {
+                    mService.dumpDebugLocked(os, logLevel);
+                } finally {
+                    Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
+                }
+            }
+            os.end(token);
+        } catch (Exception e) {
+            Log.wtf(TAG, "Exception while tracing state", e);
+        } finally {
+            boolean isOnFrameLogEvent = where == WHERE_ON_FRAME;
+            if (isOnFrameLogEvent) {
+                mScheduled.set(false);
+            }
+            Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
+        }
+    }
+
+    protected void logAndPrintln(@Nullable PrintWriter pw, String msg) {
         Log.i(TAG, msg);
         if (pw != null) {
             pw.println(msg);
@@ -90,123 +194,10 @@ class WindowTracing {
         }
     }
 
-    void stopTrace(@Nullable PrintWriter pw) {
-        if (IS_USER){
-            logAndPrintln(pw, "Error: Tracing is not supported on user builds.");
-            return;
-        }
-        synchronized (mLock) {
-            logAndPrintln(pw, "Stop tracing to " + mTraceFile + ". Waiting for traces to flush.");
-            mEnabled = mEnabledLockFree = false;
-            while (!mWriteQueue.isEmpty()) {
-                if (mEnabled) {
-                    logAndPrintln(pw, "ERROR: tracing was re-enabled while waiting for flush.");
-                    throw new IllegalStateException("tracing enabled while waiting for flush.");
-                }
-                try {
-                    mLock.wait();
-                    mLock.notify();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-            logAndPrintln(pw, "Trace written to " + mTraceFile + ".");
-        }
-    }
-
-    void appendTraceEntry(ProtoOutputStream proto) {
-        if (!mEnabledLockFree) {
-            return;
-        }
-
-        if (!mWriteQueue.offer(proto)) {
-            Log.e(TAG, "Dropping window trace entry, queue full");
-        }
-    }
-
-    void loop() {
-        for (;;) {
-            loopOnce();
-        }
-    }
-
-    @VisibleForTesting
-    void loopOnce() {
-        ProtoOutputStream proto;
-        try {
-            proto = mWriteQueue.take();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return;
-        }
-
-        synchronized (mLock) {
-            try {
-                Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "writeToFile");
-                try (OutputStream os = new FileOutputStream(mTraceFile, true /* append */)) {
-                    os.write(proto.getBytes());
-                }
-            } catch (IOException e) {
-                Log.e(TAG, "Failed to write file " + mTraceFile, e);
-            } finally {
-                Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
-            }
-            mLock.notify();
-        }
-    }
-
-    boolean isEnabled() {
-        return mEnabledLockFree;
-    }
-
-    static WindowTracing createDefaultAndStartLooper(Context context) {
-        File file = new File("/data/misc/wmtrace/wm_trace.pb");
-        WindowTracing windowTracing = new WindowTracing(file);
-        if (!IS_USER){
-            new Thread(windowTracing::loop, "window_tracing").start();
-        }
-        return windowTracing;
-    }
-
-    int onShellCommand(ShellCommand shell, String cmd) {
-        PrintWriter pw = shell.getOutPrintWriter();
-        try {
-            switch (cmd) {
-                case "start":
-                    startTrace(pw);
-                    return 0;
-                case "stop":
-                    stopTrace(pw);
-                    return 0;
-                default:
-                    pw.println("Unknown command: " + cmd);
-                    return -1;
-            }
-        } catch (IOException e) {
-            logAndPrintln(pw, e.toString());
-            throw new RuntimeException(e);
-        }
-    }
-
-    void traceStateLocked(String where, WindowManagerService service) {
-        if (!isEnabled()) {
-            return;
-        }
-        ProtoOutputStream os = new ProtoOutputStream();
-        long tokenOuter = os.start(ENTRY);
-        os.write(ELAPSED_REALTIME_NANOS, SystemClock.elapsedRealtimeNanos());
-        os.write(WHERE, where);
-
-        Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "writeToProtoLocked");
-        try {
-            long tokenInner = os.start(WINDOW_MANAGER_SERVICE);
-            service.writeToProtoLocked(os, true /* trim */);
-            os.end(tokenInner);
-        } finally {
-            Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
-        }
-        os.end(tokenOuter);
-        appendTraceEntry(os);
-        Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
-    }
+    protected abstract void startTraceInternal(@Nullable PrintWriter pw);
+    protected abstract void stopTraceInternal(@Nullable PrintWriter pw);
+    protected abstract void saveForBugreportInternal(@Nullable PrintWriter pw);
+    protected abstract void log(String where);
+    protected abstract boolean shouldLogOnFrame();
+    protected abstract boolean shouldLogOnTransaction();
 }

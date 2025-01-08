@@ -16,7 +16,7 @@
 
 package android.renderscript;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 
 
 /**
@@ -37,6 +37,7 @@ import android.annotation.UnsupportedAppUsage;
  * </p>
  *
  **/
+@Deprecated
 public class ProgramFragment extends Program {
     ProgramFragment(long id, RenderScript rs) {
         super(id, rs);

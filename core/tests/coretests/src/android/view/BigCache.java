@@ -16,16 +16,13 @@
 
 package android.view;
 
-import com.android.frameworks.coretests.R;
-
-import android.os.Bundle;
 import android.app.Activity;
+import android.graphics.Rect;
+import android.os.Bundle;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.view.ViewGroup;
-import android.view.View;
-import android.view.Display;
-import android.view.ViewConfiguration;
+
+import com.android.frameworks.coretests.R;
 
 /**
  * This activity contains two Views, one as big as the screen, one much larger. The large one
@@ -42,9 +39,9 @@ public class BigCache extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         final int cacheSize = ViewConfiguration.getMaximumDrawingCacheSize();
-        final Display display = getWindowManager().getDefaultDisplay();
-        final int screenWidth = display.getWidth();
-        final int screenHeight = display.getHeight();
+        final Rect windowBounds = getWindowManager().getCurrentWindowMetrics().getBounds();
+        final int screenWidth = windowBounds.width();
+        final int screenHeight = windowBounds.height();
 
         final View tiny = new View(this);
         tiny.setId(R.id.a);

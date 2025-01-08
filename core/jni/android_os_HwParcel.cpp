@@ -20,6 +20,7 @@
 
 #include "android_os_HwParcel.h"
 
+#include "android_os_HidlMemory.h"
 #include "android_os_HwBinder.h"
 #include "android_os_HwBlob.h"
 #include "android_os_NativeHandle.h"
@@ -27,6 +28,8 @@
 
 #include <nativehelper/JNIHelp.h>
 #include <android_runtime/AndroidRuntime.h>
+#include <hidl/HidlBinderSupport.h>
+#include <hidl/HidlSupport.h>
 #include <hidl/HidlTransportSupport.h>
 #include <hidl/Status.h>
 #include <nativehelper/ScopedLocalRef.h>
@@ -119,10 +122,18 @@ void signalExceptionForError(JNIEnv *env, status_t err, bool canThrowRemoteExcep
             std::stringstream ss;
             ss << "HwBinder Error: (" << err << ")";
 
-            jniThrowException(
-                    env,
-                    canThrowRemoteException ? "android/os/RemoteException" : "java/lang/RuntimeException",
-                    ss.str().c_str());
+            const char* exception = nullptr;
+            if (canThrowRemoteException) {
+                if (err == DEAD_OBJECT) {
+                    exception = "android/os/DeadObjectException";
+                } else {
+                    exception = "android/os/RemoteException";
+                }
+            } else {
+                exception = "java/lang/RuntimeException";
+            }
+
+            jniThrowException(env, exception, ss.str().c_str());
 
             break;
         }
@@ -224,6 +235,10 @@ bool JHwParcel::wasSent() const {
     return mWasSent;
 }
 
+void JHwParcel::addBlob(const sp<JHwBlob> &blob) {
+    mBlobs.emplace_back(blob);
+}
+
 }  // namespace android
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -274,7 +289,7 @@ static void JHwParcel_native_writeInterfaceToken(
         hardware::Parcel *parcel =
             JHwParcel::GetNativeContext(env, thiz)->getParcel();
 
-        status_t err = parcel->writeInterfaceToken(nameCopy.string());
+        status_t err = parcel->writeInterfaceToken(nameCopy.c_str());
         signalExceptionForError(env, err);
     }
 }
@@ -289,19 +304,11 @@ static void JHwParcel_native_enforceInterface(
         return;
     }
 
-    const jchar *interfaceName = env->GetStringCritical(interfaceNameObj, NULL);
+    const char *interfaceName = env->GetStringUTFChars(interfaceNameObj, NULL);
     if (interfaceName) {
-        String8 interfaceNameCopy = String8(String16(
-                reinterpret_cast<const char16_t *>(interfaceName),
-                env->GetStringLength(interfaceNameObj)));
-
-        env->ReleaseStringCritical(interfaceNameObj, interfaceName);
-        interfaceName = NULL;
-
         hardware::Parcel *parcel =
             JHwParcel::GetNativeContext(env, thiz)->getParcel();
-
-        bool valid = parcel->enforceInterface(interfaceNameCopy.string());
+        bool valid = parcel->enforceInterface(interfaceName);
 
         if (!valid) {
             jniThrowException(
@@ -309,6 +316,7 @@ static void JHwParcel_native_enforceInterface(
                     "java/lang/SecurityException",
                     "HWBinder invocation to an incorrect interface");
         }
+        env->ReleaseStringUTFChars(interfaceNameObj, interfaceName);
     }
 }
 
@@ -650,12 +658,40 @@ static void JHwParcel_native_writeStrongBinder(
     signalExceptionForError(env, err);
 }
 
+static void JHwParcel_native_writeHidlMemory(
+    JNIEnv *env, jobject thiz, jobject jmem) {
+
+    if (jmem == nullptr) {
+        jniThrowException(env, "java/lang/NullPointerException", nullptr);
+        return;
+    }
+
+    status_t err = OK;
+
+    // Convert the Java object to its C++ counterpart.
+    const hardware::hidl_memory* cmem = JHidlMemory::fromJava(env, jmem);
+    if (cmem == nullptr) {
+        err = BAD_VALUE;
+    }
+
+    if (err == OK) {
+        // Write it to the parcel.
+        hardware::Parcel* parcel =
+            JHwParcel::GetNativeContext(env, thiz)->getParcel();
+
+        size_t parentHandle;
+        err = parcel->writeBuffer(cmem, sizeof(*cmem), &parentHandle);
+        if (err == OK) {
+            err = hardware::writeEmbeddedToParcel(*cmem, parcel, parentHandle, 0);
+        }
+    }
+    signalExceptionForError(env, err);
+}
+
 static jstring MakeStringObjFromHidlString(JNIEnv *env, const hidl_string &s) {
     String16 utf16String(s.c_str(), s.size());
 
-    return env->NewString(
-            reinterpret_cast<const jchar *>(utf16String.string()),
-            utf16String.size());
+    return env->NewString(reinterpret_cast<const jchar *>(utf16String.c_str()), utf16String.size());
 }
 
 static jstring JHwParcel_native_readString(JNIEnv *env, jobject thiz) {
@@ -877,6 +913,74 @@ static jobjectArray JHwParcel_native_readNativeHandleVector(
     return objArray;
 }
 
+static status_t readEmbeddedHidlMemory(JNIEnv* env,
+                                       hardware::Parcel* parcel,
+                                       const hardware::hidl_memory& mem,
+                                       size_t parentHandle,
+                                       size_t parentOffset,
+                                       jobject* result) {
+    status_t err = hardware::readEmbeddedFromParcel(mem,
+                                                    *parcel,
+                                                    parentHandle,
+                                                    parentOffset);
+    if (err == OK) {
+        // Convert to Java.
+        *result = JHidlMemory::toJava(env, mem);
+        if (*result == nullptr) {
+            err = BAD_VALUE;
+        }
+    }
+    return err;
+}
+
+static jobject JHwParcel_native_readHidlMemory(
+        JNIEnv* env, jobject thiz) {
+    hardware::Parcel* parcel =
+            JHwParcel::GetNativeContext(env, thiz)->getParcel();
+
+    jobject result = nullptr;
+
+    const hardware::hidl_memory* mem;
+    size_t parentHandle;
+
+    status_t err = parcel->readBuffer(sizeof(*mem),
+                                      &parentHandle,
+                                      reinterpret_cast<const void**>(&mem));
+    if (err == OK) {
+        err = readEmbeddedHidlMemory(env,
+                                     parcel,
+                                     *mem,
+                                     parentHandle,
+                                     0,
+                                     &result);
+    }
+
+    signalExceptionForError(env, err);
+    return result;
+}
+
+static jobject JHwParcel_native_readEmbeddedHidlMemory(
+        JNIEnv* env,
+        jobject thiz,
+        jlong fieldHandle,
+        jlong parentHandle,
+        jlong offset) {
+    hardware::Parcel* parcel =
+            JHwParcel::GetNativeContext(env, thiz)->getParcel();
+
+    jobject result = nullptr;
+    const hardware::hidl_memory* mem =
+            reinterpret_cast<const hardware::hidl_memory*>(fieldHandle);
+    status_t err = readEmbeddedHidlMemory(env,
+                                          parcel,
+                                          *mem,
+                                          parentHandle,
+                                          offset,
+                                          &result);
+    signalExceptionForError(env, err);
+    return result;
+}
+
 static jobject JHwParcel_native_readStrongBinder(JNIEnv *env, jobject thiz) {
     hardware::Parcel *parcel =
         JHwParcel::GetNativeContext(env, thiz)->getParcel();
@@ -888,6 +992,8 @@ static jobject JHwParcel_native_readStrongBinder(JNIEnv *env, jobject thiz) {
     }
 
     if (!validateCanUseHwBinder(binder)) {
+        jniThrowException(env, "java/lang/IllegalArgumentException",
+                          "Local binder is not supported in Java");
         return nullptr;
     }
 
@@ -957,6 +1063,7 @@ static void JHwParcel_native_writeBuffer(
         JHwParcel::GetNativeContext(env, thiz)->getParcel();
 
     sp<JHwBlob> blob = JHwBlob::GetNativeContext(env, blobObj);
+    JHwParcel::GetNativeContext(env, thiz)->addBlob(blob);
     status_t err = blob->writeToParcel(parcel);
 
     if (err != OK) {
@@ -1075,6 +1182,14 @@ static JNINativeMethod gMethods[] = {
     { "release", "()V",
         (void *)JHwParcel_native_release },
 
+    {"writeHidlMemory", "(L" PACKAGE_PATH "/HidlMemory;)V",
+     (void*) JHwParcel_native_writeHidlMemory},
+
+    {"readHidlMemory", "()L" PACKAGE_PATH "/HidlMemory;",
+     (void*) JHwParcel_native_readHidlMemory},
+
+    {"readEmbeddedHidlMemory", "(JJJ)L" PACKAGE_PATH "/HidlMemory;",
+     (void*) JHwParcel_native_readEmbeddedHidlMemory},
 };
 
 namespace android {

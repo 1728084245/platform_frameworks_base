@@ -17,7 +17,7 @@
 package android.app;
 
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -47,8 +47,10 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.AutoCompleteTextView;
+import android.widget.Filterable;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ListPopupWindow;
 import android.widget.SearchView;
 import android.widget.TextView;
 
@@ -350,7 +352,7 @@ public class SearchDialog extends Dialog {
     public void onRestoreInstanceState(Bundle savedInstanceState) {
         if (savedInstanceState == null) return;
 
-        ComponentName launchComponent = savedInstanceState.getParcelable(INSTANCE_KEY_COMPONENT);
+        ComponentName launchComponent = savedInstanceState.getParcelable(INSTANCE_KEY_COMPONENT, android.content.ComponentName.class);
         Bundle appSearchData = savedInstanceState.getBundle(INSTANCE_KEY_APPDATA);
         String userQuery = savedInstanceState.getString(INSTANCE_KEY_USER_QUERY);
 
@@ -370,7 +372,10 @@ public class SearchDialog extends Dialog {
             updateSearchAppIcon();
             updateSearchBadge();
             if (isLandscapeMode(getContext())) {
-                mSearchAutoComplete.ensureImeVisible(true);
+                mSearchAutoComplete.setInputMethodMode(ListPopupWindow.INPUT_METHOD_NEEDED);
+                if (mSearchAutoComplete.isDropDownAlwaysVisible() || enoughToFilter()) {
+                    mSearchAutoComplete.showDropDown();
+                }
             }
         }
     }
@@ -379,6 +384,15 @@ public class SearchDialog extends Dialog {
     static boolean isLandscapeMode(Context context) {
         return context.getResources().getConfiguration().orientation
                 == Configuration.ORIENTATION_LANDSCAPE;
+    }
+
+    private boolean enoughToFilter() {
+        Filterable filterableAdapter = (Filterable) mSearchAutoComplete.getAdapter();
+        if (filterableAdapter == null || filterableAdapter.getFilter() == null) {
+            return false;
+        }
+
+        return mSearchAutoComplete.enoughToFilter();
     }
 
     /**

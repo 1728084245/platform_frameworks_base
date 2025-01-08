@@ -21,6 +21,8 @@
 
 #include "ResourceUtils.h"
 #include "ResourceValues.h"
+#include "text/Unicode.h"
+#include "trace/TraceBuffer.h"
 #include "xml/XmlDom.h"
 
 namespace aapt {
@@ -35,21 +37,27 @@ struct IdCollector : public xml::Visitor {
  public:
   using xml::Visitor::Visit;
 
-  explicit IdCollector(std::vector<SourcedResourceName>* out_symbols)
-      : out_symbols_(out_symbols) {}
+  explicit IdCollector(std::vector<SourcedResourceName>* out_symbols,
+                       android::SourcePathDiagnostics* source_diag)
+      : out_symbols_(out_symbols), source_diag_(source_diag) {
+  }
 
   void Visit(xml::Element* element) override {
     for (xml::Attribute& attr : element->attributes) {
       ResourceNameRef name;
       bool create = false;
       if (ResourceUtils::ParseReference(attr.value, &name, &create, nullptr)) {
-        if (create && name.type == ResourceType::kId) {
-          auto iter = std::lower_bound(out_symbols_->begin(),
-                                       out_symbols_->end(), name, cmp_name);
-          if (iter == out_symbols_->end() || iter->name != name) {
-            out_symbols_->insert(iter,
-                                 SourcedResourceName{name.ToResourceName(),
-                                                     element->line_number});
+        if (create && name.type.type == ResourceType::kId) {
+          if (!text::IsValidResourceEntryName(name.entry)) {
+            source_diag_->Error(android::DiagMessage(element->line_number)
+                                << "id '" << name << "' has an invalid entry name");
+          } else {
+            auto iter = std::lower_bound(out_symbols_->begin(),
+                                         out_symbols_->end(), name, cmp_name);
+            if (iter == out_symbols_->end() || iter->name != name) {
+              out_symbols_->insert(iter, SourcedResourceName{name.ToResourceName(),
+                                                             element->line_number});
+            }
           }
         }
       }
@@ -60,15 +68,18 @@ struct IdCollector : public xml::Visitor {
 
  private:
   std::vector<SourcedResourceName>* out_symbols_;
+  android::SourcePathDiagnostics* source_diag_;
 };
 
 }  // namespace
 
 bool XmlIdCollector::Consume(IAaptContext* context, xml::XmlResource* xmlRes) {
+  TRACE_CALL();
   xmlRes->file.exported_symbols.clear();
-  IdCollector collector(&xmlRes->file.exported_symbols);
+  android::SourcePathDiagnostics source_diag(xmlRes->file.source, context->GetDiagnostics());
+  IdCollector collector(&xmlRes->file.exported_symbols, &source_diag);
   xmlRes->root->Accept(&collector);
-  return true;
+  return !source_diag.HadError();
 }
 
 }  // namespace aapt

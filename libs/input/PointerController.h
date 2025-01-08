@@ -17,198 +17,205 @@
 #ifndef _UI_POINTER_CONTROLLER_H
 #define _UI_POINTER_CONTROLLER_H
 
-#include "SpriteController.h"
+#include <PointerControllerInterface.h>
+#include <gui/DisplayEventReceiver.h>
+#include <gui/WindowInfosUpdate.h>
+#include <input/DisplayViewport.h>
+#include <input/Input.h>
+#include <utils/BitSet.h>
+#include <utils/Looper.h>
+#include <utils/RefBase.h>
 
 #include <map>
+#include <memory>
+#include <string>
 #include <vector>
 
-#include <ui/DisplayInfo.h>
-#include <input/Input.h>
-#include <inputflinger/PointerControllerInterface.h>
-#include <utils/BitSet.h>
-#include <utils/RefBase.h>
-#include <utils/Looper.h>
-#include <utils/String8.h>
-#include <gui/DisplayEventReceiver.h>
+#include "MouseCursorController.h"
+#include "PointerControllerContext.h"
+#include "SpriteController.h"
+#include "TouchSpotController.h"
 
 namespace android {
-
-/*
- * Pointer resources.
- */
-struct PointerResources {
-    SpriteIcon spotHover;
-    SpriteIcon spotTouch;
-    SpriteIcon spotAnchor;
-};
-
-struct PointerAnimation {
-    std::vector<SpriteIcon> animationFrames;
-    nsecs_t durationPerFrame;
-};
-
-/*
- * Pointer controller policy interface.
- *
- * The pointer controller policy is used by the pointer controller to interact with
- * the Window Manager and other system components.
- *
- * The actual implementation is partially supported by callbacks into the DVM
- * via JNI.  This interface is also mocked in the unit tests.
- */
-class PointerControllerPolicyInterface : public virtual RefBase {
-protected:
-    PointerControllerPolicyInterface() { }
-    virtual ~PointerControllerPolicyInterface() { }
-
-public:
-    virtual void loadPointerIcon(SpriteIcon* icon) = 0;
-    virtual void loadPointerResources(PointerResources* outResources) = 0;
-    virtual void loadAdditionalMouseResources(std::map<int32_t, SpriteIcon>* outResources,
-            std::map<int32_t, PointerAnimation>* outAnimationResources) = 0;
-    virtual int32_t getDefaultPointerIconId() = 0;
-    virtual int32_t getCustomPointerIconId() = 0;
-};
-
 
 /*
  * Tracks pointer movements and draws the pointer sprite to a surface.
  *
  * Handles pointer acceleration and animation.
  */
-class PointerController : public PointerControllerInterface, public MessageHandler,
-                          public LooperCallback {
-protected:
-    virtual ~PointerController();
-
+class PointerController : public PointerControllerInterface {
 public:
-    enum InactivityTimeout {
-        INACTIVITY_TIMEOUT_NORMAL = 0,
-        INACTIVITY_TIMEOUT_SHORT = 1,
-    };
+    static std::shared_ptr<PointerController> create(
+            const sp<PointerControllerPolicyInterface>& policy, const sp<Looper>& looper,
+            SpriteController& spriteController, ControllerType type);
 
-    PointerController(const sp<PointerControllerPolicyInterface>& policy,
-            const sp<Looper>& looper, const sp<SpriteController>& spriteController);
+    ~PointerController() override;
 
-    virtual bool getBounds(float* outMinX, float* outMinY,
-            float* outMaxX, float* outMaxY) const;
-    virtual void move(float deltaX, float deltaY);
-    virtual void setButtonState(int32_t buttonState);
-    virtual int32_t getButtonState() const;
-    virtual void setPosition(float x, float y);
-    virtual void getPosition(float* outX, float* outY) const;
-    virtual void fade(Transition transition);
-    virtual void unfade(Transition transition);
+    void move(float deltaX, float deltaY) override;
+    void setPosition(float x, float y) override;
+    FloatPoint getPosition() const override;
+    ui::LogicalDisplayId getDisplayId() const override;
+    void fade(Transition transition) override;
+    void unfade(Transition transition) override;
+    void setDisplayViewport(const DisplayViewport& viewport) override;
 
-    virtual void setPresentation(Presentation presentation);
-    virtual void setSpots(const PointerCoords* spotCoords,
-            const uint32_t* spotIdToIndex, BitSet32 spotIdBits);
-    virtual void clearSpots();
+    void setPresentation(Presentation presentation) override;
+    void setSpots(const PointerCoords* spotCoords, const uint32_t* spotIdToIndex,
+                  BitSet32 spotIdBits, ui::LogicalDisplayId displayId) override;
+    void clearSpots() override;
+    void updatePointerIcon(PointerIconStyle iconId) override;
+    void setCustomPointerIcon(const SpriteIcon& icon) override;
+    void setSkipScreenshotFlagForDisplay(ui::LogicalDisplayId displayId) override;
+    void clearSkipScreenshotFlags() override;
 
-    void updatePointerIcon(int32_t iconId);
-    void setCustomPointerIcon(const SpriteIcon& icon);
-    void setDisplayViewport(int32_t width, int32_t height, int32_t orientation);
-    void setInactivityTimeout(InactivityTimeout inactivityTimeout);
+    virtual void setInactivityTimeout(InactivityTimeout inactivityTimeout);
+    void doInactivityTimeout();
     void reloadPointerResources();
+    void onDisplayViewportsUpdated(const std::vector<DisplayViewport>& viewports);
+
+    void onDisplayInfosChangedLocked(const std::vector<gui::DisplayInfo>& displayInfos)
+            REQUIRES(getLock());
+
+    std::string dump() override;
+
+protected:
+    using WindowListenerRegisterConsumer = std::function<std::vector<gui::DisplayInfo>(
+            const sp<android::gui::WindowInfosListener>&)>;
+    using WindowListenerUnregisterConsumer =
+            std::function<void(const sp<android::gui::WindowInfosListener>&)>;
+
+    // Constructor used to test WindowInfosListener registration.
+    PointerController(const sp<PointerControllerPolicyInterface>& policy, const sp<Looper>& looper,
+                      SpriteController& spriteController,
+                      const WindowListenerRegisterConsumer& registerListener,
+                      WindowListenerUnregisterConsumer unregisterListener);
+
+    PointerController(const sp<PointerControllerPolicyInterface>& policy, const sp<Looper>& looper,
+                      SpriteController& spriteController);
 
 private:
-    static const size_t MAX_RECYCLED_SPRITES = 12;
-    static const size_t MAX_SPOTS = 12;
+    friend PointerControllerContext::LooperCallback;
+    friend PointerControllerContext::MessageHandler;
 
-    enum {
-        MSG_INACTIVITY_TIMEOUT,
-    };
+    // PointerController's DisplayInfoListener can outlive the PointerController because when the
+    // listener is registered, a strong pointer to the listener (which can extend its lifecycle)
+    // is given away. To avoid the small overhead of using two separate locks in these two objects,
+    // we use the DisplayInfoListener's lock in PointerController.
+    std::mutex& getLock() const;
 
-    struct Spot {
-        static const uint32_t INVALID_ID = 0xffffffff;
+    PointerControllerContext mContext;
 
-        uint32_t id;
-        sp<Sprite> sprite;
-        float alpha;
-        float scale;
-        float x, y;
-
-        inline Spot(uint32_t id, const sp<Sprite>& sprite)
-                : id(id), sprite(sprite), alpha(1.0f), scale(1.0f),
-                  x(0.0f), y(0.0f), lastIcon(NULL) { }
-
-        void updateSprite(const SpriteIcon* icon, float x, float y);
-
-    private:
-        const SpriteIcon* lastIcon;
-    };
-
-    mutable Mutex mLock;
-
-    sp<PointerControllerPolicyInterface> mPolicy;
-    sp<Looper> mLooper;
-    sp<SpriteController> mSpriteController;
-    sp<WeakMessageHandler> mHandler;
-    sp<LooperCallback> mCallback;
-
-    DisplayEventReceiver mDisplayEventReceiver;
-
-    PointerResources mResources;
+    MouseCursorController mCursorController;
 
     struct Locked {
-        bool animationPending;
-        nsecs_t animationTime;
-
-        size_t animationFrameIndex;
-        nsecs_t lastFrameUpdatedTime;
-
-        int32_t displayWidth;
-        int32_t displayHeight;
-        int32_t displayOrientation;
-
-        InactivityTimeout inactivityTimeout;
-
         Presentation presentation;
-        bool presentationChanged;
+        ui::LogicalDisplayId pointerDisplayId = ui::LogicalDisplayId::INVALID;
 
-        int32_t pointerFadeDirection;
-        float pointerX;
-        float pointerY;
-        float pointerAlpha;
-        sp<Sprite> pointerSprite;
-        SpriteIcon pointerIcon;
-        bool pointerIconChanged;
+        std::vector<gui::DisplayInfo> mDisplayInfos;
+        std::unordered_map<ui::LogicalDisplayId, TouchSpotController> spotControllers;
+        std::unordered_set<ui::LogicalDisplayId> displaysToSkipScreenshot;
+    } mLocked GUARDED_BY(getLock());
 
-        std::map<int32_t, SpriteIcon> additionalMouseResources;
-        std::map<int32_t, PointerAnimation> animationResources;
+    class DisplayInfoListener : public gui::WindowInfosListener {
+    public:
+        explicit DisplayInfoListener(PointerController* pc) : mPointerController(pc){};
+        void onWindowInfosChanged(const gui::WindowInfosUpdate&) override;
+        void onPointerControllerDestroyed();
 
-        int32_t requestedPointerType;
+        // This lock is also used by PointerController. See PointerController::getLock().
+        std::mutex mLock;
 
-        int32_t buttonState;
+    private:
+        PointerController* mPointerController GUARDED_BY(mLock);
+    };
 
-        Vector<Spot*> spots;
-        Vector<sp<Sprite> > recycledSprites;
-    } mLocked;
+    sp<DisplayInfoListener> mDisplayInfoListener;
+    const WindowListenerUnregisterConsumer mUnregisterWindowInfosListener;
 
-    bool getBoundsLocked(float* outMinX, float* outMinY, float* outMaxX, float* outMaxY) const;
-    void setPositionLocked(float x, float y);
+    const ui::Transform& getTransformForDisplayLocked(ui::LogicalDisplayId displayId) const
+            REQUIRES(getLock());
 
-    void handleMessage(const Message& message);
-    int handleEvent(int fd, int events, void* data);
-    void doAnimate(nsecs_t timestamp);
-    bool doFadingAnimationLocked(nsecs_t timestamp);
-    bool doBitmapAnimationLocked(nsecs_t timestamp);
-    void doInactivityTimeout();
+    void clearSpotsLocked() REQUIRES(getLock());
+};
 
-    void startAnimationLocked();
+class MousePointerController : public PointerController {
+public:
+    /** A version of PointerController that controls one mouse pointer. */
+    MousePointerController(const sp<PointerControllerPolicyInterface>& policy,
+                           const sp<Looper>& looper, SpriteController& spriteController);
 
-    void resetInactivityTimeoutLocked();
-    void removeInactivityTimeoutLocked();
-    void updatePointerLocked();
+    ~MousePointerController() override;
 
-    Spot* getSpotLocked(uint32_t id);
-    Spot* createAndAddSpotLocked(uint32_t id);
-    Spot* removeFirstFadingSpotLocked();
-    void releaseSpotLocked(Spot* spot);
-    void fadeOutAndReleaseSpotLocked(Spot* spot);
-    void fadeOutAndReleaseAllSpotsLocked();
+    void setPresentation(Presentation) override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    void setSpots(const PointerCoords*, const uint32_t*, BitSet32, ui::LogicalDisplayId) override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    void clearSpots() override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+};
 
-    void loadResources();
+class TouchPointerController : public PointerController {
+public:
+    /** A version of PointerController that controls touch spots. */
+    TouchPointerController(const sp<PointerControllerPolicyInterface>& policy,
+                           const sp<Looper>& looper, SpriteController& spriteController);
+
+    ~TouchPointerController() override;
+
+    void move(float, float) override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    void setPosition(float, float) override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    FloatPoint getPosition() const override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    ui::LogicalDisplayId getDisplayId() const override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    void fade(Transition) override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    void unfade(Transition) override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    void setDisplayViewport(const DisplayViewport&) override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    void setPresentation(Presentation) override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    void updatePointerIcon(PointerIconStyle) override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    void setCustomPointerIcon(const SpriteIcon&) override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    // fade() should not be called by inactivity timeout. Do nothing.
+    void setInactivityTimeout(InactivityTimeout) override {}
+};
+
+class StylusPointerController : public PointerController {
+public:
+    /** A version of PointerController that controls one stylus pointer. */
+    StylusPointerController(const sp<PointerControllerPolicyInterface>& policy,
+                            const sp<Looper>& looper, SpriteController& spriteController);
+
+    ~StylusPointerController() override;
+
+    void setPresentation(Presentation) override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    void setSpots(const PointerCoords*, const uint32_t*, BitSet32, ui::LogicalDisplayId) override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
+    void clearSpots() override {
+        LOG_ALWAYS_FATAL("Should not be called");
+    }
 };
 
 } // namespace android

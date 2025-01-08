@@ -22,7 +22,7 @@ import android.animation.AnimatorListenerAdapter;
 import android.animation.AnimatorSet;
 import android.animation.PropertyValuesHolder;
 import android.animation.ValueAnimator;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.res.Configuration;
@@ -72,12 +72,12 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * While the FragmentManager API was introduced in
  * {@link android.os.Build.VERSION_CODES#HONEYCOMB}, a version of the API
  * at is also available for use on older platforms through
- * {@link android.support.v4.app.FragmentActivity}.  See the blog post
+ * {@link androidx.fragment.app.FragmentActivity}.  See the blog post
  * <a href="http://android-developers.blogspot.com/2011/03/fragments-for-all.html">
  * Fragments For All</a> for more details.
  *
  * @deprecated Use the <a href="{@docRoot}tools/extras/support-library.html">Support Library</a>
- *      {@link android.support.v4.app.FragmentManager} for consistent behavior across all devices
+ *      {@link androidx.fragment.app.FragmentManager} for consistent behavior across all devices
  *      and access to <a href="{@docRoot}topic/libraries/architecture/lifecycle.html">Lifecycle</a>.
  */
 @Deprecated
@@ -94,7 +94,7 @@ public abstract class FragmentManager {
      * will be persisted across activity instances.
      *
      * @deprecated Use the <a href="{@docRoot}tools/extras/support-library.html">
-     *      Support Library</a> {@link android.support.v4.app.FragmentManager.BackStackEntry}
+     *      Support Library</a> {@link androidx.fragment.app.FragmentManager.BackStackEntry}
      */
     @Deprecated
     public interface BackStackEntry {
@@ -142,7 +142,7 @@ public abstract class FragmentManager {
      *
      * @deprecated Use the <a href="{@docRoot}tools/extras/support-library.html">
      *      Support Library</a>
-     *      {@link android.support.v4.app.FragmentManager.OnBackStackChangedListener}
+     *      {@link androidx.fragment.app.FragmentManager.OnBackStackChangedListener}
      */
     @Deprecated
     public interface OnBackStackChangedListener {
@@ -446,7 +446,7 @@ public abstract class FragmentManager {
      *
      * @deprecated Use the <a href="{@docRoot}tools/extras/support-library.html">
      *      Support Library</a>
-     *      {@link android.support.v4.app.FragmentManager.FragmentLifecycleCallbacks}
+     *      {@link androidx.fragment.app.FragmentManager.FragmentLifecycleCallbacks}
      */
     @Deprecated
     public abstract static class FragmentLifecycleCallbacks {
@@ -623,7 +623,7 @@ final class FragmentManagerState implements Parcelable {
         dest.writeInt(mNextFragmentIndex);
     }
     
-    public static final Parcelable.Creator<FragmentManagerState> CREATOR
+    public static final @android.annotation.NonNull Parcelable.Creator<FragmentManagerState> CREATOR
             = new Parcelable.Creator<FragmentManagerState>() {
         public FragmentManagerState createFromParcel(Parcel in) {
             return new FragmentManagerState(in);
@@ -1101,7 +1101,7 @@ final class FragmentManagerImpl extends FragmentManager implements LayoutInflate
         }
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     Animator loadAnimator(Fragment fragment, int transit, boolean enter,
             int transitionStyle) {
         Animator animObj = fragment.onCreateAnimator(transit, enter, fragment.getNextAnim());

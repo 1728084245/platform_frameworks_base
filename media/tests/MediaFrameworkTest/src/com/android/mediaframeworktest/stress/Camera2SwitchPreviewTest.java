@@ -16,71 +16,34 @@
 
 package com.android.mediaframeworktest.stress;
 
-import com.android.ex.camera2.blocking.BlockingSessionCallback;
-import com.android.ex.camera2.exceptions.TimeoutRuntimeException;
-import com.android.mediaframeworktest.Camera2SurfaceViewTestCase;
-import com.android.mediaframeworktest.helpers.Camera2Focuser;
-import com.android.mediaframeworktest.helpers.CameraTestUtils;
-import com.android.mediaframeworktest.helpers.CameraTestUtils.SimpleCaptureCallback;
-
-import android.graphics.ImageFormat;
-import android.graphics.Point;
-import android.hardware.camera2.CameraCharacteristics;
-import android.hardware.camera2.CameraCaptureSession.CaptureCallback;
-import android.hardware.camera2.CameraConstrainedHighSpeedCaptureSession;
-import android.hardware.camera2.CameraDevice;
-import android.hardware.camera2.CameraAccessException;
-import android.hardware.camera2.CameraCaptureSession;
-import android.hardware.camera2.CaptureRequest;
-import android.hardware.camera2.CaptureResult;
-import android.hardware.camera2.DngCreator;
-import android.hardware.camera2.params.MeteringRectangle;
-import android.media.Image;
-import android.media.ImageReader;
-import android.media.CamcorderProfile;
-import android.media.MediaExtractor;
-import android.media.MediaFormat;
-import android.media.MediaRecorder;
-import android.os.ConditionVariable;
-import android.os.Environment;
-import android.util.Log;
-import android.util.Pair;
-import android.util.Rational;
-import android.util.Size;
-import android.view.Surface;
-import android.hardware.camera2.params.StreamConfigurationMap;
-import android.test.suitebuilder.annotation.LargeTest;
-import android.util.Log;
-import android.util.Range;
-
-import java.io.ByteArrayOutputStream;
-import java.util.ArrayList;
-import java.util.List;
-import java.io.File;
-import java.util.Arrays;
-import java.util.HashMap;
-
-import static com.android.mediaframeworktest.helpers.CameraTestUtils.CAPTURE_IMAGE_TIMEOUT_MS;
 import static com.android.mediaframeworktest.helpers.CameraTestUtils.MAX_READER_IMAGES;
-import static com.android.mediaframeworktest.helpers.CameraTestUtils.SimpleImageReaderListener;
-import static com.android.mediaframeworktest.helpers.CameraTestUtils.basicValidateJpegImage;
-import static com.android.mediaframeworktest.helpers.CameraTestUtils.configureCameraSession;
-import static com.android.mediaframeworktest.helpers.CameraTestUtils.dumpFile;
-import static com.android.mediaframeworktest.helpers.CameraTestUtils.getDataFromImage;
-import static com.android.mediaframeworktest.helpers.CameraTestUtils.getValueNotNull;
-import static com.android.mediaframeworktest.helpers.CameraTestUtils.makeImageReader;
-import static com.android.ex.camera2.blocking.BlockingSessionCallback.SESSION_CLOSED;
-import static com.android.mediaframeworktest.helpers.CameraTestUtils.CAPTURE_IMAGE_TIMEOUT_MS;
-import static com.android.mediaframeworktest.helpers.CameraTestUtils.SESSION_CLOSE_TIMEOUT_MS;
 import static com.android.mediaframeworktest.helpers.CameraTestUtils.SIZE_BOUND_1080P;
 import static com.android.mediaframeworktest.helpers.CameraTestUtils.SIZE_BOUND_2160P;
+import static com.android.mediaframeworktest.helpers.CameraTestUtils.SimpleImageReaderListener;
+import static com.android.mediaframeworktest.helpers.CameraTestUtils.configureCameraSession;
 import static com.android.mediaframeworktest.helpers.CameraTestUtils.getSupportedVideoSizes;
+
+import android.graphics.ImageFormat;
+import android.hardware.camera2.CameraCaptureSession.CaptureCallback;
+import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.CaptureResult;
+import android.media.CamcorderProfile;
+import android.media.ImageReader;
+import android.media.MediaRecorder;
+import android.util.Log;
+import android.util.Range;
+import android.util.Size;
+import android.view.Surface;
 
 import com.android.ex.camera2.blocking.BlockingSessionCallback;
 import com.android.mediaframeworktest.Camera2SurfaceViewTestCase;
-import com.android.mediaframeworktest.helpers.CameraTestUtils;
+import com.android.mediaframeworktest.helpers.CameraTestUtils.SimpleCaptureCallback;
 
-import junit.framework.AssertionFailedError;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
 
 /**
  * <p>Tests Back/Front camera switching and Camera/Video modes witching.</p>
@@ -104,7 +67,6 @@ public class Camera2SwitchPreviewTest extends Camera2SurfaceViewTestCase {
     private static final double AE_COMPENSATION_ERROR_TOLERANCE = 0.2;
     // 5 percent error margin for resulting metering regions
     private static final float METERING_REGION_ERROR_PERCENT_DELTA = 0.05f;
-    private final String VIDEO_FILE_PATH = Environment.getExternalStorageDirectory().getPath();
 
     private static final boolean DEBUG_DUMP = Log.isLoggable(TAG, Log.DEBUG);
     private static final int RECORDING_DURATION_MS = 3000;
@@ -137,10 +99,12 @@ public class Camera2SwitchPreviewTest extends Camera2SurfaceViewTestCase {
     private int mVideoFrameRate;
     private Size mVideoSize;
     private long mRecordingStartTime;
+    private String mVideoFilePath;
 
     @Override
     protected void setUp() throws Exception {
         super.setUp();
+        mVideoFilePath = mContext.getExternalFilesDir(null).getPath();
     }
 
     @Override
@@ -371,9 +335,9 @@ public class Camera2SwitchPreviewTest extends Camera2SurfaceViewTestCase {
         }
 
         // Configure preview and recording surfaces.
-        mOutMediaFileName = VIDEO_FILE_PATH + "/test_video.mp4";
+        mOutMediaFileName = mVideoFilePath + "/test_video.mp4";
         if (DEBUG_DUMP) {
-            mOutMediaFileName = VIDEO_FILE_PATH + "/test_video_" + cameraId + "_"
+            mOutMediaFileName = mVideoFilePath + "/test_video_" + cameraId + "_"
                     + videoSz.toString() + ".mp4";
         }
 

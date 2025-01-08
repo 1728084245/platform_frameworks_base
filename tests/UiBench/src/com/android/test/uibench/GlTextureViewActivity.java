@@ -20,7 +20,7 @@ import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.graphics.SurfaceTexture;
 import android.os.Bundle;
-import android.support.v7.app.AppCompatActivity;
+import androidx.appcompat.app.AppCompatActivity;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
@@ -33,6 +33,7 @@ import com.android.test.uibench.opengl.ImageFlipRenderThread;
 public class GlTextureViewActivity extends AppCompatActivity implements TextureView.SurfaceTextureListener {
     private ImageFlipRenderThread mRenderThread;
     private TextureView mTextureView;
+    private ObjectAnimator mAnimator;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -54,17 +55,17 @@ public class GlTextureViewActivity extends AppCompatActivity implements TextureV
         int distance = Math.max(mTextureView.getWidth(), mTextureView.getHeight());
         mTextureView.setCameraDistance(distance * metrics.density);
 
-        ObjectAnimator animator = ObjectAnimator.ofFloat(mTextureView, "rotationY", 0.0f, 360.0f);
-        animator.setRepeatMode(ObjectAnimator.REVERSE);
-        animator.setRepeatCount(ObjectAnimator.INFINITE);
-        animator.setDuration(4000);
-        animator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+        mAnimator = ObjectAnimator.ofFloat(mTextureView, "rotationY", 0.0f, 360.0f);
+        mAnimator.setRepeatMode(ObjectAnimator.REVERSE);
+        mAnimator.setRepeatCount(ObjectAnimator.INFINITE);
+        mAnimator.setDuration(4000);
+        mAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
             @Override
             public void onAnimationUpdate(ValueAnimator animation) {
                 mTextureView.invalidate();
             }
         });
-        animator.start();
+        mAnimator.start();
     }
 
     @Override
@@ -86,4 +87,11 @@ public class GlTextureViewActivity extends AppCompatActivity implements TextureV
     public void onSurfaceTextureUpdated(SurfaceTexture surface) {
     }
 
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (mAnimator != null) {
+            mAnimator.cancel();
+        }
+    }
 }

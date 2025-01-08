@@ -17,8 +17,9 @@
 package com.android.frameworks.perftests.am.tests;
 
 import android.content.Intent;
-import android.support.test.filters.LargeTest;
-import android.support.test.runner.AndroidJUnit4;
+
+import androidx.test.filters.LargeTest;
+import androidx.test.runner.AndroidJUnit4;
 
 import com.android.frameworks.perftests.am.util.Constants;
 
@@ -29,11 +30,11 @@ import org.junit.runner.RunWith;
 @LargeTest
 public class BroadcastPerfTest extends BasePerfTest {
     @Test
-    public void manifestBroadcastRunning() {
+    public void manifestFgBroadcastRunning() {
         runPerfFunction(() -> {
             startTargetPackage();
 
-            final Intent intent = createBroadcastIntent(
+            final Intent intent = createFgBroadcastIntent(
                     Constants.ACTION_BROADCAST_MANIFEST_RECEIVE);
 
             final long startTime = System.nanoTime();
@@ -47,9 +48,9 @@ public class BroadcastPerfTest extends BasePerfTest {
     }
 
     @Test
-    public void manifestBroadcastNotRunning() {
+    public void manifestFgBroadcastNotRunning() {
         runPerfFunction(() -> {
-            final Intent intent = createBroadcastIntent(
+            final Intent intent = createFgBroadcastIntent(
                     Constants.ACTION_BROADCAST_MANIFEST_RECEIVE);
 
             final long startTime = System.nanoTime();
@@ -63,11 +64,11 @@ public class BroadcastPerfTest extends BasePerfTest {
     }
 
     @Test
-    public void registeredBroadcast() {
+    public void registeredFgBroadcast() {
         runPerfFunction(() -> {
             startTargetPackage();
 
-            final Intent intent = createBroadcastIntent(
+            final Intent intent = createFgBroadcastIntent(
                     Constants.ACTION_BROADCAST_REGISTERED_RECEIVE);
 
             final long startTime = System.nanoTime();

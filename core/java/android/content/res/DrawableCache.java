@@ -16,13 +16,23 @@
 
 package android.content.res;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.graphics.drawable.Drawable;
+import android.os.Build;
+import android.ravenwood.annotation.RavenwoodKeep;
+import android.ravenwood.annotation.RavenwoodKeepPartialClass;
 
 /**
  * Class which can be used to cache Drawable resources against a theme.
  */
+@RavenwoodKeepPartialClass
 class DrawableCache extends ThemedResourceCache<Drawable.ConstantState> {
+
+    @UnsupportedAppUsage
+    @RavenwoodKeep
+    DrawableCache() {
+    }
+
     /**
      * If the resource is cached, creates and returns a new instance of it.
      *
@@ -32,7 +42,7 @@ class DrawableCache extends ThemedResourceCache<Drawable.ConstantState> {
      * @return a new instance of the resource, or {@code null} if not in
      *         the cache
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public Drawable getInstance(long key, Resources resources, Resources.Theme theme) {
         final Drawable.ConstantState entry = get(key, theme);
         if (entry != null) {

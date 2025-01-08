@@ -15,16 +15,14 @@
  */
 package android.telephony;
 
-import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.SystemApi;
 import android.content.Context;
 import android.os.PersistableBundle;
+import android.telephony.Annotation.DataFailureCause;
 
-import com.android.internal.util.ArrayUtils;
+import com.android.internal.telephony.util.ArrayUtils;
 
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -32,10 +30,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Returned as the reason for a data connection failure as defined by modem and some local errors.
- * @hide
+ * DataFailCause collects data connection failure causes code from different sources.
  */
-@SystemApi
 public final class DataFailCause {
     /** There is no failure */
     public static final int NONE = 0;
@@ -129,6 +125,12 @@ public final class DataFailCause {
     public static final int UNSUPPORTED_QCI_VALUE = 0x3B;
     /** Procedure requested by the UE was rejected because the bearer handling is not supported. */
     public static final int BEARER_HANDLING_NOT_SUPPORTED = 0x3C;
+    /**
+     * This cause is used to report a service or option not available event only when no other
+     * cause in the service or option not available class applies.
+     * @hide // TODO: Unhide in U.
+     */
+    public static final int SERVICE_OR_OPTION_NOT_AVAILABLE = 0x3F;
     /** Max number of Packet Data Protocol (PDP) context reached. */
     public static final int ACTIVE_PDP_CONTEXT_MAX_NUMBER_REACHED = 0x41;
     /** Unsupported APN in current public land mobile network (PLMN). */
@@ -843,8 +845,19 @@ public final class DataFailCause {
     /**
      * Data call bring up fails in the VSNCP phase due to a network rejection of the VSNCP
      * configuration request because the requested APN is unauthorized.
+     *
+     * @deprecated Use {@link #VSNCP_APN_UNAUTHORIZED} instead.
+     *
+     * @hide
      */
-    public static final int VSNCP_APN_UNATHORIZED = 0x8BE;
+    @SystemApi
+    @Deprecated
+    public static final int VSNCP_APN_UNATHORIZED = 0x8BE; // NOTYPO
+    /**
+     * Data call bring up fails in the VSNCP phase due to a network rejection of the VSNCP
+     * configuration request because the requested APN is unauthorized.
+     */
+    public static final int VSNCP_APN_UNAUTHORIZED = 0x8BE;
     /**
      * Data call bring up fails in the VSNCP phase due to a network rejection of the VSNCP
      * configuration request because the PDN limit has been exceeded.
@@ -908,6 +921,151 @@ public final class DataFailCause {
     public static final int IPV6_PREFIX_UNAVAILABLE = 0x8CA;
     /** System preference change back to SRAT during handoff */
     public static final int HANDOFF_PREFERENCE_CHANGED = 0x8CB;
+    /** Data call fail due to the slice not being allowed for the data call. */
+    public static final int SLICE_REJECTED = 0x8CC;
+    /** No matching rule available for the request, and match-all rule is not allowed for it. */
+    public static final int MATCH_ALL_RULE_NOT_ALLOWED = 0x8CD;
+    /** If connection failed for all matching URSP rules. */
+    public static final int ALL_MATCHING_RULES_FAILED = 0x8CE;
+
+    //IKE error notifications message as specified in 3GPP TS 24.302 (Section 8.1.2.2).
+
+    /** The PDN connection corresponding to the requested APN has been rejected. */
+    public static final int IWLAN_PDN_CONNECTION_REJECTION = 0x2000;
+    /**
+     * The PDN connection has been rejected. No additional PDN connections can be established
+     * for the UE due to the network policies or capabilities.
+     */
+    public static final int IWLAN_MAX_CONNECTION_REACHED = 0x2001;
+    /**
+     * The PDN connection has been rejected due to a semantic error in TFT operation.
+     */
+    public static final int IWLAN_SEMANTIC_ERROR_IN_THE_TFT_OPERATION = 0x2031;
+    /**
+     * The PDN connection has been rejected due to a syntactic error in TFT operation.
+     */
+    public static final int IWLAN_SYNTACTICAL_ERROR_IN_THE_TFT_OPERATION = 0x2032;
+    /**
+     * The PDN connection has been rejected due to sematic errors in the packet filter.
+     */
+    public static final int IWLAN_SEMANTIC_ERRORS_IN_PACKET_FILTERS = 0x2034;
+    /**
+     * The PDN connection has been rejected due to syntactic errors in the packet filter.
+     */
+    public static final int IWLAN_SYNTACTICAL_ERRORS_IN_PACKET_FILTERS = 0x2035;
+    /**
+     * No non-3GPP subscription is associated with the IMSI.
+     * The UE is not allowed to use non-3GPP access to EPC.
+     */
+    public static final int IWLAN_NON_3GPP_ACCESS_TO_EPC_NOT_ALLOWED = 0x2328;
+    /** The user identified by the IMSI is unknown. */
+    public static final int IWLAN_USER_UNKNOWN = 0x2329;
+    /**
+     * The requested APN is not included in the user's profile,
+     * and therefore is not authorized for that user.
+     */
+    public static final int IWLAN_NO_APN_SUBSCRIPTION = 0x232A;
+    /** The user is barred from using the non-3GPP access or the subscribed APN. */
+    public static final int IWLAN_AUTHORIZATION_REJECTED = 0x232B;
+    /** The Mobile Equipment used is not acceptable to the network */
+    public static final int IWLAN_ILLEGAL_ME = 0x232E;
+    /**
+     * The network has determined that the requested procedure cannot be completed successfully
+     * due to network failure.
+     */
+    public static final int IWLAN_NETWORK_FAILURE = 0x2904;
+    /** The access type is restricted to the user. */
+    public static final int IWLAN_RAT_TYPE_NOT_ALLOWED = 0x2AF9;
+    /** The network does not accept emergency PDN bringup request using an IMEI */
+    public static final int IWLAN_IMEI_NOT_ACCEPTED = 0x2AFD;
+    /**
+     * The ePDG performs PLMN filtering (based on roaming agreements) and rejects
+     * the request from the UE.
+     * The UE requests service in a PLMN where the UE is not allowed to operate.
+     */
+    public static final int IWLAN_PLMN_NOT_ALLOWED = 0x2B03;
+    /** The ePDG does not support un-authenticated IMSI based emergency PDN bringup **/
+    public static final int IWLAN_UNAUTHENTICATED_EMERGENCY_NOT_SUPPORTED = 0x2B2F;
+
+    // The below error causes are relevant when the device is unable to establish an IPSec tunnel
+    // with the ePDG for any reason, e.g. authentication fail or certificate validation or DNS
+    // Resolution and timeout failure.
+
+    /**
+     * The requested service was rejected because of congestion in the network while accessing the
+     * IWLAN ePDG. Defined in 3GPP TS 24.502, Section 9.2.4.2.
+     */
+    public static final int IWLAN_CONGESTION = 0x3C8C;
+
+    // Below IWLAN error codes are defined by the UE and do not relate to any 3GPP spec value
+    /** IKE configuration error resulting in failure */
+    public static final int IWLAN_IKEV2_CONFIG_FAILURE = 0x4000;
+    /**
+     * Sent in the response to an IKE_AUTH message when, for some reason,
+     * the authentication failed.
+     */
+    public static final int IWLAN_IKEV2_AUTH_FAILURE = 0x4001;
+    /** IKE message timeout, tunnel setup failed due to no response from EPDG */
+    public static final int IWLAN_IKEV2_MSG_TIMEOUT = 0x4002;
+    /** IKE Certification validation failure  */
+    public static final int IWLAN_IKEV2_CERT_INVALID = 0x4003;
+    /** Unable to resolve FQDN for the ePDG to an IP address */
+    public static final int IWLAN_DNS_RESOLUTION_NAME_FAILURE = 0x4004;
+    /** No response received from the DNS Server due to a timeout*/
+    public static final int IWLAN_DNS_RESOLUTION_TIMEOUT = 0x4005;
+    /** Expected to update or bring down an ePDG tunnel, but no tunnel found*/
+    public static final int IWLAN_TUNNEL_NOT_FOUND = 0x4006;
+    /**
+     * Failed to apply tunnel transform
+     *
+     * @hide
+     */
+    public static final int IWLAN_TUNNEL_TRANSFORM_FAILED = 0x4007;
+    /**
+     * IWLAN PDN setup failed due to Wi-Fi lost during IKE tunnel setup,
+     * match exception reported by IKE module
+     *
+     * @hide
+     */
+    public static final int IWLAN_IKE_NETWORK_LOST_EXCEPTION = 0x4008;
+    /**
+     * Carrier-specific error codes during IKEv2 SA setup
+     *
+     * @hide
+     */
+    public static final int IWLAN_IKE_PRIVATE_PROTOCOL_ERROR = 0x4009;
+    /**
+     * IKE Session closed before child session opened
+     *
+     * @hide
+     */
+    public static final int IWLAN_IKE_SESSION_CLOSED_BEFORE_CHILD_SESSION_OPENED = 0x400A;
+    /**
+     * IKE Init timeout, no response from EPDG
+     *
+     * @hide
+     */
+    public static final int IWLAN_IKE_INIT_TIMEOUT = 0x400B;
+    /**
+     * DPD message does not get an ack after the re-tx attempts and duration, i.e., times out.
+     *
+     * @hide
+     */
+    public static final int IWLAN_IKE_DPD_TIMEOUT = 0x400C;
+    /**
+     * The Wi-Fi to Wi-Fi handover of the IMS PDN fails because the network does not respond to the
+     * MOBIKE/rekey mobility message in the expected manner
+     *
+     * @hide
+     */
+    public static final int IWLAN_IKE_MOBILITY_TIMEOUT = 0x400D;
+    /**
+     * IKE client sent "IKE AUTH request 3" to the network but got "Internal address failure" from
+     * the network since no internal addresses can be assigned.
+     *
+     * @hide
+     */
+    public static final int IWLAN_EPDG_INTERNAL_ADDRESS_FAILURE = 0x400E;
 
     // OEM sepecific error codes. To be used by OEMs when they don't
     // want to reveal error code which would be replaced by ERROR_UNSPECIFIED
@@ -952,14 +1110,10 @@ public final class DataFailCause {
     public static final int UNKNOWN = 0x10000;
     /** Data fail due to radio not unavailable. */
     public static final int RADIO_NOT_AVAILABLE = 0x10001;                   /* no retry */
-    /** @hide */
+    /** Data fail due to unacceptable network parameter. */
     public static final int UNACCEPTABLE_NETWORK_PARAMETER = 0x10002;        /* no retry */
-    /** @hide */
-    public static final int CONNECTION_TO_DATACONNECTIONAC_BROKEN = 0x10003;
     /** Data connection was lost. */
     public static final int LOST_CONNECTION = 0x10004;
-    /** @hide */
-    public static final int RESET_BY_FRAMEWORK = 0x10005;
 
     /**
      * Data handover failed.
@@ -968,354 +1122,40 @@ public final class DataFailCause {
      */
     public static final int HANDOVER_FAILED = 0x10006;
 
-    /** @hide */
-    @IntDef(value = {
-            NONE,
-            OPERATOR_BARRED,
-            NAS_SIGNALLING,
-            LLC_SNDCP,
-            INSUFFICIENT_RESOURCES,
-            MISSING_UNKNOWN_APN,
-            UNKNOWN_PDP_ADDRESS_TYPE,
-            USER_AUTHENTICATION,
-            ACTIVATION_REJECT_GGSN,
-            ACTIVATION_REJECT_UNSPECIFIED,
-            SERVICE_OPTION_NOT_SUPPORTED,
-            SERVICE_OPTION_NOT_SUBSCRIBED,
-            SERVICE_OPTION_OUT_OF_ORDER,
-            NSAPI_IN_USE,
-            REGULAR_DEACTIVATION,
-            QOS_NOT_ACCEPTED,
-            NETWORK_FAILURE,
-            UMTS_REACTIVATION_REQ,
-            FEATURE_NOT_SUPP,
-            TFT_SEMANTIC_ERROR,
-            TFT_SYTAX_ERROR,
-            UNKNOWN_PDP_CONTEXT,
-            FILTER_SEMANTIC_ERROR,
-            FILTER_SYTAX_ERROR,
-            PDP_WITHOUT_ACTIVE_TFT,
-            ACTIVATION_REJECTED_BCM_VIOLATION,
-            ONLY_IPV4_ALLOWED,
-            ONLY_IPV6_ALLOWED,
-            ONLY_SINGLE_BEARER_ALLOWED,
-            ESM_INFO_NOT_RECEIVED,
-            PDN_CONN_DOES_NOT_EXIST,
-            MULTI_CONN_TO_SAME_PDN_NOT_ALLOWED,
-            COLLISION_WITH_NETWORK_INITIATED_REQUEST,
-            ONLY_IPV4V6_ALLOWED,
-            ONLY_NON_IP_ALLOWED,
-            UNSUPPORTED_QCI_VALUE,
-            BEARER_HANDLING_NOT_SUPPORTED,
-            ACTIVE_PDP_CONTEXT_MAX_NUMBER_REACHED,
-            UNSUPPORTED_APN_IN_CURRENT_PLMN,
-            INVALID_TRANSACTION_ID,
-            MESSAGE_INCORRECT_SEMANTIC,
-            INVALID_MANDATORY_INFO,
-            MESSAGE_TYPE_UNSUPPORTED,
-            MSG_TYPE_NONCOMPATIBLE_STATE,
-            UNKNOWN_INFO_ELEMENT,
-            CONDITIONAL_IE_ERROR,
-            MSG_AND_PROTOCOL_STATE_UNCOMPATIBLE,
-            PROTOCOL_ERRORS,
-            APN_TYPE_CONFLICT,
-            INVALID_PCSCF_ADDR,
-            INTERNAL_CALL_PREEMPT_BY_HIGH_PRIO_APN,
-            EMM_ACCESS_BARRED,
-            EMERGENCY_IFACE_ONLY,
-            IFACE_MISMATCH,
-            COMPANION_IFACE_IN_USE,
-            IP_ADDRESS_MISMATCH,
-            IFACE_AND_POL_FAMILY_MISMATCH,
-            EMM_ACCESS_BARRED_INFINITE_RETRY,
-            AUTH_FAILURE_ON_EMERGENCY_CALL,
-            INVALID_DNS_ADDR,
-            INVALID_PCSCF_OR_DNS_ADDRESS,
-            CALL_PREEMPT_BY_EMERGENCY_APN,
-            UE_INITIATED_DETACH_OR_DISCONNECT,
-            MIP_FA_REASON_UNSPECIFIED,
-            MIP_FA_ADMIN_PROHIBITED,
-            MIP_FA_INSUFFICIENT_RESOURCES,
-            MIP_FA_MOBILE_NODE_AUTHENTICATION_FAILURE,
-            MIP_FA_HOME_AGENT_AUTHENTICATION_FAILURE,
-            MIP_FA_REQUESTED_LIFETIME_TOO_LONG,
-            MIP_FA_MALFORMED_REQUEST,
-            MIP_FA_MALFORMED_REPLY,
-            MIP_FA_ENCAPSULATION_UNAVAILABLE,
-            MIP_FA_VJ_HEADER_COMPRESSION_UNAVAILABLE,
-            MIP_FA_REVERSE_TUNNEL_UNAVAILABLE,
-            MIP_FA_REVERSE_TUNNEL_IS_MANDATORY,
-            MIP_FA_DELIVERY_STYLE_NOT_SUPPORTED,
-            MIP_FA_MISSING_NAI,
-            MIP_FA_MISSING_HOME_AGENT,
-            MIP_FA_MISSING_HOME_ADDRESS,
-            MIP_FA_UNKNOWN_CHALLENGE,
-            MIP_FA_MISSING_CHALLENGE,
-            MIP_FA_STALE_CHALLENGE,
-            MIP_HA_REASON_UNSPECIFIED,
-            MIP_HA_ADMIN_PROHIBITED,
-            MIP_HA_INSUFFICIENT_RESOURCES,
-            MIP_HA_MOBILE_NODE_AUTHENTICATION_FAILURE,
-            MIP_HA_FOREIGN_AGENT_AUTHENTICATION_FAILURE,
-            MIP_HA_REGISTRATION_ID_MISMATCH,
-            MIP_HA_MALFORMED_REQUEST,
-            MIP_HA_UNKNOWN_HOME_AGENT_ADDRESS,
-            MIP_HA_REVERSE_TUNNEL_UNAVAILABLE,
-            MIP_HA_REVERSE_TUNNEL_IS_MANDATORY,
-            MIP_HA_ENCAPSULATION_UNAVAILABLE,
-            CLOSE_IN_PROGRESS,
-            NETWORK_INITIATED_TERMINATION,
-            MODEM_APP_PREEMPTED,
-            PDN_IPV4_CALL_DISALLOWED,
-            PDN_IPV4_CALL_THROTTLED,
-            PDN_IPV6_CALL_DISALLOWED,
-            PDN_IPV6_CALL_THROTTLED,
-            MODEM_RESTART,
-            PDP_PPP_NOT_SUPPORTED,
-            UNPREFERRED_RAT,
-            PHYSICAL_LINK_CLOSE_IN_PROGRESS,
-            APN_PENDING_HANDOVER,
-            PROFILE_BEARER_INCOMPATIBLE,
-            SIM_CARD_CHANGED,
-            LOW_POWER_MODE_OR_POWERING_DOWN,
-            APN_DISABLED,
-            MAX_PPP_INACTIVITY_TIMER_EXPIRED,
-            IPV6_ADDRESS_TRANSFER_FAILED,
-            TRAT_SWAP_FAILED,
-            EHRPD_TO_HRPD_FALLBACK,
-            MIP_CONFIG_FAILURE,
-            PDN_INACTIVITY_TIMER_EXPIRED,
-            MAX_IPV4_CONNECTIONS,
-            MAX_IPV6_CONNECTIONS,
-            APN_MISMATCH,
-            IP_VERSION_MISMATCH,
-            DUN_CALL_DISALLOWED,
-            INTERNAL_EPC_NONEPC_TRANSITION,
-            INTERFACE_IN_USE,
-            APN_DISALLOWED_ON_ROAMING,
-            APN_PARAMETERS_CHANGED,
-            NULL_APN_DISALLOWED,
-            THERMAL_MITIGATION,
-            DATA_SETTINGS_DISABLED,
-            DATA_ROAMING_SETTINGS_DISABLED,
-            DDS_SWITCHED,
-            FORBIDDEN_APN_NAME,
-            DDS_SWITCH_IN_PROGRESS,
-            CALL_DISALLOWED_IN_ROAMING,
-            NON_IP_NOT_SUPPORTED,
-            PDN_NON_IP_CALL_THROTTLED,
-            PDN_NON_IP_CALL_DISALLOWED,
-            CDMA_LOCK,
-            CDMA_INTERCEPT,
-            CDMA_REORDER,
-            CDMA_RELEASE_DUE_TO_SO_REJECTION,
-            CDMA_INCOMING_CALL,
-            CDMA_ALERT_STOP,
-            CHANNEL_ACQUISITION_FAILURE,
-            MAX_ACCESS_PROBE,
-            CONCURRENT_SERVICE_NOT_SUPPORTED_BY_BASE_STATION,
-            NO_RESPONSE_FROM_BASE_STATION,
-            REJECTED_BY_BASE_STATION,
-            CONCURRENT_SERVICES_INCOMPATIBLE,
-            NO_CDMA_SERVICE,
-            RUIM_NOT_PRESENT,
-            CDMA_RETRY_ORDER,
-            ACCESS_BLOCK,
-            ACCESS_BLOCK_ALL,
-            IS707B_MAX_ACCESS_PROBES,
-            THERMAL_EMERGENCY,
-            CONCURRENT_SERVICES_NOT_ALLOWED,
-            INCOMING_CALL_REJECTED,
-            NO_SERVICE_ON_GATEWAY,
-            NO_GPRS_CONTEXT,
-            ILLEGAL_MS,
-            ILLEGAL_ME,
-            GPRS_SERVICES_AND_NON_GPRS_SERVICES_NOT_ALLOWED,
-            GPRS_SERVICES_NOT_ALLOWED,
-            MS_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK,
-            IMPLICITLY_DETACHED,
-            PLMN_NOT_ALLOWED,
-            LOCATION_AREA_NOT_ALLOWED,
-            GPRS_SERVICES_NOT_ALLOWED_IN_THIS_PLMN,
-            PDP_DUPLICATE,
-            UE_RAT_CHANGE,
-            CONGESTION,
-            NO_PDP_CONTEXT_ACTIVATED,
-            ACCESS_CLASS_DSAC_REJECTION,
-            PDP_ACTIVATE_MAX_RETRY_FAILED,
-            RADIO_ACCESS_BEARER_FAILURE,
-            ESM_UNKNOWN_EPS_BEARER_CONTEXT,
-            DRB_RELEASED_BY_RRC,
-            CONNECTION_RELEASED,
-            EMM_DETACHED,
-            EMM_ATTACH_FAILED,
-            EMM_ATTACH_STARTED,
-            LTE_NAS_SERVICE_REQUEST_FAILED,
-            DUPLICATE_BEARER_ID,
-            ESM_COLLISION_SCENARIOS,
-            ESM_BEARER_DEACTIVATED_TO_SYNC_WITH_NETWORK,
-            ESM_NW_ACTIVATED_DED_BEARER_WITH_ID_OF_DEF_BEARER,
-            ESM_BAD_OTA_MESSAGE,
-            ESM_DOWNLOAD_SERVER_REJECTED_THE_CALL,
-            ESM_CONTEXT_TRANSFERRED_DUE_TO_IRAT,
-            DS_EXPLICIT_DEACTIVATION,
-            ESM_LOCAL_CAUSE_NONE,
-            LTE_THROTTLING_NOT_REQUIRED,
-            ACCESS_CONTROL_LIST_CHECK_FAILURE,
-            SERVICE_NOT_ALLOWED_ON_PLMN,
-            EMM_T3417_EXPIRED,
-            EMM_T3417_EXT_EXPIRED,
-            RRC_UPLINK_DATA_TRANSMISSION_FAILURE,
-            RRC_UPLINK_DELIVERY_FAILED_DUE_TO_HANDOVER,
-            RRC_UPLINK_CONNECTION_RELEASE,
-            RRC_UPLINK_RADIO_LINK_FAILURE,
-            RRC_UPLINK_ERROR_REQUEST_FROM_NAS,
-            RRC_CONNECTION_ACCESS_STRATUM_FAILURE,
-            RRC_CONNECTION_ANOTHER_PROCEDURE_IN_PROGRESS,
-            RRC_CONNECTION_ACCESS_BARRED,
-            RRC_CONNECTION_CELL_RESELECTION,
-            RRC_CONNECTION_CONFIG_FAILURE,
-            RRC_CONNECTION_TIMER_EXPIRED,
-            RRC_CONNECTION_LINK_FAILURE,
-            RRC_CONNECTION_CELL_NOT_CAMPED,
-            RRC_CONNECTION_SYSTEM_INTERVAL_FAILURE,
-            RRC_CONNECTION_REJECT_BY_NETWORK,
-            RRC_CONNECTION_NORMAL_RELEASE,
-            RRC_CONNECTION_RADIO_LINK_FAILURE,
-            RRC_CONNECTION_REESTABLISHMENT_FAILURE,
-            RRC_CONNECTION_OUT_OF_SERVICE_DURING_CELL_REGISTER,
-            RRC_CONNECTION_ABORT_REQUEST,
-            RRC_CONNECTION_SYSTEM_INFORMATION_BLOCK_READ_ERROR,
-            NETWORK_INITIATED_DETACH_WITH_AUTO_REATTACH,
-            NETWORK_INITIATED_DETACH_NO_AUTO_REATTACH,
-            ESM_PROCEDURE_TIME_OUT,
-            INVALID_CONNECTION_ID,
-            MAXIMIUM_NSAPIS_EXCEEDED,
-            INVALID_PRIMARY_NSAPI,
-            CANNOT_ENCODE_OTA_MESSAGE,
-            RADIO_ACCESS_BEARER_SETUP_FAILURE,
-            PDP_ESTABLISH_TIMEOUT_EXPIRED,
-            PDP_MODIFY_TIMEOUT_EXPIRED,
-            PDP_INACTIVE_TIMEOUT_EXPIRED,
-            PDP_LOWERLAYER_ERROR,
-            PDP_MODIFY_COLLISION,
-            MAXINUM_SIZE_OF_L2_MESSAGE_EXCEEDED,
-            NAS_REQUEST_REJECTED_BY_NETWORK,
-            RRC_CONNECTION_INVALID_REQUEST,
-            RRC_CONNECTION_TRACKING_AREA_ID_CHANGED,
-            RRC_CONNECTION_RF_UNAVAILABLE,
-            RRC_CONNECTION_ABORTED_DUE_TO_IRAT_CHANGE,
-            RRC_CONNECTION_RELEASED_SECURITY_NOT_ACTIVE,
-            RRC_CONNECTION_ABORTED_AFTER_HANDOVER,
-            RRC_CONNECTION_ABORTED_AFTER_IRAT_CELL_CHANGE,
-            RRC_CONNECTION_ABORTED_DURING_IRAT_CELL_CHANGE,
-            IMSI_UNKNOWN_IN_HOME_SUBSCRIBER_SERVER,
-            IMEI_NOT_ACCEPTED,
-            EPS_SERVICES_AND_NON_EPS_SERVICES_NOT_ALLOWED,
-            EPS_SERVICES_NOT_ALLOWED_IN_PLMN,
-            MSC_TEMPORARILY_NOT_REACHABLE,
-            CS_DOMAIN_NOT_AVAILABLE,
-            ESM_FAILURE,
-            MAC_FAILURE,
-            SYNCHRONIZATION_FAILURE,
-            UE_SECURITY_CAPABILITIES_MISMATCH,
-            SECURITY_MODE_REJECTED,
-            UNACCEPTABLE_NON_EPS_AUTHENTICATION,
-            CS_FALLBACK_CALL_ESTABLISHMENT_NOT_ALLOWED,
-            NO_EPS_BEARER_CONTEXT_ACTIVATED,
-            INVALID_EMM_STATE,
-            NAS_LAYER_FAILURE,
-            MULTIPLE_PDP_CALL_NOT_ALLOWED,
-            EMBMS_NOT_ENABLED,
-            IRAT_HANDOVER_FAILED,
-            EMBMS_REGULAR_DEACTIVATION,
-            TEST_LOOPBACK_REGULAR_DEACTIVATION,
-            LOWER_LAYER_REGISTRATION_FAILURE,
-            DATA_PLAN_EXPIRED,
-            UMTS_HANDOVER_TO_IWLAN,
-            EVDO_CONNECTION_DENY_BY_GENERAL_OR_NETWORK_BUSY,
-            EVDO_CONNECTION_DENY_BY_BILLING_OR_AUTHENTICATION_FAILURE,
-            EVDO_HDR_CHANGED,
-            EVDO_HDR_EXITED,
-            EVDO_HDR_NO_SESSION,
-            EVDO_USING_GPS_FIX_INSTEAD_OF_HDR_CALL,
-            EVDO_HDR_CONNECTION_SETUP_TIMEOUT,
-            FAILED_TO_ACQUIRE_COLOCATED_HDR,
-            OTASP_COMMIT_IN_PROGRESS,
-            NO_HYBRID_HDR_SERVICE,
-            HDR_NO_LOCK_GRANTED,
-            DBM_OR_SMS_IN_PROGRESS,
-            HDR_FADE,
-            HDR_ACCESS_FAILURE,
-            UNSUPPORTED_1X_PREV,
-            LOCAL_END,
-            NO_SERVICE,
-            FADE,
-            NORMAL_RELEASE,
-            ACCESS_ATTEMPT_ALREADY_IN_PROGRESS,
-            REDIRECTION_OR_HANDOFF_IN_PROGRESS,
-            EMERGENCY_MODE,
-            PHONE_IN_USE,
-            INVALID_MODE,
-            INVALID_SIM_STATE,
-            NO_COLLOCATED_HDR,
-            UE_IS_ENTERING_POWERSAVE_MODE,
-            DUAL_SWITCH,
-            PPP_TIMEOUT,
-            PPP_AUTH_FAILURE,
-            PPP_OPTION_MISMATCH,
-            PPP_PAP_FAILURE,
-            PPP_CHAP_FAILURE,
-            PPP_CLOSE_IN_PROGRESS,
-            LIMITED_TO_IPV4,
-            LIMITED_TO_IPV6,
-            VSNCP_TIMEOUT,
-            VSNCP_GEN_ERROR,
-            VSNCP_APN_UNATHORIZED,
-            VSNCP_PDN_LIMIT_EXCEEDED,
-            VSNCP_NO_PDN_GATEWAY_ADDRESS,
-            VSNCP_PDN_GATEWAY_UNREACHABLE,
-            VSNCP_PDN_GATEWAY_REJECT,
-            VSNCP_INSUFFICIENT_PARAMETERS,
-            VSNCP_RESOURCE_UNAVAILABLE,
-            VSNCP_ADMINISTRATIVELY_PROHIBITED,
-            VSNCP_PDN_ID_IN_USE,
-            VSNCP_SUBSCRIBER_LIMITATION,
-            VSNCP_PDN_EXISTS_FOR_THIS_APN,
-            VSNCP_RECONNECT_NOT_ALLOWED,
-            IPV6_PREFIX_UNAVAILABLE,
-            HANDOFF_PREFERENCE_CHANGED,
-            OEM_DCFAILCAUSE_1,
-            OEM_DCFAILCAUSE_2,
-            OEM_DCFAILCAUSE_3,
-            OEM_DCFAILCAUSE_4,
-            OEM_DCFAILCAUSE_5,
-            OEM_DCFAILCAUSE_6,
-            OEM_DCFAILCAUSE_7,
-            OEM_DCFAILCAUSE_8,
-            OEM_DCFAILCAUSE_9,
-            OEM_DCFAILCAUSE_10,
-            OEM_DCFAILCAUSE_11,
-            OEM_DCFAILCAUSE_12,
-            OEM_DCFAILCAUSE_13,
-            OEM_DCFAILCAUSE_14,
-            OEM_DCFAILCAUSE_15,
-            REGISTRATION_FAIL,
-            GPRS_REGISTRATION_FAIL,
-            SIGNAL_LOST,
-            PREF_RADIO_TECH_CHANGED,
-            RADIO_POWER_OFF,
-            TETHERED_CALL_ACTIVE,
-            ERROR_UNSPECIFIED,
-            UNKNOWN,
-            RADIO_NOT_AVAILABLE,
-            UNACCEPTABLE_NETWORK_PARAMETER,
-            CONNECTION_TO_DATACONNECTIONAC_BROKEN,
-            LOST_CONNECTION,
-            RESET_BY_FRAMEWORK
-    })
-    @Retention(RetentionPolicy.SOURCE)
-    public @interface FailCause{}
+    /**
+     * Enterprise setup failure: duplicate CID in DataCallResponse.
+     *
+     * @hide
+     */
+    public static final int DUPLICATE_CID = 0x10007;
+
+    /**
+     * Enterprise setup failure: no default data connection set up yet.
+     *
+     * @hide
+     */
+    public static final int NO_DEFAULT_DATA = 0x10008;
+
+    /**
+     * Data service is temporarily unavailable.
+     *
+     * @hide
+     */
+    public static final int SERVICE_TEMPORARILY_UNAVAILABLE = 0x10009;
+
+    /**
+     * The request is not supported by the vendor.
+     *
+     * @hide
+     */
+    public static final int REQUEST_NOT_SUPPORTED = 0x1000A;
+
+    /**
+     * An internal setup data error initiated by telephony that no retry should be performed.
+     *
+     * @hide
+     */
+    public static final int NO_RETRY_FAILURE = 0x1000B;
 
     private static final Map<Integer, String> sFailCauseMap;
     static {
@@ -1362,6 +1202,7 @@ public final class DataFailCause {
         sFailCauseMap.put(ONLY_NON_IP_ALLOWED, "ONLY_NON_IP_ALLOWED");
         sFailCauseMap.put(UNSUPPORTED_QCI_VALUE, "UNSUPPORTED_QCI_VALUE");
         sFailCauseMap.put(BEARER_HANDLING_NOT_SUPPORTED, "BEARER_HANDLING_NOT_SUPPORTED");
+        sFailCauseMap.put(SERVICE_OR_OPTION_NOT_AVAILABLE, "SERVICE_OR_OPTION_NOT_AVAILABLE");
         sFailCauseMap.put(ACTIVE_PDP_CONTEXT_MAX_NUMBER_REACHED,
                 "ACTIVE_PDP_CONTEXT_MAX_NUMBER_REACHED");
         sFailCauseMap.put(UNSUPPORTED_APN_IN_CURRENT_PLMN,
@@ -1673,6 +1514,7 @@ public final class DataFailCause {
         sFailCauseMap.put(VSNCP_TIMEOUT, "VSNCP_TIMEOUT");
         sFailCauseMap.put(VSNCP_GEN_ERROR, "VSNCP_GEN_ERROR");
         sFailCauseMap.put(VSNCP_APN_UNATHORIZED, "VSNCP_APN_UNATHORIZED");
+        sFailCauseMap.put(VSNCP_APN_UNAUTHORIZED, "VSNCP_APN_UNAUTHORIZED");
         sFailCauseMap.put(VSNCP_PDN_LIMIT_EXCEEDED, "VSNCP_PDN_LIMIT_EXCEEDED");
         sFailCauseMap.put(VSNCP_NO_PDN_GATEWAY_ADDRESS, "VSNCP_NO_PDN_GATEWAY_ADDRESS");
         sFailCauseMap.put(VSNCP_PDN_GATEWAY_UNREACHABLE, "VSNCP_PDN_GATEWAY_UNREACHABLE");
@@ -1686,6 +1528,48 @@ public final class DataFailCause {
         sFailCauseMap.put(VSNCP_RECONNECT_NOT_ALLOWED, "VSNCP_RECONNECT_NOT_ALLOWED");
         sFailCauseMap.put(IPV6_PREFIX_UNAVAILABLE, "IPV6_PREFIX_UNAVAILABLE");
         sFailCauseMap.put(HANDOFF_PREFERENCE_CHANGED, "HANDOFF_PREFERENCE_CHANGED");
+        sFailCauseMap.put(SLICE_REJECTED, "SLICE_REJECTED");
+        sFailCauseMap.put(MATCH_ALL_RULE_NOT_ALLOWED, "MATCH_ALL_RULE_NOT_ALLOWED");
+        sFailCauseMap.put(ALL_MATCHING_RULES_FAILED, "ALL_MATCHING_RULES_FAILED");
+        sFailCauseMap.put(IWLAN_PDN_CONNECTION_REJECTION, "IWLAN_PDN_CONNECTION_REJECTION");
+        sFailCauseMap.put(IWLAN_MAX_CONNECTION_REACHED, "IWLAN_MAX_CONNECTION_REACHED");
+        sFailCauseMap.put(IWLAN_SEMANTIC_ERROR_IN_THE_TFT_OPERATION,
+                "IWLAN_SEMANTIC_ERROR_IN_THE_TFT_OPERATION");
+        sFailCauseMap.put(IWLAN_SYNTACTICAL_ERROR_IN_THE_TFT_OPERATION,
+                "IWLAN_SYNTACTICAL_ERROR_IN_THE_TFT_OPERATION");
+        sFailCauseMap.put(IWLAN_SEMANTIC_ERRORS_IN_PACKET_FILTERS,
+                "IWLAN_SEMANTIC_ERRORS_IN_PACKET_FILTERS");
+        sFailCauseMap.put(IWLAN_SYNTACTICAL_ERRORS_IN_PACKET_FILTERS,
+                "IWLAN_SYNTACTICAL_ERRORS_IN_PACKET_FILTERS");
+        sFailCauseMap.put(IWLAN_NON_3GPP_ACCESS_TO_EPC_NOT_ALLOWED,
+                "IWLAN_NON_3GPP_ACCESS_TO_EPC_NOT_ALLOWED");
+        sFailCauseMap.put(IWLAN_USER_UNKNOWN, "IWLAN_USER_UNKNOWN");
+        sFailCauseMap.put(IWLAN_NO_APN_SUBSCRIPTION, "IWLAN_NO_APN_SUBSCRIPTION");
+        sFailCauseMap.put(IWLAN_AUTHORIZATION_REJECTED, "IWLAN_AUTHORIZATION_REJECTED");
+        sFailCauseMap.put(IWLAN_ILLEGAL_ME, "IWLAN_ILLEGAL_ME");
+        sFailCauseMap.put(IWLAN_NETWORK_FAILURE, "IWLAN_NETWORK_FAILURE");
+        sFailCauseMap.put(IWLAN_RAT_TYPE_NOT_ALLOWED, "IWLAN_RAT_TYPE_NOT_ALLOWED");
+        sFailCauseMap.put(IWLAN_IMEI_NOT_ACCEPTED, "IWLAN_IMEI_NOT_ACCEPTED");
+        sFailCauseMap.put(IWLAN_PLMN_NOT_ALLOWED, "IWLAN_PLMN_NOT_ALLOWED");
+        sFailCauseMap.put(IWLAN_UNAUTHENTICATED_EMERGENCY_NOT_SUPPORTED,
+                "IWLAN_UNAUTHENTICATED_EMERGENCY_NOT_SUPPORTED");
+        sFailCauseMap.put(IWLAN_IKEV2_CONFIG_FAILURE, "IWLAN_IKEV2_CONFIG_FAILURE");
+        sFailCauseMap.put(IWLAN_IKEV2_AUTH_FAILURE, "IWLAN_IKEV2_AUTH_FAILURE");
+        sFailCauseMap.put(IWLAN_IKEV2_MSG_TIMEOUT, "IWLAN_IKEV2_MSG_TIMEOUT");
+        sFailCauseMap.put(IWLAN_IKEV2_CERT_INVALID, "IWLAN_IKEV2_CERT_INVALID");
+        sFailCauseMap.put(IWLAN_DNS_RESOLUTION_NAME_FAILURE, "IWLAN_DNS_RESOLUTION_NAME_FAILURE");
+        sFailCauseMap.put(IWLAN_DNS_RESOLUTION_TIMEOUT, "IWLAN_DNS_RESOLUTION_TIMEOUT");
+        sFailCauseMap.put(IWLAN_TUNNEL_NOT_FOUND, "IWLAN_TUNNEL_NOT_FOUND");
+        sFailCauseMap.put(IWLAN_TUNNEL_TRANSFORM_FAILED, "IWLAN_TUNNEL_TRANSFORM_FAILED");
+        sFailCauseMap.put(IWLAN_IKE_INIT_TIMEOUT, "IWLAN_IKE_INIT_TIMEOUT");
+        sFailCauseMap.put(IWLAN_IKE_NETWORK_LOST_EXCEPTION, "IWLAN_IKE_NETWORK_LOST_EXCEPTION");
+        sFailCauseMap.put(IWLAN_IKE_PRIVATE_PROTOCOL_ERROR, "IWLAN_IKE_PRIVATE_PROTOCOL_ERROR");
+        sFailCauseMap.put(IWLAN_IKE_SESSION_CLOSED_BEFORE_CHILD_SESSION_OPENED,
+                "IWLAN_IKE_SESSION_CLOSED_BEFORE_CHILD_SESSION_OPENED");
+        sFailCauseMap.put(IWLAN_IKE_DPD_TIMEOUT, "IWLAN_IKE_DPD_TIMEOUT");
+        sFailCauseMap.put(IWLAN_IKE_MOBILITY_TIMEOUT, "IWLAN_IKE_MOBILITY_TIMEOUT");
+        sFailCauseMap.put(IWLAN_EPDG_INTERNAL_ADDRESS_FAILURE,
+                "IWLAN_EPDG_INTERNAL_ADDRESS_FAILURE");
         sFailCauseMap.put(OEM_DCFAILCAUSE_1, "OEM_DCFAILCAUSE_1");
         sFailCauseMap.put(OEM_DCFAILCAUSE_2, "OEM_DCFAILCAUSE_2");
         sFailCauseMap.put(OEM_DCFAILCAUSE_3, "OEM_DCFAILCAUSE_3");
@@ -1712,10 +1596,13 @@ public final class DataFailCause {
         sFailCauseMap.put(RADIO_NOT_AVAILABLE, "RADIO_NOT_AVAILABLE");
         sFailCauseMap.put(UNACCEPTABLE_NETWORK_PARAMETER,
                 "UNACCEPTABLE_NETWORK_PARAMETER");
-        sFailCauseMap.put(CONNECTION_TO_DATACONNECTIONAC_BROKEN,
-                "CONNECTION_TO_DATACONNECTIONAC_BROKEN");
         sFailCauseMap.put(LOST_CONNECTION, "LOST_CONNECTION");
-        sFailCauseMap.put(RESET_BY_FRAMEWORK, "RESET_BY_FRAMEWORK");
+        sFailCauseMap.put(HANDOVER_FAILED, "HANDOVER_FAILED");
+        sFailCauseMap.put(DUPLICATE_CID, "DUPLICATE_CID");
+        sFailCauseMap.put(NO_DEFAULT_DATA, "NO_DEFAULT_DATA");
+        sFailCauseMap.put(SERVICE_TEMPORARILY_UNAVAILABLE, "SERVICE_TEMPORARILY_UNAVAILABLE");
+        sFailCauseMap.put(REQUEST_NOT_SUPPORTED, "REQUEST_NOT_SUPPORTED");
+        sFailCauseMap.put(NO_RETRY_FAILURE, "NO_RETRY_FAILURE");
     }
 
     private DataFailCause() {
@@ -1737,7 +1624,8 @@ public final class DataFailCause {
      *
      * @hide
      */
-    public static boolean isRadioRestartFailure(@NonNull Context context, @FailCause int cause,
+    public static boolean isRadioRestartFailure(@NonNull Context context,
+                                                @DataFailureCause int cause,
                                                 int subId) {
         CarrierConfigManager configManager = (CarrierConfigManager)
                 context.getSystemService(Context.CARRIER_CONFIG_SERVICE);
@@ -1765,7 +1653,9 @@ public final class DataFailCause {
     }
 
     /** @hide */
-    public static boolean isPermanentFailure(@NonNull Context context, @FailCause int failCause,
+    // TODO: Migrated to DataConfigManager
+    public static boolean isPermanentFailure(@NonNull Context context,
+                                             @DataFailureCause int failCause,
                                              int subId) {
         synchronized (sPermanentFailureCache) {
 
@@ -1779,8 +1669,8 @@ public final class DataFailCause {
                 if (configManager != null) {
                     PersistableBundle b = configManager.getConfigForSubId(subId);
                     if (b != null) {
-                        String[] permanentFailureStrings = b.getStringArray(CarrierConfigManager.
-                                KEY_CARRIER_DATA_CALL_PERMANENT_FAILURE_STRINGS);
+                        String[] permanentFailureStrings = b.getStringArray(CarrierConfigManager
+                                .KEY_CARRIER_DATA_CALL_PERMANENT_FAILURE_STRINGS);
                         if (permanentFailureStrings != null) {
                             permanentFailureSet = new HashSet<>();
                             for (Map.Entry<Integer, String> e : sFailCauseMap.entrySet()) {
@@ -1795,28 +1685,29 @@ public final class DataFailCause {
                 // If we are not able to find the configuration from carrier config, use the default
                 // ones.
                 if (permanentFailureSet == null) {
-                    permanentFailureSet = new HashSet<Integer>() {
-                        {
-                            add(OPERATOR_BARRED);
-                            add(MISSING_UNKNOWN_APN);
-                            add(UNKNOWN_PDP_ADDRESS_TYPE);
-                            add(USER_AUTHENTICATION);
-                            add(ACTIVATION_REJECT_GGSN);
-                            add(SERVICE_OPTION_NOT_SUPPORTED);
-                            add(SERVICE_OPTION_NOT_SUBSCRIBED);
-                            add(NSAPI_IN_USE);
-                            add(ONLY_IPV4_ALLOWED);
-                            add(ONLY_IPV6_ALLOWED);
-                            add(PROTOCOL_ERRORS);
-                            add(RADIO_POWER_OFF);
-                            add(TETHERED_CALL_ACTIVE);
-                            add(RADIO_NOT_AVAILABLE);
-                            add(UNACCEPTABLE_NETWORK_PARAMETER);
-                            add(SIGNAL_LOST);
-                        }
-                    };
+                    permanentFailureSet = new HashSet<Integer>();
+                    permanentFailureSet.add(OPERATOR_BARRED);
+                    permanentFailureSet.add(MISSING_UNKNOWN_APN);
+                    permanentFailureSet.add(UNKNOWN_PDP_ADDRESS_TYPE);
+                    permanentFailureSet.add(USER_AUTHENTICATION);
+                    permanentFailureSet.add(ACTIVATION_REJECT_GGSN);
+                    permanentFailureSet.add(SERVICE_OPTION_NOT_SUPPORTED);
+                    permanentFailureSet.add(SERVICE_OPTION_NOT_SUBSCRIBED);
+                    permanentFailureSet.add(NSAPI_IN_USE);
+                    permanentFailureSet.add(ONLY_IPV4_ALLOWED);
+                    permanentFailureSet.add(ONLY_IPV6_ALLOWED);
+                    permanentFailureSet.add(PROTOCOL_ERRORS);
+                    permanentFailureSet.add(RADIO_POWER_OFF);
+                    permanentFailureSet.add(TETHERED_CALL_ACTIVE);
+                    permanentFailureSet.add(RADIO_NOT_AVAILABLE);
+                    permanentFailureSet.add(UNACCEPTABLE_NETWORK_PARAMETER);
+                    permanentFailureSet.add(SIGNAL_LOST);
+                    permanentFailureSet.add(DUPLICATE_CID);
+                    permanentFailureSet.add(MATCH_ALL_RULE_NOT_ALLOWED);
+                    permanentFailureSet.add(ALL_MATCHING_RULES_FAILED);
                 }
 
+                permanentFailureSet.add(NO_RETRY_FAILURE);
                 sPermanentFailureCache.put(subId, permanentFailureSet);
             }
 
@@ -1825,7 +1716,7 @@ public final class DataFailCause {
     }
 
     /** @hide */
-    public static boolean isEventLoggable(@FailCause int dataFailCause) {
+    public static boolean isEventLoggable(@DataFailureCause int dataFailCause) {
         return (dataFailCause == OPERATOR_BARRED) || (dataFailCause == INSUFFICIENT_RESOURCES)
                 || (dataFailCause == UNKNOWN_PDP_ADDRESS_TYPE)
                 || (dataFailCause == USER_AUTHENTICATION)
@@ -1845,17 +1736,22 @@ public final class DataFailCause {
     }
 
     /** @hide */
-    public static String toString(@FailCause int dataFailCause) {
-        int cause = getFailCause(dataFailCause);
-        return (cause == UNKNOWN) ? "UNKNOWN(" + dataFailCause + ")" : sFailCauseMap.get(cause);
+    public static String toString(@DataFailureCause int dataFailCause) {
+        return sFailCauseMap.getOrDefault(dataFailCause, "UNKNOWN") + "(0x"
+                + Integer.toHexString(dataFailCause) + ")";
     }
 
     /** @hide */
-    public static int getFailCause(@FailCause int failCause) {
+    public static int getFailCause(@DataFailureCause int failCause) {
         if (sFailCauseMap.containsKey(failCause)) {
             return failCause;
         } else {
             return UNKNOWN;
         }
+    }
+
+    /** @hide */
+    public static boolean isFailCauseExisting(@DataFailureCause int failCause) {
+        return sFailCauseMap.containsKey(failCause);
     }
 }

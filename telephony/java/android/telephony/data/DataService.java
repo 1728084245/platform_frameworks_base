@@ -16,7 +16,10 @@
 
 package android.telephony.data;
 
+import android.annotation.CallbackExecutor;
+import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
+import android.annotation.IntRange;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SdkConstant;
@@ -25,21 +28,30 @@ import android.app.Service;
 import android.content.Intent;
 import android.net.LinkProperties;
 import android.os.Handler;
+import android.os.HandlerExecutor;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
 import android.os.RemoteException;
-import android.telephony.AccessNetworkConstants;
-import android.telephony.Rlog;
+import android.telephony.AccessNetworkConstants.RadioAccessNetworkType;
+import android.util.Log;
 import android.util.SparseArray;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.telephony.IIntegerConsumer;
+import com.android.internal.telephony.flags.Flags;
+import com.android.internal.util.FunctionalUtils;
+import com.android.telephony.Rlog;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.Executor;
+import java.util.function.Consumer;
 
 /**
  * Base class of data service. Services that extend DataService must register the service in
@@ -104,10 +116,18 @@ public abstract class DataService extends Service {
     private static final int DATA_SERVICE_REQUEST_REGISTER_DATA_CALL_LIST_CHANGED      = 9;
     private static final int DATA_SERVICE_REQUEST_UNREGISTER_DATA_CALL_LIST_CHANGED    = 10;
     private static final int DATA_SERVICE_INDICATION_DATA_CALL_LIST_CHANGED            = 11;
+    private static final int DATA_SERVICE_REQUEST_START_HANDOVER                       = 12;
+    private static final int DATA_SERVICE_REQUEST_CANCEL_HANDOVER                      = 13;
+    private static final int DATA_SERVICE_REQUEST_REGISTER_APN_UNTHROTTLED             = 14;
+    private static final int DATA_SERVICE_REQUEST_UNREGISTER_APN_UNTHROTTLED           = 15;
+    private static final int DATA_SERVICE_INDICATION_APN_UNTHROTTLED                   = 16;
+    private static final int DATA_SERVICE_REQUEST_VALIDATION                           = 17;
 
     private final HandlerThread mHandlerThread;
 
     private final DataServiceHandler mHandler;
+
+    private final Executor mHandlerExecutor;
 
     private final SparseArray<DataServiceProvider> mServiceMap = new SparseArray<>();
 
@@ -125,6 +145,8 @@ public abstract class DataService extends Service {
         private final int mSlotIndex;
 
         private final List<IDataServiceCallback> mDataCallListChangedCallbacks = new ArrayList<>();
+
+        private final List<IDataServiceCallback> mApnUnthrottledCallbacks = new ArrayList<>();
 
         /**
          * Constructor
@@ -147,7 +169,7 @@ public abstract class DataService extends Service {
          * the provided callback to notify the platform.
          *
          * @param accessNetworkType Access network type that the data call will be established on.
-         *        Must be one of {@link AccessNetworkConstants.AccessNetworkType}.
+         *        Must be one of {@link android.telephony.AccessNetworkConstants.AccessNetworkType}.
          * @param dataProfile Data profile used for data call setup. See {@link DataProfile}
          * @param isRoaming True if the device is data roaming.
          * @param allowRoaming True if data roaming is allowed by the user.
@@ -157,16 +179,66 @@ public abstract class DataService extends Service {
          *        link properties of the existing data connection, otherwise null.
          * @param callback The result callback for this request.
          */
-        public void setupDataCall(int accessNetworkType, @NonNull DataProfile dataProfile,
-                                  boolean isRoaming, boolean allowRoaming,
-                                  @SetupDataReason int reason,
-                                  @Nullable LinkProperties linkProperties,
-                                  @NonNull DataServiceCallback callback) {
+        public void setupDataCall(
+                @RadioAccessNetworkType int accessNetworkType, @NonNull DataProfile dataProfile,
+                boolean isRoaming, boolean allowRoaming,
+                @SetupDataReason int reason, @Nullable LinkProperties linkProperties,
+                @NonNull DataServiceCallback callback) {
             // The default implementation is to return unsupported.
             if (callback != null) {
                 callback.onSetupDataCallComplete(DataServiceCallback.RESULT_ERROR_UNSUPPORTED,
                         null);
             }
+        }
+
+        /**
+         * Setup a data connection. The data service provider must implement this method to support
+         * establishing a packet data connection. When completed or error, the service must invoke
+         * the provided callback to notify the platform.
+         *
+         * @param accessNetworkType Access network type that the data call will be established on.
+         *        Must be one of {@link android.telephony.AccessNetworkConstants.AccessNetworkType}.
+         * @param dataProfile Data profile used for data call setup. See {@link DataProfile}
+         * @param isRoaming True if the device is data roaming.
+         * @param allowRoaming True if data roaming is allowed by the user.
+         * @param reason The reason for data setup. Must be {@link #REQUEST_REASON_NORMAL} or
+         *        {@link #REQUEST_REASON_HANDOVER}.
+         * @param linkProperties If {@code reason} is {@link #REQUEST_REASON_HANDOVER}, this is the
+         *        link properties of the existing data connection, otherwise null.
+         * @param pduSessionId The pdu session id to be used for this data call.
+         *                     The standard range of values are 1-15 while 0 means no pdu session id
+         *                     was attached to this call.  Reference: 3GPP TS 24.007 section
+         *                     11.2.3.1b.
+         * @param sliceInfo used within the data connection when a handover occurs from EPDG to 5G.
+         *        The value is null unless the access network is
+         *        {@link android.telephony.AccessNetworkConstants.AccessNetworkType#NGRAN} and a
+         *        handover is occurring from EPDG to 5G.  If the slice passed is rejected, then
+         *        {@link DataCallResponse#getCause()} is
+         *        {@link android.telephony.DataFailCause#SLICE_REJECTED}.
+         * @param trafficDescriptor {@link TrafficDescriptor} for which data connection needs to be
+         *        established. It is used for URSP traffic matching as described in 3GPP TS 24.526
+         *        Section 4.2.2. It includes an optional DNN which, if present, must be used for
+         *        traffic matching; it does not specify the end point to be used for the data call.
+         * @param matchAllRuleAllowed Indicates if using default match-all URSP rule for this
+         *        request is allowed. If false, this request must not use the match-all URSP rule
+         *        and if a non-match-all rule is not found (or if URSP rules are not available) then
+         *        {@link DataCallResponse#getCause()} is
+         *        {@link android.telephony.DataFailCause#MATCH_ALL_RULE_NOT_ALLOWED}. This is needed
+         *        as some requests need to have a hard failure if the intention cannot be met,
+         *        for example, a zero-rating slice.
+         * @param callback The result callback for this request.
+         */
+        public void setupDataCall(
+                @RadioAccessNetworkType int accessNetworkType, @NonNull DataProfile dataProfile,
+                boolean isRoaming, boolean allowRoaming,
+                @SetupDataReason int reason,
+                @Nullable LinkProperties linkProperties,
+                @IntRange(from = 0, to = 15) int pduSessionId, @Nullable NetworkSliceInfo sliceInfo,
+                @Nullable TrafficDescriptor trafficDescriptor, boolean matchAllRuleAllowed,
+                @NonNull DataServiceCallback callback) {
+            /* Call the old version since the new version isn't supported */
+            setupDataCall(accessNetworkType, dataProfile, isRoaming, allowRoaming, reason,
+                    linkProperties, callback);
         }
 
         /**
@@ -224,6 +296,66 @@ public abstract class DataService extends Service {
         }
 
         /**
+         * Indicates that a handover has begun.  This is called on the source transport.
+         *
+         * Any resources being transferred cannot be released while a
+         * handover is underway.
+         * <p/>
+         * If a handover was unsuccessful, then the framework calls
+         * {@link DataService#cancelHandover}.  The target transport retains ownership over any of
+         * the resources being transferred.
+         * <p/>
+         * If a handover was successful, the framework calls {@link DataService#deactivateDataCall}
+         * with reason {@link DataService.REQUEST_REASON_HANDOVER}. The target transport now owns
+         * the transferred resources and is responsible for releasing them.
+         *
+         * <p/>
+         * Note that the callback will be executed on binder thread.
+         *
+         * @param cid The identifier of the data call which is provided in {@link DataCallResponse}
+         * @param callback The result callback for this request.
+         *
+         * @hide
+         */
+        public void startHandover(int cid, @NonNull DataServiceCallback callback) {
+            Objects.requireNonNull(callback, "callback cannot be null");
+            // The default implementation is to return unsupported.
+            Log.d(TAG, "startHandover: " + cid);
+            callback.onHandoverStarted(DataServiceCallback.RESULT_ERROR_UNSUPPORTED);
+        }
+
+        /**
+         * Indicates that a handover was cancelled after a call to
+         * {@link DataService#startHandover}. This is called on the source transport.
+         * <p/>
+         * Since the handover was unsuccessful, the source transport retains ownership over any of
+         * the resources being transferred and is still responsible for releasing them.
+         * <p/>
+         * The handover can be cancelled up until either:
+         * <ul><li>
+         *     The handover was successful after receiving a successful response from
+         *     {@link DataService#setupDataCall} on the target transport.
+         * </li><li>
+         *     The data call on the source transport was lost.
+         * </li>
+         * </ul>
+         *
+         * <p/>
+         * Note that the callback will be executed on binder thread.
+         *
+         * @param cid The identifier of the data call which is provided in {@link DataCallResponse}
+         * @param callback The result callback for this request.
+         *
+         * @hide
+         */
+        public void cancelHandover(int cid, @NonNull DataServiceCallback callback) {
+            Objects.requireNonNull(callback, "callback cannot be null");
+            // The default implementation is to return unsupported.
+            Log.d(TAG, "cancelHandover: " + cid);
+            callback.onHandoverCancelled(DataServiceCallback.RESULT_ERROR_UNSUPPORTED);
+        }
+
+        /**
          * Get the active data call list.
          *
          * @param callback The result callback for this request.
@@ -231,7 +363,7 @@ public abstract class DataService extends Service {
         public void requestDataCallList(@NonNull DataServiceCallback callback) {
             // The default implementation is to return unsupported.
             callback.onRequestDataCallListComplete(DataServiceCallback.RESULT_ERROR_UNSUPPORTED,
-                    null);
+                    Collections.EMPTY_LIST);
         }
 
         private void registerForDataCallListChanged(IDataServiceCallback callback) {
@@ -246,6 +378,56 @@ public abstract class DataService extends Service {
             }
         }
 
+        private void registerForApnUnthrottled(IDataServiceCallback callback) {
+            synchronized (mApnUnthrottledCallbacks) {
+                mApnUnthrottledCallbacks.add(callback);
+            }
+        }
+
+        private void unregisterForApnUnthrottled(IDataServiceCallback callback) {
+            synchronized (mApnUnthrottledCallbacks) {
+                mApnUnthrottledCallbacks.remove(callback);
+            }
+        }
+
+        /**
+         * Request validation check to see if the network is working properly for a given data call.
+         *
+         * <p>This request is completed immediately after submitting the request to the data service
+         * provider and receiving {@link DataServiceCallback.ResultCode}, and progress status or
+         * validation results are notified through {@link
+         * DataCallResponse#getNetworkValidationStatus}.
+         *
+         * <p> If the network validation request is submitted successfully, {@link
+         * DataServiceCallback#RESULT_SUCCESS} is passed to {@code resultCodeCallback}. If the
+         * network validation feature is not supported by the data service provider itself, {@link
+         * DataServiceCallback#RESULT_ERROR_UNSUPPORTED} is passed to {@code resultCodeCallback}.
+         * See {@link DataServiceCallback.ResultCode} for the type of response that indicates
+         * whether the request was successfully submitted or had an error.
+         *
+         * <p>In response to this network validation request, providers can validate the data call
+         * in their own way. For example, in IWLAN, the DPD (Dead Peer Detection) can be used as a
+         * tool to check whether a data call is alive.
+         *
+         * @param cid The identifier of the data call which is provided in {@link DataCallResponse}
+         * @param executor The callback executor for the response.
+         * @param resultCodeCallback Listener for the {@link DataServiceCallback.ResultCode} that
+         *     request validation to the DataService and checks if the request has been submitted.
+         */
+        @FlaggedApi(Flags.FLAG_NETWORK_VALIDATION)
+        public void requestNetworkValidation(int cid,
+                @NonNull @CallbackExecutor Executor executor,
+                @NonNull @DataServiceCallback.ResultCode Consumer<Integer> resultCodeCallback) {
+            Objects.requireNonNull(executor, "executor cannot be null");
+            Objects.requireNonNull(resultCodeCallback, "resultCodeCallback cannot be null");
+
+            Log.d(TAG, "requestNetworkValidation: " + cid);
+
+            // The default implementation is to return unsupported.
+            executor.execute(() -> resultCodeCallback
+                    .accept(DataServiceCallback.RESULT_ERROR_UNSUPPORTED));
+        }
+
         /**
          * Notify the system that current data call list changed. Data service must invoke this
          * method whenever there is any data call status changed.
@@ -257,6 +439,36 @@ public abstract class DataService extends Service {
                 for (IDataServiceCallback callback : mDataCallListChangedCallbacks) {
                     mHandler.obtainMessage(DATA_SERVICE_INDICATION_DATA_CALL_LIST_CHANGED,
                             mSlotIndex, 0, new DataCallListChangedIndication(dataCallList,
+                                    callback)).sendToTarget();
+                }
+            }
+        }
+
+        /**
+         * Notify the system that a given APN was unthrottled.
+         *
+         * @param apn Access Point Name defined by the carrier.
+         */
+        public final void notifyApnUnthrottled(@NonNull String apn) {
+            synchronized (mApnUnthrottledCallbacks) {
+                for (IDataServiceCallback callback : mApnUnthrottledCallbacks) {
+                    mHandler.obtainMessage(DATA_SERVICE_INDICATION_APN_UNTHROTTLED,
+                            mSlotIndex, 0, new ApnUnthrottledIndication(apn,
+                                    callback)).sendToTarget();
+                }
+            }
+        }
+
+        /**
+         * Notify the system that a given DataProfile was unthrottled.
+         *
+         * @param dataProfile DataProfile associated with an APN returned from the modem
+         */
+        public final void notifyDataProfileUnthrottled(@NonNull DataProfile dataProfile) {
+            synchronized (mApnUnthrottledCallbacks) {
+                for (IDataServiceCallback callback : mApnUnthrottledCallbacks) {
+                    mHandler.obtainMessage(DATA_SERVICE_INDICATION_APN_UNTHROTTLED,
+                            mSlotIndex, 0, new ApnUnthrottledIndication(dataProfile,
                                     callback)).sendToTarget();
                 }
             }
@@ -278,16 +490,25 @@ public abstract class DataService extends Service {
         public final boolean allowRoaming;
         public final int reason;
         public final LinkProperties linkProperties;
+        public final int pduSessionId;
+        public final NetworkSliceInfo sliceInfo;
+        public final TrafficDescriptor trafficDescriptor;
+        public final boolean matchAllRuleAllowed;
         public final IDataServiceCallback callback;
         SetupDataCallRequest(int accessNetworkType, DataProfile dataProfile, boolean isRoaming,
-                             boolean allowRoaming, int reason, LinkProperties linkProperties,
-                             IDataServiceCallback callback) {
+                boolean allowRoaming, int reason, LinkProperties linkProperties, int pduSessionId,
+                NetworkSliceInfo sliceInfo, TrafficDescriptor trafficDescriptor,
+                boolean matchAllRuleAllowed, IDataServiceCallback callback) {
             this.accessNetworkType = accessNetworkType;
             this.dataProfile = dataProfile;
             this.isRoaming = isRoaming;
             this.allowRoaming = allowRoaming;
             this.linkProperties = linkProperties;
             this.reason = reason;
+            this.pduSessionId = pduSessionId;
+            this.sliceInfo = sliceInfo;
+            this.trafficDescriptor = trafficDescriptor;
+            this.matchAllRuleAllowed = matchAllRuleAllowed;
             this.callback = callback;
         }
     }
@@ -327,12 +548,50 @@ public abstract class DataService extends Service {
         }
     }
 
+    private static final class BeginCancelHandoverRequest {
+        public final int cid;
+        public final IDataServiceCallback callback;
+        BeginCancelHandoverRequest(int cid,
+                IDataServiceCallback callback) {
+            this.cid = cid;
+            this.callback = callback;
+        }
+    }
+
     private static final class DataCallListChangedIndication {
         public final List<DataCallResponse> dataCallList;
         public final IDataServiceCallback callback;
         DataCallListChangedIndication(List<DataCallResponse> dataCallList,
                                       IDataServiceCallback callback) {
             this.dataCallList = dataCallList;
+            this.callback = callback;
+        }
+    }
+
+    private static final class ApnUnthrottledIndication {
+        public final DataProfile dataProfile;
+        public final String apn;
+        public final IDataServiceCallback callback;
+        ApnUnthrottledIndication(String apn,
+                IDataServiceCallback callback) {
+            this.dataProfile = null;
+            this.apn = apn;
+            this.callback = callback;
+        }
+        ApnUnthrottledIndication(DataProfile dataProfile, IDataServiceCallback callback) {
+            this.dataProfile = dataProfile;
+            this.apn = null;
+            this.callback = callback;
+        }
+    }
+
+    private static final class ValidationRequest {
+        public final int cid;
+        public final Executor executor;
+        public final IIntegerConsumer callback;
+        ValidationRequest(int cid, Executor executor, IIntegerConsumer callback) {
+            this.cid = cid;
+            this.executor = executor;
             this.callback = callback;
         }
     }
@@ -377,7 +636,9 @@ public abstract class DataService extends Service {
                     serviceProvider.setupDataCall(setupDataCallRequest.accessNetworkType,
                             setupDataCallRequest.dataProfile, setupDataCallRequest.isRoaming,
                             setupDataCallRequest.allowRoaming, setupDataCallRequest.reason,
-                            setupDataCallRequest.linkProperties,
+                            setupDataCallRequest.linkProperties, setupDataCallRequest.pduSessionId,
+                            setupDataCallRequest.sliceInfo, setupDataCallRequest.trafficDescriptor,
+                            setupDataCallRequest.matchAllRuleAllowed,
                             (setupDataCallRequest.callback != null)
                                     ? new DataServiceCallback(setupDataCallRequest.callback)
                                     : null);
@@ -438,6 +699,54 @@ public abstract class DataService extends Service {
                         loge("Failed to call onDataCallListChanged. " + e);
                     }
                     break;
+                case DATA_SERVICE_REQUEST_START_HANDOVER:
+                    if (serviceProvider == null) break;
+                    BeginCancelHandoverRequest bReq = (BeginCancelHandoverRequest) message.obj;
+                    serviceProvider.startHandover(bReq.cid,
+                            (bReq.callback != null)
+                                    ? new DataServiceCallback(bReq.callback) : null);
+                    break;
+                case DATA_SERVICE_REQUEST_CANCEL_HANDOVER:
+                    if (serviceProvider == null) break;
+                    BeginCancelHandoverRequest cReq = (BeginCancelHandoverRequest) message.obj;
+                    serviceProvider.cancelHandover(cReq.cid,
+                            (cReq.callback != null)
+                                    ? new DataServiceCallback(cReq.callback) : null);
+                    break;
+                case DATA_SERVICE_REQUEST_REGISTER_APN_UNTHROTTLED:
+                    if (serviceProvider == null) break;
+                    serviceProvider.registerForApnUnthrottled((IDataServiceCallback) message.obj);
+                    break;
+                case DATA_SERVICE_REQUEST_UNREGISTER_APN_UNTHROTTLED:
+                    if (serviceProvider == null) break;
+                    callback = (IDataServiceCallback) message.obj;
+                    serviceProvider.unregisterForApnUnthrottled(callback);
+                    break;
+                case DATA_SERVICE_INDICATION_APN_UNTHROTTLED:
+                    if (serviceProvider == null) break;
+                    ApnUnthrottledIndication apnUnthrottledIndication =
+                            (ApnUnthrottledIndication) message.obj;
+                    try {
+                        if (apnUnthrottledIndication.dataProfile != null) {
+                            apnUnthrottledIndication.callback
+                                    .onDataProfileUnthrottled(apnUnthrottledIndication.dataProfile);
+                        } else {
+                            apnUnthrottledIndication.callback
+                                    .onApnUnthrottled(apnUnthrottledIndication.apn);
+                        }
+                    } catch (RemoteException e) {
+                        loge("Failed to call onApnUnthrottled. " + e);
+                    }
+                    break;
+                case DATA_SERVICE_REQUEST_VALIDATION:
+                    if (serviceProvider == null) break;
+                    ValidationRequest validationRequest = (ValidationRequest) message.obj;
+                    serviceProvider.requestNetworkValidation(
+                            validationRequest.cid,
+                            validationRequest.executor,
+                            FunctionalUtils
+                                    .ignoreRemoteException(validationRequest.callback::accept));
+                    break;
             }
         }
     }
@@ -450,6 +759,7 @@ public abstract class DataService extends Service {
         mHandlerThread.start();
 
         mHandler = new DataServiceHandler(mHandlerThread.getLooper());
+        mHandlerExecutor = new HandlerExecutor(mHandler);
         log("Data service created");
     }
 
@@ -457,6 +767,9 @@ public abstract class DataService extends Service {
      * Create the instance of {@link DataServiceProvider}. Data service provider must override
      * this method to facilitate the creation of {@link DataServiceProvider} instances. The system
      * will call this method after binding the data service for each active SIM slot id.
+     *
+     * This methead is guaranteed to be invoked in {@link DataService}'s internal handler thread
+     * whose looper can be retrieved with {@link Looper.myLooper()} when override this method.
      *
      * @param slotIndex SIM slot id the data service associated with.
      * @return Data service object. Null if failed to create the provider (e.g. invalid slot index)
@@ -481,7 +794,7 @@ public abstract class DataService extends Service {
 
     @Override
     public void onDestroy() {
-        mHandlerThread.quit();
+        mHandlerThread.quitSafely();
         super.onDestroy();
     }
 
@@ -503,11 +816,14 @@ public abstract class DataService extends Service {
 
         @Override
         public void setupDataCall(int slotIndex, int accessNetworkType, DataProfile dataProfile,
-                                  boolean isRoaming, boolean allowRoaming, int reason,
-                                  LinkProperties linkProperties, IDataServiceCallback callback) {
+                boolean isRoaming, boolean allowRoaming, int reason,
+                LinkProperties linkProperties, int pduSessionId, NetworkSliceInfo sliceInfo,
+                TrafficDescriptor trafficDescriptor, boolean matchAllRuleAllowed,
+                IDataServiceCallback callback) {
             mHandler.obtainMessage(DATA_SERVICE_REQUEST_SETUP_DATA_CALL, slotIndex, 0,
                     new SetupDataCallRequest(accessNetworkType, dataProfile, isRoaming,
-                            allowRoaming, reason, linkProperties, callback))
+                            allowRoaming, reason, linkProperties, pduSessionId, sliceInfo,
+                            trafficDescriptor, matchAllRuleAllowed, callback))
                     .sendToTarget();
         }
 
@@ -562,6 +878,62 @@ public abstract class DataService extends Service {
             }
             mHandler.obtainMessage(DATA_SERVICE_REQUEST_UNREGISTER_DATA_CALL_LIST_CHANGED,
                     slotIndex, 0, callback).sendToTarget();
+        }
+
+        @Override
+        public void startHandover(int slotIndex, int cid, IDataServiceCallback callback) {
+            if (callback == null) {
+                loge("startHandover: callback is null");
+                return;
+            }
+            BeginCancelHandoverRequest req = new BeginCancelHandoverRequest(cid, callback);
+            mHandler.obtainMessage(DATA_SERVICE_REQUEST_START_HANDOVER,
+                    slotIndex, 0, req)
+                    .sendToTarget();
+        }
+
+        @Override
+        public void cancelHandover(int slotIndex, int cid, IDataServiceCallback callback) {
+            if (callback == null) {
+                loge("cancelHandover: callback is null");
+                return;
+            }
+            BeginCancelHandoverRequest req = new BeginCancelHandoverRequest(cid, callback);
+            mHandler.obtainMessage(DATA_SERVICE_REQUEST_CANCEL_HANDOVER,
+                    slotIndex, 0, req).sendToTarget();
+        }
+
+        @Override
+        public void registerForUnthrottleApn(int slotIndex, IDataServiceCallback callback) {
+            if (callback == null) {
+                loge("registerForUnthrottleApn: callback is null");
+                return;
+            }
+            mHandler.obtainMessage(DATA_SERVICE_REQUEST_REGISTER_APN_UNTHROTTLED, slotIndex,
+                    0, callback).sendToTarget();
+        }
+
+        @Override
+        public void unregisterForUnthrottleApn(int slotIndex, IDataServiceCallback callback) {
+            if (callback == null) {
+                loge("uregisterForUnthrottleApn: callback is null");
+                return;
+            }
+            mHandler.obtainMessage(DATA_SERVICE_REQUEST_UNREGISTER_APN_UNTHROTTLED,
+                    slotIndex, 0, callback).sendToTarget();
+        }
+
+        @Override
+        public void requestNetworkValidation(int slotIndex, int cid,
+                IIntegerConsumer resultCodeCallback) {
+            if (resultCodeCallback == null) {
+                loge("requestNetworkValidation: resultCodeCallback is null");
+                return;
+            }
+            ValidationRequest validationRequest =
+                    new ValidationRequest(cid, mHandlerExecutor, resultCodeCallback);
+            mHandler.obtainMessage(DATA_SERVICE_REQUEST_VALIDATION,
+                    slotIndex, 0, validationRequest).sendToTarget();
         }
     }
 

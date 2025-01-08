@@ -18,13 +18,16 @@
 #define _ANDROID_SERVER_POWER_MANAGER_SERVICE_H
 
 #include <nativehelper/JNIHelp.h>
-#include "jni.h"
-
 #include <powermanager/PowerManager.h>
+#include <ui/LogicalDisplayId.h>
+#include <utils/Timers.h>
+
+#include "jni.h"
 
 namespace android {
 
-extern void android_server_PowerManagerService_userActivity(nsecs_t eventTime, int32_t eventType);
+extern void android_server_PowerManagerService_userActivity(nsecs_t eventTime, int32_t eventType,
+                                                            ui::LogicalDisplayId displayId);
 
 } // namespace android
 

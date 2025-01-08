@@ -94,7 +94,7 @@ interface IVrManager {
      * @return {@link android.view.Display.INVALID_DISPLAY} if there is no virtual display
      * currently, else return the display id of the virtual display
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = 30, trackingBug = 170729553)
     int getVr2dDisplayId();
 
     /**
@@ -112,13 +112,5 @@ interface IVrManager {
      * @param standy True if the device is entering standby, false if it's exiting standby.
      */
     void setStandbyEnabled(boolean standby);
-
-    /**
-     * Start VR Input method for the given packageName in {@param componentName}.
-     * This method notifies InputMethodManagerService to use VR IME instead of
-     * regular phone IME.
-     */
-    void setVrInputMethod(in ComponentName componentName);
-
 }
 

@@ -16,12 +16,12 @@
 
 package android.hardware;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 
 import java.io.FileDescriptor;
 import java.io.IOException;
-
 import java.nio.ByteBuffer;
 
 /**
@@ -32,7 +32,7 @@ public class SerialPort {
     private static final String TAG = "SerialPort";
 
     // used by the JNI code
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private int mNativeContext;
     private final String mName;
     private ParcelFileDescriptor mFileDescriptor;
@@ -61,7 +61,7 @@ public class SerialPort {
     /**
      * Closes the serial port
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void close() throws IOException {
         if (mFileDescriptor != null) {
             mFileDescriptor.close();
@@ -105,7 +105,7 @@ public class SerialPort {
      * @param buffer to write
      * @param length number of bytes to write
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void write(ByteBuffer buffer, int length) throws IOException {
         if (buffer.isDirect()) {
             native_write_direct(buffer, length);

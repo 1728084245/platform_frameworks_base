@@ -16,34 +16,49 @@
 
 package android.widget;
 
+import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+
+import static com.google.common.truth.Truth.assertThat;
+
 import static junit.framework.Assert.assertEquals;
 import static junit.framework.Assert.assertFalse;
 import static junit.framework.Assert.assertNotNull;
 import static junit.framework.Assert.assertTrue;
 
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 import android.app.Activity;
 import android.app.Instrumentation;
-import android.content.Intent;
+import android.content.Context;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.platform.test.annotations.Presubmit;
-import android.support.test.InstrumentationRegistry;
-import android.support.test.annotation.UiThreadTest;
-import android.support.test.filters.MediumTest;
-import android.support.test.rule.ActivityTestRule;
-import android.support.test.runner.AndroidJUnit4;
 import android.text.GetChars;
 import android.text.Layout;
 import android.text.PrecomputedText;
-import android.text.Selection;
-import android.text.Spannable;
+import android.text.method.OffsetMapping;
+import android.text.method.TransformationMethod;
 import android.view.View;
+import android.view.inputmethod.EditorInfo;
 import android.widget.TextView.BufferType;
+
+import androidx.test.InstrumentationRegistry;
+import androidx.test.annotation.UiThreadTest;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.MediumTest;
+import androidx.test.rule.ActivityTestRule;
 
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.lang.reflect.Field;
 import java.util.Locale;
 
 /**
@@ -98,82 +113,6 @@ public class TextViewTest {
     }
 
     @Test
-    public void testProcessTextActivityResultNonEditable() throws Throwable {
-        mActivityRule.runOnUiThread(() -> mTextView = new TextView(mActivity));
-        mInstrumentation.waitForIdleSync();
-        CharSequence originalText = "This is some text.";
-        mTextView.setText(originalText, TextView.BufferType.SPANNABLE);
-        assertEquals(originalText, mTextView.getText().toString());
-        mTextView.setTextIsSelectable(true);
-        Selection.setSelection((Spannable) mTextView.getText(), 0, mTextView.getText().length());
-
-        // We need to run this in the UI thread, as it will create a Toast.
-        mActivityRule.runOnUiThread(() -> {
-            CharSequence newText = "Text is replaced.";
-            Intent data = new Intent();
-            data.putExtra(Intent.EXTRA_PROCESS_TEXT, newText);
-            mTextView.onActivityResult(TextView.PROCESS_TEXT_REQUEST_CODE, Activity.RESULT_OK,
-                    data);
-        });
-        mInstrumentation.waitForIdleSync();
-
-        // This is a TextView, which can't be modified. Hence no change should have been made.
-        assertEquals(originalText, mTextView.getText().toString());
-    }
-
-    @Test
-    public void testProcessTextActivityResultEditable() throws Throwable {
-        mActivityRule.runOnUiThread(() -> mTextView = new EditText(mActivity));
-        mInstrumentation.waitForIdleSync();
-        CharSequence originalText = "This is some text.";
-        mTextView.setText(originalText, TextView.BufferType.SPANNABLE);
-        assertEquals(originalText, mTextView.getText().toString());
-        mTextView.setTextIsSelectable(true);
-        Selection.setSelection(((EditText) mTextView).getText(), 0, mTextView.getText().length());
-
-        CharSequence newText = "Text is replaced.";
-        Intent data = new Intent();
-        data.putExtra(Intent.EXTRA_PROCESS_TEXT, newText);
-        mTextView.onActivityResult(TextView.PROCESS_TEXT_REQUEST_CODE, Activity.RESULT_OK, data);
-
-        assertEquals(newText, mTextView.getText().toString());
-    }
-
-    @Test
-    public void testProcessTextActivityResultCancel() throws Throwable {
-        mActivityRule.runOnUiThread(() -> mTextView = new EditText(mActivity));
-        mInstrumentation.waitForIdleSync();
-        CharSequence originalText = "This is some text.";
-        mTextView.setText(originalText, TextView.BufferType.SPANNABLE);
-        assertEquals(originalText, mTextView.getText().toString());
-        mTextView.setTextIsSelectable(true);
-        Selection.setSelection(((EditText) mTextView).getText(), 0, mTextView.getText().length());
-
-        CharSequence newText = "Text is replaced.";
-        Intent data = new Intent();
-        data.putExtra(Intent.EXTRA_PROCESS_TEXT, newText);
-        mTextView.onActivityResult(TextView.PROCESS_TEXT_REQUEST_CODE, Activity.RESULT_CANCELED,
-                data);
-
-        assertEquals(originalText, mTextView.getText().toString());
-    }
-
-    @Test
-    public void testProcessTextActivityNoData() throws Throwable {
-        mActivityRule.runOnUiThread(() -> mTextView = new EditText(mActivity));
-        mInstrumentation.waitForIdleSync();
-        CharSequence originalText = "This is some text.";
-        mTextView.setText(originalText, TextView.BufferType.SPANNABLE);
-        assertEquals(originalText, mTextView.getText().toString());
-        mTextView.setTextIsSelectable(true);
-        Selection.setSelection(((EditText) mTextView).getText(), 0, mTextView.getText().length());
-
-        mTextView.onActivityResult(TextView.PROCESS_TEXT_REQUEST_CODE, Activity.RESULT_OK, null);
-
-        assertEquals(originalText, mTextView.getText().toString());
-    }
-
-    @Test
     @UiThreadTest
     public void testHyphenationWidth() {
         mTextView = new TextView(mActivity);
@@ -206,7 +145,8 @@ public class TextViewTest {
         int lineCount = layout.getLineCount();
         boolean hyphenationHappend = false;
         for (int i = 0; i < lineCount; ++i) {
-            if (layout.getHyphen(i) == 0) {
+            if (layout.getStartHyphenEdit(i) == Paint.START_HYPHEN_EDIT_NO_EDIT
+                    && layout.getEndHyphenEdit(i) == Paint.END_HYPHEN_EDIT_NO_EDIT) {
                 continue;  // Hyphantion does not happen.
             }
             hyphenationHappend = true;
@@ -320,6 +260,166 @@ public class TextViewTest {
         assertTrue(mTextView.useDynamicLayout());
     }
 
+    @Test
+    @UiThreadTest
+    public void testConstructor_doesNotLeaveTextNull() {
+        mTextView = new NullSetTextTextView(mActivity);
+        // Check that mText and mTransformed are empty string instead of null.
+        assertEquals("", mTextView.getText().toString());
+        assertEquals("", mTextView.getTransformed().toString());
+    }
+
+    @Test
+    @UiThreadTest
+    public void testPortraitDoesntSupportFullscreenIme() {
+        mActivity.setRequestedOrientation(SCREEN_ORIENTATION_PORTRAIT);
+        mTextView = new NullSetTextTextView(mActivity);
+        mTextView.requestFocus();
+        assertEquals("IME_FLAG_NO_FULLSCREEN should be set",
+                mTextView.getImeOptions(),
+                mTextView.getImeOptions() & EditorInfo.IME_FLAG_NO_FULLSCREEN);
+
+        mTextView.clearFocus();
+        mActivity.setRequestedOrientation(SCREEN_ORIENTATION_LANDSCAPE);
+        mTextView = new NullSetTextTextView(mActivity);
+        mTextView.requestFocus();
+        assertEquals("IME_FLAG_NO_FULLSCREEN should not be set",
+                0, mTextView.getImeOptions() & EditorInfo.IME_FLAG_NO_FULLSCREEN);
+    }
+
+    @Test
+    @UiThreadTest
+    public void setSetImeConsumesInput_recoveryToVisible() {
+        mTextView = new TextView(mActivity);
+        mTextView.setCursorVisible(true);
+        assertTrue(mTextView.isCursorVisible());
+
+        mTextView.setImeConsumesInput(true);
+        assertFalse(mTextView.isCursorVisible());
+
+        mTextView.setImeConsumesInput(false);
+        assertTrue(mTextView.isCursorVisible());
+    }
+
+    @Test
+    @UiThreadTest
+    public void setSetImeConsumesInput_recoveryToInvisible() {
+        mTextView = new TextView(mActivity);
+        mTextView.setCursorVisible(false);
+        assertFalse(mTextView.isCursorVisible());
+
+        mTextView.setImeConsumesInput(true);
+        assertFalse(mTextView.isCursorVisible());
+
+        mTextView.setImeConsumesInput(false);
+        assertFalse(mTextView.isCursorVisible());
+    }
+
+    @Test(expected = NullPointerException.class)
+    @UiThreadTest
+    public void setTextCharArrayNullThrows() {
+        mTextView = new TextView(mActivity);
+        mTextView.setText((char[]) null, 0, 0);
+    }
+
+    @Test
+    @UiThreadTest
+    public void setTextCharArrayValidAfterSetTextString() {
+        mTextView = new TextView(mActivity);
+        mTextView.setText(new char[] { 'h', 'i'}, 0, 2);
+        CharSequence charWrapper = mTextView.getText();
+        mTextView.setText("null out char wrapper");
+        assertEquals("hi", charWrapper.toString());
+    }
+
+    @Test
+    @UiThreadTest
+    public void transformedToOriginal_noOffsetMapping() {
+        mTextView = new TextView(mActivity);
+        final String text = "Hello world";
+        mTextView.setText(text);
+        for (int offset = 0; offset < text.length(); ++offset) {
+            assertThat(mTextView.transformedToOriginal(offset, OffsetMapping.MAP_STRATEGY_CURSOR))
+                    .isEqualTo(offset);
+            assertThat(mTextView.transformedToOriginal(offset,
+                    OffsetMapping.MAP_STRATEGY_CHARACTER)).isEqualTo(offset);
+        }
+    }
+
+    @Test
+    @UiThreadTest
+    public void originalToTransformed_noOffsetMapping() {
+        mTextView = new TextView(mActivity);
+        final String text = "Hello world";
+        mTextView.setText(text);
+        for (int offset = 0; offset < text.length(); ++offset) {
+            assertThat(mTextView.originalToTransformed(offset, OffsetMapping.MAP_STRATEGY_CURSOR))
+                    .isEqualTo(offset);
+            assertThat(mTextView.originalToTransformed(offset,
+                    OffsetMapping.MAP_STRATEGY_CHARACTER)).isEqualTo(offset);
+        }
+    }
+
+    @Test
+    @UiThreadTest
+    public void originalToTransformed_hasOffsetMapping() {
+        mTextView = new TextView(mActivity);
+        final CharSequence text = "Hello world";
+        final TransformedText transformedText = mock(TransformedText.class);
+        when(transformedText.originalToTransformed(anyInt(), anyInt())).then((invocation) -> {
+            // plus 1 for character strategy and minus 1 for cursor strategy.
+            if ((int) invocation.getArgument(1) == OffsetMapping.MAP_STRATEGY_CHARACTER) {
+                return (int) invocation.getArgument(0) + 1;
+            }
+            return (int) invocation.getArgument(0) - 1;
+        });
+
+        final TransformationMethod transformationMethod =
+                new TestTransformationMethod(transformedText);
+        mTextView.setText(text);
+        mTextView.setTransformationMethod(transformationMethod);
+
+        assertThat(mTextView.originalToTransformed(1, OffsetMapping.MAP_STRATEGY_CHARACTER))
+                .isEqualTo(2);
+        verify(transformedText, times(1))
+                .originalToTransformed(1, OffsetMapping.MAP_STRATEGY_CHARACTER);
+
+        assertThat(mTextView.originalToTransformed(1, OffsetMapping.MAP_STRATEGY_CURSOR))
+                .isEqualTo(0);
+        verify(transformedText, times(1))
+                .originalToTransformed(1, OffsetMapping.MAP_STRATEGY_CURSOR);
+    }
+
+    @Test
+    @UiThreadTest
+    public void transformedToOriginal_hasOffsetMapping() {
+        mTextView = new TextView(mActivity);
+        final CharSequence text = "Hello world";
+        final TransformedText transformedText = mock(TransformedText.class);
+        when(transformedText.transformedToOriginal(anyInt(), anyInt())).then((invocation) -> {
+            // plus 1 for character strategy and minus 1 for cursor strategy.
+            if ((int) invocation.getArgument(1) == OffsetMapping.MAP_STRATEGY_CHARACTER) {
+                return (int) invocation.getArgument(0) + 1;
+            }
+            return (int) invocation.getArgument(0) - 1;
+        });
+
+        final TransformationMethod transformationMethod =
+                new TestTransformationMethod(transformedText);
+        mTextView.setText(text);
+        mTextView.setTransformationMethod(transformationMethod);
+
+        assertThat(mTextView.transformedToOriginal(1, OffsetMapping.MAP_STRATEGY_CHARACTER))
+                .isEqualTo(2);
+        verify(transformedText, times(1))
+                .transformedToOriginal(1, OffsetMapping.MAP_STRATEGY_CHARACTER);
+
+        assertThat(mTextView.transformedToOriginal(1, OffsetMapping.MAP_STRATEGY_CURSOR))
+                .isEqualTo(0);
+        verify(transformedText, times(1))
+                .transformedToOriginal(1, OffsetMapping.MAP_STRATEGY_CURSOR);
+    }
+
     private String createLongText() {
         int size = 600 * 1000;
         final StringBuilder builder = new StringBuilder(size);
@@ -327,5 +427,47 @@ public class TextViewTest {
             builder.append('a');
         }
         return builder.toString();
+    }
+
+    private class NullSetTextTextView extends TextView {
+        NullSetTextTextView(Context context) {
+            super(context);
+        }
+
+        @Override
+        public void setText(CharSequence text, BufferType type) {
+            // #setText will be called from the TextView constructor. Here we reproduce
+            // the situation when the method sets mText and mTransformed to null.
+            try {
+                final Field textField = TextView.class.getDeclaredField("mText");
+                textField.setAccessible(true);
+                textField.set(this, null);
+                final Field transformedField = TextView.class.getDeclaredField("mTransformed");
+                transformedField.setAccessible(true);
+                transformedField.set(this, null);
+            } catch (NoSuchFieldException | IllegalAccessException e) {
+                // Empty.
+            }
+        }
+    }
+
+    private interface TransformedText extends OffsetMapping, CharSequence { }
+
+    private static class TestTransformationMethod implements TransformationMethod {
+        private final CharSequence mTransformedText;
+
+        TestTransformationMethod(CharSequence transformedText) {
+            this.mTransformedText = transformedText;
+        }
+
+        @Override
+        public CharSequence getTransformation(CharSequence source, View view) {
+            return mTransformedText;
+        }
+
+        @Override
+        public void onFocusChanged(View view, CharSequence sourceText, boolean focused,
+                int direction, Rect previouslyFocusedRect) {
+        }
     }
 }

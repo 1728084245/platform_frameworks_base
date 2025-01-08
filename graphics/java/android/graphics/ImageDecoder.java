@@ -38,8 +38,12 @@ import android.graphics.drawable.AnimatedImageDrawable;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.NinePatchDrawable;
+import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
+import android.media.MediaFormat;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Trace;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.util.DisplayMetrics;
@@ -58,6 +62,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.annotation.Retention;
 import java.nio.ByteBuffer;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -66,9 +73,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *  {@link Bitmap} objects.
  *
  *  <p>To use it, first create a {@link Source Source} using one of the
- *  {@code createSource} overloads. For example, to decode from a {@link File}, call
- *  {@link #createSource(File)} and pass the result to {@link #decodeDrawable(Source)}
- *  or {@link #decodeBitmap(Source)}:
+ *  {@code createSource} overloads. For example, to decode from a {@link Uri}, call
+ *  {@link #createSource(ContentResolver, Uri)} and pass the result to
+ *  {@link #decodeDrawable(Source)} or {@link #decodeBitmap(Source)}:
  *
  *  <pre class="prettyprint">
  *  File file = new File(...);
@@ -167,9 +174,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *  </pre>
  */
 public final class ImageDecoder implements AutoCloseable {
-    /** @hide **/
-    public static int sApiLevel;
-
     /**
      *  Source of encoded image data.
      *
@@ -186,19 +190,16 @@ public final class ImageDecoder implements AutoCloseable {
      *  {@link OnHeaderDecodedListener OnHeaderDecodedListener} and once with an
      *  implementation of {@link OnHeaderDecodedListener#onHeaderDecoded onHeaderDecoded}
      *  that calls {@link #setTargetSize} with smaller dimensions. One {@code Source}
-     *  even used simultaneously in multiple threads.</p>
+     *  can even be used simultaneously in multiple threads.</p>
      */
     public static abstract class Source {
         private Source() {}
 
-        /* @hide */
         @Nullable
         Resources getResources() { return null; }
 
-        /* @hide */
         int getDensity() { return Bitmap.DENSITY_NONE; }
 
-        /* @hide */
         final int computeDstDensity() {
             Resources res = getResources();
             if (res == null) {
@@ -208,9 +209,8 @@ public final class ImageDecoder implements AutoCloseable {
             return res.getDisplayMetrics().densityDpi;
         }
 
-        /* @hide */
         @NonNull
-        abstract ImageDecoder createImageDecoder() throws IOException;
+        abstract ImageDecoder createImageDecoder(boolean preferAnimation) throws IOException;
     };
 
     private static class ByteArraySource extends Source {
@@ -224,26 +224,39 @@ public final class ImageDecoder implements AutoCloseable {
         private final int    mLength;
 
         @Override
-        public ImageDecoder createImageDecoder() throws IOException {
-            return nCreate(mData, mOffset, mLength, this);
+        public ImageDecoder createImageDecoder(boolean preferAnimation) throws IOException {
+            return nCreate(mData, mOffset, mLength, preferAnimation, this);
+        }
+
+        @Override
+        public String toString() {
+            return "ByteArraySource{len=" + mLength + "}";
         }
     }
 
     private static class ByteBufferSource extends Source {
         ByteBufferSource(@NonNull ByteBuffer buffer) {
             mBuffer = buffer;
+            mLength = mBuffer.limit() - mBuffer.position();
         }
+
         private final ByteBuffer mBuffer;
+        private final int mLength;
 
         @Override
-        public ImageDecoder createImageDecoder() throws IOException {
+        public ImageDecoder createImageDecoder(boolean preferAnimation) throws IOException {
             if (!mBuffer.isDirect() && mBuffer.hasArray()) {
                 int offset = mBuffer.arrayOffset() + mBuffer.position();
                 int length = mBuffer.limit() - mBuffer.position();
-                return nCreate(mBuffer.array(), offset, length, this);
+                return nCreate(mBuffer.array(), offset, length, preferAnimation, this);
             }
             ByteBuffer buffer = mBuffer.slice();
-            return nCreate(buffer, buffer.position(), buffer.limit(), this);
+            return nCreate(buffer, buffer.position(), buffer.limit(), preferAnimation, this);
+        }
+
+        @Override
+        public String toString() {
+            return "ByteBufferSource{len=" + mLength + "}";
         }
     }
 
@@ -263,16 +276,20 @@ public final class ImageDecoder implements AutoCloseable {
         Resources getResources() { return mResources; }
 
         @Override
-        public ImageDecoder createImageDecoder() throws IOException {
+        public ImageDecoder createImageDecoder(boolean preferAnimation) throws IOException {
             AssetFileDescriptor assetFd = null;
             try {
-                if (mUri.getScheme() == ContentResolver.SCHEME_CONTENT) {
+                if (ContentResolver.SCHEME_CONTENT.equals(mUri.getScheme())) {
                     assetFd = mResolver.openTypedAssetFileDescriptor(mUri,
                             "image/*", null);
                 } else {
                     assetFd = mResolver.openAssetFileDescriptor(mUri, "r");
                 }
             } catch (FileNotFoundException e) {
+                // Handled below, along with the case where assetFd was set to null.
+            }
+
+            if (assetFd == null) {
                 // Some images cannot be opened as AssetFileDescriptors (e.g.
                 // bmp, ico). Open them as InputStreams.
                 InputStream is = mResolver.openInputStream(mUri);
@@ -280,45 +297,37 @@ public final class ImageDecoder implements AutoCloseable {
                     throw new FileNotFoundException(mUri.toString());
                 }
 
-                return createFromStream(is, true, this);
+                return createFromStream(is, true, preferAnimation, this);
             }
 
-            final FileDescriptor fd = assetFd.getFileDescriptor();
-            final long offset = assetFd.getStartOffset();
+            return createFromAssetFileDescriptor(assetFd, preferAnimation, this);
+        }
 
-            ImageDecoder decoder = null;
-            try {
-                try {
-                    Os.lseek(fd, offset, SEEK_SET);
-                    decoder = nCreate(fd, this);
-                } catch (ErrnoException e) {
-                    decoder = createFromStream(new FileInputStream(fd), true, this);
-                }
-            } finally {
-                if (decoder == null) {
-                    IoUtils.closeQuietly(assetFd);
-                } else {
-                    decoder.mAssetFd = assetFd;
-                }
+        @Override
+        public String toString() {
+            String uri = mUri.toString();
+            if (uri.length() > 90) {
+                // We want to keep the Uri usable - usually the authority and the end is important.
+                uri = uri.substring(0, 80) + ".." + uri.substring(uri.length() - 10);
             }
-            return decoder;
+            return "ContentResolverSource{uri=" + uri + "}";
         }
     }
 
     @NonNull
     private static ImageDecoder createFromFile(@NonNull File file,
-            @NonNull Source source) throws IOException {
+            boolean preferAnimation, @NonNull Source source) throws IOException {
         FileInputStream stream = new FileInputStream(file);
         FileDescriptor fd = stream.getFD();
         try {
             Os.lseek(fd, 0, SEEK_CUR);
         } catch (ErrnoException e) {
-            return createFromStream(stream, true, source);
+            return createFromStream(stream, true, preferAnimation, source);
         }
 
         ImageDecoder decoder = null;
         try {
-            decoder = nCreate(fd, source);
+            decoder = nCreate(fd, AssetFileDescriptor.UNKNOWN_LENGTH, preferAnimation, source);
         } finally {
             if (decoder == null) {
                 IoUtils.closeQuietly(stream);
@@ -332,12 +341,12 @@ public final class ImageDecoder implements AutoCloseable {
 
     @NonNull
     private static ImageDecoder createFromStream(@NonNull InputStream is,
-            boolean closeInputStream, Source source) throws IOException {
+            boolean closeInputStream, boolean preferAnimation, Source source) throws IOException {
         // Arbitrary size matches BitmapFactory.
         byte[] storage = new byte[16 * 1024];
         ImageDecoder decoder = null;
         try {
-            decoder = nCreate(is, storage, source);
+            decoder = nCreate(is, storage, preferAnimation, source);
         } finally {
             if (decoder == null) {
                 if (closeInputStream) {
@@ -353,19 +362,46 @@ public final class ImageDecoder implements AutoCloseable {
         return decoder;
     }
 
+    @NonNull
+    private static ImageDecoder createFromAssetFileDescriptor(@NonNull AssetFileDescriptor assetFd,
+            boolean preferAnimation, Source source) throws IOException {
+        if (assetFd == null) {
+            throw new FileNotFoundException();
+        }
+        final FileDescriptor fd = assetFd.getFileDescriptor();
+        final long offset = assetFd.getStartOffset();
+
+        ImageDecoder decoder = null;
+        try {
+            try {
+                Os.lseek(fd, offset, SEEK_SET);
+                decoder = nCreate(fd, assetFd.getDeclaredLength(), preferAnimation, source);
+            } catch (ErrnoException e) {
+                decoder = createFromStream(new FileInputStream(fd), true, preferAnimation, source);
+            }
+        } finally {
+            if (decoder == null) {
+                IoUtils.closeQuietly(assetFd);
+            } else {
+                decoder.mAssetFd = assetFd;
+            }
+        }
+        return decoder;
+    }
+
     /**
      * For backwards compatibility, this does *not* close the InputStream.
      *
      * Further, unlike other Sources, this one is not reusable.
      */
     private static class InputStreamSource extends Source {
-        InputStreamSource(Resources res, InputStream is, int inputDensity) {
+        InputStreamSource(Resources res, @NonNull InputStream is, int inputDensity) {
             if (is == null) {
                 throw new IllegalArgumentException("The InputStream cannot be null");
             }
             mResources = res;
             mInputStream = is;
-            mInputDensity = res != null ? inputDensity : Bitmap.DENSITY_NONE;
+            mInputDensity = inputDensity;
         }
 
         final Resources mResources;
@@ -379,7 +415,7 @@ public final class ImageDecoder implements AutoCloseable {
         public int getDensity() { return mInputDensity; }
 
         @Override
-        public ImageDecoder createImageDecoder() throws IOException {
+        public ImageDecoder createImageDecoder(boolean preferAnimation) throws IOException {
 
             synchronized (this) {
                 if (mInputStream == null) {
@@ -387,8 +423,13 @@ public final class ImageDecoder implements AutoCloseable {
                 }
                 InputStream is = mInputStream;
                 mInputStream = null;
-                return createFromStream(is, false, this);
+                return createFromStream(is, false, preferAnimation, this);
             }
+        }
+
+        @Override
+        public String toString() {
+            return "InputStream{s=" + mInputStream + "}";
         }
     }
 
@@ -425,15 +466,20 @@ public final class ImageDecoder implements AutoCloseable {
         }
 
         @Override
-        public ImageDecoder createImageDecoder() throws IOException {
+        public ImageDecoder createImageDecoder(boolean preferAnimation) throws IOException {
             synchronized (this) {
                 if (mAssetInputStream == null) {
                     throw new IOException("Cannot reuse AssetInputStreamSource");
                 }
                 AssetInputStream ais = mAssetInputStream;
                 mAssetInputStream = null;
-                return createFromAsset(ais, this);
+                return createFromAsset(ais, preferAnimation, this);
             }
+        }
+
+        @Override
+        public String toString() {
+            return "AssetInputStream{s=" + mAssetInputStream + "}";
         }
     }
 
@@ -460,7 +506,7 @@ public final class ImageDecoder implements AutoCloseable {
         }
 
         @Override
-        public ImageDecoder createImageDecoder() throws IOException {
+        public ImageDecoder createImageDecoder(boolean preferAnimation) throws IOException {
             TypedValue value = new TypedValue();
             // This is just used in order to access the underlying Asset and
             // keep it alive.
@@ -474,7 +520,18 @@ public final class ImageDecoder implements AutoCloseable {
                 }
             }
 
-            return createFromAsset((AssetInputStream) is, this);
+            return createFromAsset((AssetInputStream) is, preferAnimation, this);
+        }
+
+        @Override
+        public String toString() {
+            // Try to return a human-readable name for debugging purposes.
+            try {
+                return "Resource{name=" + mResources.getResourceName(mResId) + "}";
+            } catch (Resources.NotFoundException e) {
+                // It's ok if we don't find it, fall back to ID.
+            }
+            return "Resource{id=" + mResId + "}";
         }
     }
 
@@ -482,11 +539,11 @@ public final class ImageDecoder implements AutoCloseable {
      *  ImageDecoder will own the AssetInputStream.
      */
     private static ImageDecoder createFromAsset(AssetInputStream ais,
-            Source source) throws IOException {
+            boolean preferAnimation, Source source) throws IOException {
         ImageDecoder decoder = null;
         try {
             long asset = ais.getNativeAsset();
-            decoder = nCreate(asset, source);
+            decoder = nCreate(asset, preferAnimation, source);
         } finally {
             if (decoder == null) {
                 IoUtils.closeQuietly(ais);
@@ -508,9 +565,14 @@ public final class ImageDecoder implements AutoCloseable {
         private final String mFileName;
 
         @Override
-        public ImageDecoder createImageDecoder() throws IOException {
+        public ImageDecoder createImageDecoder(boolean preferAnimation) throws IOException {
             InputStream is = mAssets.open(mFileName);
-            return createFromAsset((AssetInputStream) is, this);
+            return createFromAsset((AssetInputStream) is, preferAnimation, this);
+        }
+
+        @Override
+        public String toString() {
+            return "AssetSource{file=" + mFileName + "}";
         }
     }
 
@@ -522,8 +584,41 @@ public final class ImageDecoder implements AutoCloseable {
         private final File mFile;
 
         @Override
-        public ImageDecoder createImageDecoder() throws IOException {
-            return createFromFile(mFile, this);
+        public ImageDecoder createImageDecoder(boolean preferAnimation) throws IOException {
+            return createFromFile(mFile, preferAnimation, this);
+        }
+
+        @Override
+        public String toString() {
+            return "FileSource{file=" + mFile + "}";
+        }
+    }
+
+    private static class CallableSource extends Source {
+        CallableSource(@NonNull Callable<AssetFileDescriptor> callable) {
+            mCallable = callable;
+        }
+
+        private final Callable<AssetFileDescriptor> mCallable;
+
+        @Override
+        public ImageDecoder createImageDecoder(boolean preferAnimation) throws IOException {
+            AssetFileDescriptor assetFd = null;
+            try {
+                assetFd = mCallable.call();
+            } catch (Exception e) {
+                if (e instanceof IOException) {
+                    throw (IOException) e;
+                } else {
+                    throw new IOException(e);
+                }
+            }
+            return createFromAssetFileDescriptor(assetFd, preferAnimation, this);
+        }
+
+        @Override
+        public String toString() {
+            return "CallableSource{obj=" + mCallable.toString() + "}";
         }
     }
 
@@ -532,11 +627,19 @@ public final class ImageDecoder implements AutoCloseable {
      */
     public static class ImageInfo {
         private final Size mSize;
-        private ImageDecoder mDecoder;
+        private final boolean mIsAnimated;
+        private final String mMimeType;
+        private final ColorSpace mColorSpace;
 
-        private ImageInfo(@NonNull ImageDecoder decoder) {
-            mSize = new Size(decoder.mWidth, decoder.mHeight);
-            mDecoder = decoder;
+        private ImageInfo(
+                @NonNull Size size,
+                boolean isAnimated,
+                @NonNull String mimeType,
+                @Nullable ColorSpace colorSpace) {
+            mSize = size;
+            mIsAnimated = isAnimated;
+            mMimeType = mimeType;
+            mColorSpace = colorSpace;
         }
 
         /**
@@ -552,7 +655,7 @@ public final class ImageDecoder implements AutoCloseable {
          */
         @NonNull
         public String getMimeType() {
-            return mDecoder.getMimeType();
+            return mMimeType;
         }
 
         /**
@@ -562,7 +665,7 @@ public final class ImageDecoder implements AutoCloseable {
          * return an {@link AnimatedImageDrawable}.</p>
          */
         public boolean isAnimated() {
-            return mDecoder.mAnimated;
+            return mIsAnimated;
         }
 
         /**
@@ -574,15 +677,9 @@ public final class ImageDecoder implements AutoCloseable {
          */
         @Nullable
         public ColorSpace getColorSpace() {
-            return mDecoder.getColorSpace();
+            return mColorSpace;
         }
     };
-
-    /** @removed
-     * @deprecated Subsumed by {@link #DecodeException}.
-     */
-    @Deprecated
-    public static class IncompleteException extends IOException {};
 
     /**
      *  Interface for changing the default settings of a decode.
@@ -609,24 +706,6 @@ public final class ImageDecoder implements AutoCloseable {
                 @NonNull ImageInfo info, @NonNull Source source);
 
     };
-
-    /** @removed
-     * @deprecated Replaced by {@link #DecodeException#SOURCE_EXCEPTION}.
-     */
-    @Deprecated
-    public static final int ERROR_SOURCE_EXCEPTION  = 1;
-
-    /** @removed
-     * @deprecated Replaced by {@link #DecodeException#SOURCE_INCOMPLETE}.
-     */
-    @Deprecated
-    public static final int ERROR_SOURCE_INCOMPLETE = 2;
-
-    /** @removed
-     * @deprecated Replaced by {@link #DecodeException#SOURCE_MALFORMED_DATA}.
-     */
-    @Deprecated
-    public static final int ERROR_SOURCE_ERROR      = 3;
 
     /**
      *  Information about an interrupted decode.
@@ -808,6 +887,43 @@ public final class ImageDecoder implements AutoCloseable {
     }
 
     /**
+     * Return if the given MIME type is a supported file format that can be
+     * decoded by this class. This can be useful to determine if a file can be
+     * decoded directly, or if it needs to be converted into a more general
+     * format using an API like {@link ContentResolver#openTypedAssetFile}.
+     */
+    public static boolean isMimeTypeSupported(@NonNull String mimeType) {
+        Objects.requireNonNull(mimeType);
+        switch (mimeType.toLowerCase(Locale.US)) {
+            case "image/png":
+            case "image/jpeg":
+            case "image/webp":
+            case "image/gif":
+            case "image/bmp":
+            case "image/x-ico":
+            case "image/vnd.wap.wbmp":
+            case "image/x-sony-arw":
+            case "image/x-canon-cr2":
+            case "image/x-adobe-dng":
+            case "image/x-nikon-nef":
+            case "image/x-nikon-nrw":
+            case "image/x-olympus-orf":
+            case "image/x-fuji-raf":
+            case "image/x-panasonic-rw2":
+            case "image/x-pentax-pef":
+            case "image/x-samsung-srw":
+                return true;
+            case "image/heif":
+            case "image/heic":
+                return isHevcDecoderSupported();
+            case "image/avif":
+                return isP010SupportedForAV1();
+            default:
+                return false;
+        }
+    }
+
+    /**
      * Create a new {@link Source Source} from a resource.
      *
      * @param res the {@link Resources} object containing the image data.
@@ -870,6 +986,12 @@ public final class ImageDecoder implements AutoCloseable {
     /**
      * Create a new {@link Source Source} from a byte array.
      *
+     * <p>Note: If this {@code Source} is passed to {@link #decodeDrawable decodeDrawable},
+     * and the encoded image is animated, the returned {@link AnimatedImageDrawable}
+     * will continue reading from {@code data}, so its contents must not
+     * be modified, even after the {@code AnimatedImageDrawable} is returned.
+     * {@code data}'s contents should never be modified during decode.</p>
+     *
      * @param data byte array of compressed image data.
      * @param offset offset into data for where the decoder should begin
      *      parsing.
@@ -880,7 +1002,6 @@ public final class ImageDecoder implements AutoCloseable {
      * @throws NullPointerException if data is null.
      * @throws ArrayIndexOutOfBoundsException if offset and length are
      *      not within data.
-     * @hide
      */
     @AnyThread
     @NonNull
@@ -898,8 +1019,19 @@ public final class ImageDecoder implements AutoCloseable {
     }
 
     /**
-     * See {@link #createSource(byte[], int, int).
-     * @hide
+     * Create a new {@link Source Source} from a byte array.
+     *
+     * <p>Note: If this {@code Source} is passed to {@link #decodeDrawable decodeDrawable},
+     * and the encoded image is animated, the returned {@link AnimatedImageDrawable}
+     * will continue reading from {@code data}, so its contents must not
+     * be modified, even after the {@code AnimatedImageDrawable} is returned.
+     * {@code data}'s contents should never be modified during decode.</p>
+     *
+     * @param data byte array of compressed image data.
+     * @return a new Source object, which can be passed to
+     *      {@link #decodeDrawable decodeDrawable} or
+     *      {@link #decodeBitmap decodeBitmap}.
+     * @throws NullPointerException if data is null.
      */
     @AnyThread
     @NonNull
@@ -938,7 +1070,7 @@ public final class ImageDecoder implements AutoCloseable {
      */
     @AnyThread
     @NonNull
-    public static Source createSource(Resources res, InputStream is) {
+    public static Source createSource(Resources res, @NonNull InputStream is) {
         return new InputStreamSource(res, is, Bitmap.getDefaultDensity());
     }
 
@@ -952,13 +1084,17 @@ public final class ImageDecoder implements AutoCloseable {
     @AnyThread
     @TestApi
     @NonNull
-    public static Source createSource(Resources res, InputStream is, int density) {
+    public static Source createSource(Resources res, @NonNull InputStream is, int density) {
         return new InputStreamSource(res, is, density);
     }
 
     /**
      * Create a new {@link Source Source} from a {@link java.io.File}.
-     *
+     * <p>
+     * This method should only be used for files that you have direct access to;
+     * if you'd like to work with files hosted outside your app, use an API like
+     * {@link #createSource(Callable)} or
+     * {@link #createSource(ContentResolver, Uri)}.
      * @return a new Source object, which can be passed to
      *      {@link #decodeDrawable decodeDrawable} or
      *      {@link #decodeBitmap decodeBitmap}.
@@ -967,6 +1103,27 @@ public final class ImageDecoder implements AutoCloseable {
     @NonNull
     public static Source createSource(@NonNull File file) {
         return new FileSource(file);
+    }
+
+    /**
+     * Create a new {@link Source Source} from a {@link Callable} that returns a
+     * new {@link AssetFileDescriptor} for each request. This provides control
+     * over how the {@link AssetFileDescriptor} is created, such as passing
+     * options into {@link ContentResolver#openTypedAssetFileDescriptor}, or
+     * enabling use of a {@link android.os.CancellationSignal}.
+     * <p>
+     * It's important for the given {@link Callable} to return a new, unique
+     * {@link AssetFileDescriptor} for each invocation, to support reuse of the
+     * returned {@link Source Source}.
+     *
+     * @return a new Source object, which can be passed to
+     *         {@link #decodeDrawable decodeDrawable} or {@link #decodeBitmap
+     *         decodeBitmap}.
+     */
+    @AnyThread
+    @NonNull
+    public static Source createSource(@NonNull Callable<AssetFileDescriptor> callable) {
+        return new CallableSource(callable);
     }
 
     /**
@@ -982,11 +1139,9 @@ public final class ImageDecoder implements AutoCloseable {
      *  @param sampleSize Sampling rate of the encoded image.
      *  @return {@link android.util.Size} of the width and height after
      *      sampling.
-     *
-     *  @hide
      */
     @NonNull
-    public Size getSampledSize(int sampleSize) {
+    private Size getSampledSize(int sampleSize) {
         if (sampleSize <= 0) {
             throw new IllegalArgumentException("sampleSize must be positive! "
                     + "provided " + sampleSize);
@@ -999,14 +1154,6 @@ public final class ImageDecoder implements AutoCloseable {
     }
 
     // Modifiers
-    /** @removed
-     * @deprecated Renamed to {@link #setTargetSize}.
-     */
-    @Deprecated
-    public ImageDecoder setResize(int width, int height) {
-        this.setTargetSize(width, height);
-        return this;
-    }
 
     /**
      *  Specify the size of the output {@link Drawable} or {@link Bitmap}.
@@ -1036,15 +1183,6 @@ public final class ImageDecoder implements AutoCloseable {
 
         mDesiredWidth = width;
         mDesiredHeight = height;
-    }
-
-    /** @removed
-     * @deprecated Renamed to {@link #setTargetSampleSize}.
-     */
-    @Deprecated
-    public ImageDecoder setResize(int sampleSize) {
-        this.setTargetSampleSize(sampleSize);
-        return this;
     }
 
     private int getTargetDimension(int original, int sampleSize, int computed) {
@@ -1202,28 +1340,11 @@ public final class ImageDecoder implements AutoCloseable {
         mUnpremultipliedRequired = unpremultipliedRequired;
     }
 
-    /** @removed
-     * @deprecated Renamed to {@link #setUnpremultipliedRequired}.
-     */
-    @Deprecated
-    public ImageDecoder setRequireUnpremultiplied(boolean unpremultipliedRequired) {
-        this.setUnpremultipliedRequired(unpremultipliedRequired);
-        return this;
-    }
-
     /**
      *  Return whether the {@link Bitmap} will have unpremultiplied pixels.
      */
     public boolean isUnpremultipliedRequired() {
         return mUnpremultipliedRequired;
-    }
-
-    /** @removed
-     * @deprecated Renamed to {@link #isUnpremultipliedRequired}.
-     */
-    @Deprecated
-    public boolean getRequireUnpremultiplied() {
-        return this.isUnpremultipliedRequired();
     }
 
     /**
@@ -1318,6 +1439,8 @@ public final class ImageDecoder implements AutoCloseable {
      *  {@link OnHeaderDecodedListener#onHeaderDecoded onHeaderDecoded}.</p>
      *
      *  @hide
+     *  Must be public for access from android.graphics.drawable,
+     *  but must not be called from outside the UI module.
      */
     public void setOutPaddingRect(@NonNull Rect outPadding) {
         mOutPaddingRect = outPadding;
@@ -1347,28 +1470,11 @@ public final class ImageDecoder implements AutoCloseable {
         mMutable = mutable;
     }
 
-    /** @removed
-     * @deprecated Renamed to {@link #setMutableRequired}.
-     */
-    @Deprecated
-    public ImageDecoder setMutable(boolean mutable) {
-        this.setMutableRequired(mutable);
-        return this;
-    }
-
     /**
      *  Return whether the decoded {@link Bitmap} will be mutable.
      */
     public boolean isMutableRequired() {
         return mMutable;
-    }
-
-    /** @removed
-     * @deprecated Renamed to {@link #isMutableRequired}.
-     */
-    @Deprecated
-    public boolean getMutable() {
-        return this.isMutableRequired();
     }
 
     /**
@@ -1416,22 +1522,6 @@ public final class ImageDecoder implements AutoCloseable {
         return mConserveMemory ? MEMORY_POLICY_LOW_RAM : MEMORY_POLICY_DEFAULT;
     }
 
-    /** @removed
-     * @deprecated Replaced by {@link #setMemorySizePolicy}.
-     */
-    @Deprecated
-    public void setConserveMemory(boolean conserveMemory) {
-        mConserveMemory = conserveMemory;
-    }
-
-    /** @removed
-     * @deprecated Replaced by {@link #getMemorySizePolicy}.
-     */
-    @Deprecated
-    public boolean getConserveMemory() {
-        return mConserveMemory;
-    }
-
     /**
      *  Specify whether to potentially treat the output as an alpha mask.
      *
@@ -1451,24 +1541,6 @@ public final class ImageDecoder implements AutoCloseable {
         mDecodeAsAlphaMask = enabled;
     }
 
-    /** @removed
-     * @deprecated Renamed to {@link #setDecodeAsAlphaMaskEnabled}.
-     */
-    @Deprecated
-    public ImageDecoder setDecodeAsAlphaMask(boolean enabled) {
-        this.setDecodeAsAlphaMaskEnabled(enabled);
-        return this;
-    }
-
-    /** @removed
-     * @deprecated Renamed to {@link #setDecodeAsAlphaMaskEnabled}.
-     */
-    @Deprecated
-    public ImageDecoder setAsAlphaMask(boolean asAlphaMask) {
-        this.setDecodeAsAlphaMask(asAlphaMask);
-        return this;
-    }
-
     /**
      *  Return whether to treat single channel input as alpha.
      *
@@ -1481,22 +1553,6 @@ public final class ImageDecoder implements AutoCloseable {
         return mDecodeAsAlphaMask;
     }
 
-    /** @removed
-     * @deprecated Renamed to {@link #isDecodeAsAlphaMaskEnabled}.
-     */
-    @Deprecated
-    public boolean getDecodeAsAlphaMask() {
-        return mDecodeAsAlphaMask;
-    }
-
-    /** @removed
-     * @deprecated Renamed to {@link #isDecodeAsAlphaMaskEnabled}.
-     */
-    @Deprecated
-    public boolean getAsAlphaMask() {
-        return this.getDecodeAsAlphaMask();
-    }
-
     /**
      * Specify the desired {@link ColorSpace} for the output.
      *
@@ -1505,12 +1561,9 @@ public final class ImageDecoder implements AutoCloseable {
      * decoder will pick either the color space embedded in the image or the
      * {@link ColorSpace} best suited for the requested image configuration
      * (for instance {@link ColorSpace.Named#SRGB sRGB} for the
-     * {@link Bitmap.Config#ARGB_8888} configuration).</p>
-     *
-     * <p>{@link Bitmap.Config#RGBA_F16} always uses the
-     * {@link ColorSpace.Named#LINEAR_EXTENDED_SRGB scRGB} color space.
-     * Bitmaps in other configurations without an embedded color space are
-     * assumed to be in the {@link ColorSpace.Named#SRGB sRGB} color space.</p>
+     * {@link Bitmap.Config#ARGB_8888} configuration and
+     * {@link ColorSpace.Named#EXTENDED_SRGB EXTENDED_SRGB} for
+     * {@link Bitmap.Config#RGBA_F16}).</p>
      *
      * <p class="note">Only {@link ColorSpace.Model#RGB} color spaces are
      * currently supported. An <code>IllegalArgumentException</code> will
@@ -1518,11 +1571,16 @@ public final class ImageDecoder implements AutoCloseable {
      * {@link #decodeBitmap decodeBitmap} when setting a non-RGB color space
      * such as {@link ColorSpace.Named#CIE_LAB Lab}.</p>
      *
-     * <p class="note">The specified color space's transfer function must be
+     * <p class="note">Prior to {@link android.os.Build.VERSION_CODES#UPSIDE_DOWN_CAKE},
+     * the specified color space's transfer function must be
      * an {@link ColorSpace.Rgb.TransferParameters ICC parametric curve}. An
      * <code>IllegalArgumentException</code> will be thrown by the decode methods
      * if calling {@link ColorSpace.Rgb#getTransferParameters()} on the
-     * specified color space returns null.</p>
+     * specified color space returns null.
+     * Starting from {@link android.os.Build.VERSION_CODES#UPSIDE_DOWN_CAKE},
+     * the color spaces with non ICC parametric curve transfer function are allowed.
+     * E.g., {@link ColorSpace.Named#BT2020_HLG BT2020_HLG}.
+     * </p>
      *
      * <p>Like all setters on ImageDecoder, this must be called inside
      * {@link OnHeaderDecodedListener#onHeaderDecoded onHeaderDecoded}.</p>
@@ -1558,14 +1616,16 @@ public final class ImageDecoder implements AutoCloseable {
         mTempStorage = null;
     }
 
-    private void checkState() {
+    private void checkState(boolean animated) {
         if (mNativePtr == 0) {
             throw new IllegalStateException("Cannot use closed ImageDecoder!");
         }
 
         checkSubset(mDesiredWidth, mDesiredHeight, mCropRect);
 
-        if (mAllocator == ALLOCATOR_HARDWARE) {
+        // animated ignores the allocator, so no need to check for incompatible
+        // fields.
+        if (!animated && mAllocator == ALLOCATOR_HARDWARE) {
             if (mMutable) {
                 throw new IllegalStateException("Cannot make mutable HARDWARE Bitmap!");
             }
@@ -1577,22 +1637,14 @@ public final class ImageDecoder implements AutoCloseable {
         if (mPostProcessor != null && mUnpremultipliedRequired) {
             throw new IllegalStateException("Cannot draw to unpremultiplied pixels!");
         }
-
-        if (mDesiredColorSpace != null) {
-            if (!(mDesiredColorSpace instanceof ColorSpace.Rgb)) {
-                throw new IllegalArgumentException("The target color space must use the "
-                            + "RGB color model - provided: " + mDesiredColorSpace);
-            }
-            if (((ColorSpace.Rgb) mDesiredColorSpace).getTransferParameters() == null) {
-                throw new IllegalArgumentException("The target color space must use an "
-                            + "ICC parametric transfer function - provided: " + mDesiredColorSpace);
-            }
-        }
     }
 
     private static void checkSubset(int width, int height, Rect r) {
         if (r == null) {
             return;
+        }
+        if (r.width() <= 0 || r.height() <= 0) {
+            throw new IllegalStateException("Subset " + r + " is empty/unsorted");
         }
         if (r.left < 0 || r.top < 0 || r.right > width || r.bottom > height) {
             throw new IllegalStateException("Subset " + r + " not contained by "
@@ -1600,25 +1652,68 @@ public final class ImageDecoder implements AutoCloseable {
         }
     }
 
+    private boolean checkForExtended() {
+        if (mDesiredColorSpace == null) {
+            return false;
+        }
+        return mDesiredColorSpace == ColorSpace.get(ColorSpace.Named.EXTENDED_SRGB)
+                || mDesiredColorSpace == ColorSpace.get(ColorSpace.Named.LINEAR_EXTENDED_SRGB);
+    }
+
+    private long getColorSpacePtr() {
+        if (mDesiredColorSpace == null) {
+            return 0;
+        }
+        return mDesiredColorSpace.getNativeInstance();
+    }
+
     @WorkerThread
     @NonNull
     private Bitmap decodeBitmapInternal() throws IOException {
-        checkState();
+        checkState(false);
         return nDecodeBitmap(mNativePtr, this, mPostProcessor != null,
                 mDesiredWidth, mDesiredHeight, mCropRect,
                 mMutable, mAllocator, mUnpremultipliedRequired,
-                mConserveMemory, mDecodeAsAlphaMask, mDesiredColorSpace);
+                mConserveMemory, mDecodeAsAlphaMask, getColorSpacePtr(),
+                checkForExtended());
     }
 
     private void callHeaderDecoded(@Nullable OnHeaderDecodedListener listener,
             @NonNull Source src) {
         if (listener != null) {
-            ImageInfo info = new ImageInfo(this);
-            try {
-                listener.onHeaderDecoded(this, info, src);
-            } finally {
-                info.mDecoder = null;
-            }
+            ImageInfo info =
+                    new ImageInfo(
+                            new Size(mWidth, mHeight), mAnimated, getMimeType(), getColorSpace());
+            listener.onHeaderDecoded(this, info, src);
+        }
+    }
+
+    /**
+     * Return {@link ImageInfo} from a {@code Source}.
+     *
+     * <p>Returns the same {@link ImageInfo} object that a usual decoding process would return as
+     * part of {@link OnHeaderDecodedListener}.
+     *
+     * @param src representing the encoded image.
+     * @return ImageInfo describing the image.
+     * @throws IOException if {@code src} is not found, is an unsupported format, or cannot be
+     *     decoded for any reason.
+     * @hide
+     */
+    @WorkerThread
+    @NonNull
+    public static ImageInfo decodeHeader(@NonNull Source src) throws IOException {
+        Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, "ImageDecoder#decodeHeader");
+        try (ImageDecoder decoder = src.createImageDecoder(true /*preferAnimation*/)) {
+            // We don't want to leak decoder so resolve all properties immediately.
+            return new ImageInfo(
+                    new Size(decoder.mWidth, decoder.mHeight),
+                    decoder.mAnimated,
+                    decoder.getMimeType(),
+                    decoder.getColorSpace());
+        } finally {
+            // Close the ImageDecoder#decodeHeader trace.
+            Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
         }
     }
 
@@ -1649,59 +1744,65 @@ public final class ImageDecoder implements AutoCloseable {
     @NonNull
     private static Drawable decodeDrawableImpl(@NonNull Source src,
             @Nullable OnHeaderDecodedListener listener) throws IOException {
-        try (ImageDecoder decoder = src.createImageDecoder()) {
+        Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, "ImageDecoder#decodeDrawable");
+        try (ImageDecoder decoder = src.createImageDecoder(true /*preferAnimation*/)) {
             decoder.mSource = src;
             decoder.callHeaderDecoded(listener, src);
 
-            if (decoder.mUnpremultipliedRequired) {
-                // Though this could be supported (ignored) for opaque images,
-                // it seems better to always report this error.
-                throw new IllegalStateException("Cannot decode a Drawable " +
-                                                "with unpremultiplied pixels!");
-            }
-
-            if (decoder.mMutable) {
-                throw new IllegalStateException("Cannot decode a mutable " +
-                                                "Drawable!");
-            }
-
-            // this call potentially manipulates the decoder so it must be performed prior to
-            // decoding the bitmap and after decode set the density on the resulting bitmap
-            final int srcDensity = decoder.computeDensity(src);
-            if (decoder.mAnimated) {
-                // AnimatedImageDrawable calls postProcessAndRelease only if
-                // mPostProcessor exists.
-                ImageDecoder postProcessPtr = decoder.mPostProcessor == null ?
-                        null : decoder;
-                Drawable d = new AnimatedImageDrawable(decoder.mNativePtr,
-                        postProcessPtr, decoder.mDesiredWidth,
-                        decoder.mDesiredHeight, srcDensity,
-                        src.computeDstDensity(), decoder.mCropRect,
-                        decoder.mInputStream, decoder.mAssetFd);
-                // d has taken ownership of these objects.
-                decoder.mInputStream = null;
-                decoder.mAssetFd = null;
-                return d;
-            }
-
-            Bitmap bm = decoder.decodeBitmapInternal();
-            bm.setDensity(srcDensity);
-
-            Resources res = src.getResources();
-            byte[] np = bm.getNinePatchChunk();
-            if (np != null && NinePatch.isNinePatchChunk(np)) {
-                Rect opticalInsets = new Rect();
-                bm.getOpticalInsets(opticalInsets);
-                Rect padding = decoder.mOutPaddingRect;
-                if (padding == null) {
-                    padding = new Rect();
+            try (ImageDecoderSourceTrace unused = new ImageDecoderSourceTrace(decoder)) {
+                if (decoder.mUnpremultipliedRequired) {
+                    // Though this could be supported (ignored) for opaque images,
+                    // it seems better to always report this error.
+                    throw new IllegalStateException(
+                            "Cannot decode a Drawable with unpremultiplied pixels!");
                 }
-                nGetPadding(decoder.mNativePtr, padding);
-                return new NinePatchDrawable(res, bm, np, padding,
-                        opticalInsets, null);
-            }
 
-            return new BitmapDrawable(res, bm);
+                if (decoder.mMutable) {
+                    throw new IllegalStateException("Cannot decode a mutable Drawable!");
+                }
+
+                // this call potentially manipulates the decoder so it must be performed prior to
+                // decoding the bitmap and after decode set the density on the resulting bitmap
+                final int srcDensity = decoder.computeDensity(src);
+                if (decoder.mAnimated) {
+                    // AnimatedImageDrawable calls postProcessAndRelease only if
+                    // mPostProcessor exists.
+                    ImageDecoder postProcessPtr = decoder.mPostProcessor == null ? null : decoder;
+                    decoder.checkState(true);
+                    Drawable d = new AnimatedImageDrawable(decoder.mNativePtr,
+                            postProcessPtr, decoder.mDesiredWidth,
+                            decoder.mDesiredHeight, decoder.getColorSpacePtr(),
+                            decoder.checkForExtended(), srcDensity,
+                            src.computeDstDensity(), decoder.mCropRect,
+                            decoder.mInputStream, decoder.mAssetFd);
+                    // d has taken ownership of these objects.
+                    decoder.mInputStream = null;
+                    decoder.mAssetFd = null;
+                    return d;
+                }
+
+                Bitmap bm = decoder.decodeBitmapInternal();
+                bm.setDensity(srcDensity);
+
+                Resources res = src.getResources();
+                byte[] np = bm.getNinePatchChunk();
+                if (np != null && NinePatch.isNinePatchChunk(np)) {
+                    Rect opticalInsets = new Rect();
+                    bm.getOpticalInsets(opticalInsets);
+                    Rect padding = decoder.mOutPaddingRect;
+                    if (padding == null) {
+                        padding = new Rect();
+                    }
+                    nGetPadding(decoder.mNativePtr, padding);
+                    return new NinePatchDrawable(res, bm, np, padding,
+                            opticalInsets, null);
+                }
+
+                return new BitmapDrawable(res, bm);
+            }
+        } finally {
+            // Close the ImageDecoder#decode trace.
+            Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
         }
     }
 
@@ -1751,26 +1852,51 @@ public final class ImageDecoder implements AutoCloseable {
     @NonNull
     private static Bitmap decodeBitmapImpl(@NonNull Source src,
             @Nullable OnHeaderDecodedListener listener) throws IOException {
-        try (ImageDecoder decoder = src.createImageDecoder()) {
+        Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, "ImageDecoder#decodeBitmap");
+        try (ImageDecoder decoder = src.createImageDecoder(false /*preferAnimation*/)) {
             decoder.mSource = src;
             decoder.callHeaderDecoded(listener, src);
+            try (ImageDecoderSourceTrace unused = new ImageDecoderSourceTrace(decoder)) {
+                // this call potentially manipulates the decoder so it must be performed prior to
+                // decoding the bitmap
+                final int srcDensity = decoder.computeDensity(src);
+                Bitmap bm = decoder.decodeBitmapInternal();
+                bm.setDensity(srcDensity);
 
-            // this call potentially manipulates the decoder so it must be performed prior to
-            // decoding the bitmap
-            final int srcDensity = decoder.computeDensity(src);
-            Bitmap bm = decoder.decodeBitmapInternal();
-            bm.setDensity(srcDensity);
+                Rect padding = decoder.mOutPaddingRect;
+                if (padding != null) {
+                    byte[] np = bm.getNinePatchChunk();
+                    if (np != null && NinePatch.isNinePatchChunk(np)) {
+                        nGetPadding(decoder.mNativePtr, padding);
+                    }
+                }
+                return bm;
+            }
+        } finally {
+            // Close the ImageDecoder#decode trace.
+            Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
+        }
+    }
 
-            Rect padding = decoder.mOutPaddingRect;
-            if (padding != null) {
-                byte[] np = bm.getNinePatchChunk();
-                if (np != null && NinePatch.isNinePatchChunk(np)) {
-                    nGetPadding(decoder.mNativePtr, padding);
+    /**
+     * This describes the decoder in traces to ease debugging. It has to be called after
+     * header has been decoded and width/height have been populated. It should be used
+     * inside a try-with-resources call to automatically complete the trace.
+     */
+    private static AutoCloseable traceDecoderSource(ImageDecoder decoder) {
+        final boolean resourceTracingEnabled = Trace.isTagEnabled(Trace.TRACE_TAG_RESOURCES);
+        if (resourceTracingEnabled) {
+            Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, describeDecoderForTrace(decoder));
+        }
+
+        return new AutoCloseable() {
+            @Override
+            public void close() throws Exception {
+                if (resourceTracingEnabled) {
+                    Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
                 }
             }
-
-            return bm;
-        }
+        };
     }
 
     // This method may modify the decoder so it must be called prior to performing the decode
@@ -1813,13 +1939,14 @@ public final class ImageDecoder implements AutoCloseable {
 
         // For P and above, only resize if it would be a downscale. Scale up prior
         // to P in case the app relies on the Bitmap's size without considering density.
-        if (srcDensity < dstDensity && sApiLevel >= Build.VERSION_CODES.P) {
+        if (srcDensity < dstDensity
+                && Compatibility.getTargetSdkVersion() >= Build.VERSION_CODES.P) {
             return srcDensity;
         }
 
         float scale = (float) dstDensity / srcDensity;
-        int scaledWidth = (int) (mWidth * scale + 0.5f);
-        int scaledHeight = (int) (mHeight * scale + 0.5f);
+        int scaledWidth = Math.max((int) (mWidth * scale + 0.5f), 1);
+        int scaledHeight = Math.max((int) (mHeight * scale + 0.5f), 1);
         this.setTargetSize(scaledWidth, scaledHeight);
         return dstDensity;
     }
@@ -1852,6 +1979,92 @@ public final class ImageDecoder implements AutoCloseable {
         return decodeBitmapImpl(src, null);
     }
 
+    private static boolean sIsHevcDecoderSupported = false;
+    private static boolean sIsHevcDecoderSupportedInitialized = false;
+    private static final Object sIsHevcDecoderSupportedLock = new Object();
+
+    /*
+     * Check if HEVC decoder is supported by the device.
+     */
+    @SuppressWarnings("AndroidFrameworkCompatChange")
+    private static boolean isHevcDecoderSupported() {
+        synchronized (sIsHevcDecoderSupportedLock) {
+            if (sIsHevcDecoderSupportedInitialized) {
+                return sIsHevcDecoderSupported;
+            }
+            MediaFormat format = new MediaFormat();
+            format.setString(MediaFormat.KEY_MIME, MediaFormat.MIMETYPE_VIDEO_HEVC);
+            MediaCodecList mcl = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
+            sIsHevcDecoderSupported = mcl.findDecoderForFormat(format) != null;
+            sIsHevcDecoderSupportedInitialized = true;
+            return sIsHevcDecoderSupported;
+        }
+    }
+
+    private static boolean sIsP010SupportedForAV1 = false;
+    private static boolean sIsP010SupportedForHEVC = false;
+    private static boolean sIsP010SupportedFlagsInitialized = false;
+    private static final Object sIsP010SupportedLock = new Object();
+
+    /**
+     * Checks if the device supports decoding 10-bit AV1.
+     */
+    @SuppressWarnings("AndroidFrameworkCompatChange")  // This is not an app-visible API.
+    private static boolean isP010SupportedForAV1() {
+        synchronized (sIsP010SupportedLock) {
+            if (sIsP010SupportedFlagsInitialized) {
+                return sIsP010SupportedForAV1;
+            }
+            checkP010SupportforAV1HEVC();
+            return sIsP010SupportedForAV1;
+        }
+    }
+
+    /**
+     * Checks if the device supports decoding 10-bit HEVC.
+     * This method is called by JNI.
+     */
+    @SuppressWarnings("unused")
+    private static boolean isP010SupportedForHEVC() {
+        synchronized (sIsP010SupportedLock) {
+            if (sIsP010SupportedFlagsInitialized) {
+                return sIsP010SupportedForHEVC;
+            }
+            checkP010SupportforAV1HEVC();
+            return sIsP010SupportedForHEVC;
+        }
+    }
+
+    /**
+     * Checks if the device supports decoding 10-bit for the given mime type.
+     */
+    private static void checkP010SupportforAV1HEVC() {
+        MediaCodecList codecList = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
+        for (MediaCodecInfo mediaCodecInfo : codecList.getCodecInfos()) {
+            if (mediaCodecInfo.isEncoder()) {
+                continue;
+            }
+            for (String mediaType : mediaCodecInfo.getSupportedTypes()) {
+                if (mediaType.equalsIgnoreCase(MediaFormat.MIMETYPE_VIDEO_AV1)
+                        || mediaType.equalsIgnoreCase(MediaFormat.MIMETYPE_VIDEO_HEVC)) {
+                    MediaCodecInfo.CodecCapabilities codecCapabilities =
+                        mediaCodecInfo.getCapabilitiesForType(mediaType);
+                    for (int i = 0; i < codecCapabilities.colorFormats.length; ++i) {
+                        if (codecCapabilities.colorFormats[i]
+                            == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUVP010) {
+                            if (mediaType.equalsIgnoreCase(MediaFormat.MIMETYPE_VIDEO_AV1)) {
+                                sIsP010SupportedForAV1 = true;
+                            } else {
+                                sIsP010SupportedForHEVC = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        sIsP010SupportedFlagsInitialized = true;
+    }
+
     /**
      * Private method called by JNI.
      */
@@ -1877,15 +2090,77 @@ public final class ImageDecoder implements AutoCloseable {
         }
     }
 
-    private static native ImageDecoder nCreate(long asset, Source src) throws IOException;
-    private static native ImageDecoder nCreate(ByteBuffer buffer, int position,
-                                               int limit, Source src) throws IOException;
+    /**
+     * Returns a short string describing what passed ImageDecoder is loading -
+     * it reports image dimensions, desired dimensions (if any) and source resource.
+     *
+     * The string appears in perf traces to simplify search for slow or memory intensive
+     * image loads.
+     *
+     * Example: ID#w=300;h=250;dw=150;dh=150;src=Resource{name=@resource}
+     *
+     * @hide
+     */
+    private static String describeDecoderForTrace(@NonNull ImageDecoder decoder) {
+        StringBuilder builder = new StringBuilder();
+        // Source dimensions
+        builder.append("ID#w=");
+        builder.append(decoder.mWidth);
+        builder.append(";h=");
+        builder.append(decoder.mHeight);
+        // Desired dimensions (if present)
+        if (decoder.mDesiredWidth != decoder.mWidth
+                || decoder.mDesiredHeight != decoder.mHeight) {
+            builder.append(";dw=");
+            builder.append(decoder.mDesiredWidth);
+            builder.append(";dh=");
+            builder.append(decoder.mDesiredHeight);
+        }
+        // Source description
+        builder.append(";src=");
+        builder.append(decoder.mSource);
+        return builder.toString();
+    }
+
+    /**
+     * Records a trace with information about the source being decoded - dimensions,
+     * desired dimensions and source information.
+     *
+     * It significantly eases debugging of slow resource loads on main thread and
+     * possible large memory consumers.
+     *
+     * @hide
+     */
+    private static final class ImageDecoderSourceTrace implements AutoCloseable {
+
+        private final boolean mResourceTracingEnabled;
+
+        ImageDecoderSourceTrace(ImageDecoder decoder) {
+            mResourceTracingEnabled = Trace.isTagEnabled(Trace.TRACE_TAG_RESOURCES);
+            if (mResourceTracingEnabled) {
+                Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, describeDecoderForTrace(decoder));
+            }
+        }
+
+        @Override
+        public void close() {
+            if (mResourceTracingEnabled) {
+                Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
+            }
+        }
+    }
+
+    private static native ImageDecoder nCreate(long asset,
+            boolean preferAnimation, Source src) throws IOException;
+    private static native ImageDecoder nCreate(ByteBuffer buffer, int position, int limit,
+            boolean preferAnimation, Source src) throws IOException;
     private static native ImageDecoder nCreate(byte[] data, int offset, int length,
-                                               Source src) throws IOException;
+            boolean preferAnimation, Source src) throws IOException;
     private static native ImageDecoder nCreate(InputStream is, byte[] storage,
-                                               Source src) throws IOException;
+            boolean preferAnimation, Source src) throws IOException;
     // The fd must be seekable.
-    private static native ImageDecoder nCreate(FileDescriptor fd, Source src) throws IOException;
+    private static native ImageDecoder nCreate(FileDescriptor fd, long length,
+            boolean preferAnimation, Source src) throws IOException;
     @NonNull
     private static native Bitmap nDecodeBitmap(long nativePtr,
             @NonNull ImageDecoder decoder,
@@ -1894,7 +2169,7 @@ public final class ImageDecoder implements AutoCloseable {
             @Nullable Rect cropRect, boolean mutable,
             int allocator, boolean unpremulRequired,
             boolean conserveMemory, boolean decodeAsAlphaMask,
-            @Nullable ColorSpace desiredColorSpace)
+            long desiredColorSpace, boolean extended)
         throws IOException;
     private static native Size nGetSampledSize(long nativePtr,
                                                int sampleSize);

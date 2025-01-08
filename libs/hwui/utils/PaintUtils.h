@@ -16,10 +16,12 @@
 #ifndef PAINT_UTILS_H
 #define PAINT_UTILS_H
 
+#include <GLES2/gl2.h>
 #include <utils/Blur.h>
 
+#include <SkBlendMode.h>
 #include <SkColorFilter.h>
-#include <SkDrawLooper.h>
+#include <SkPaint.h>
 #include <SkShader.h>
 
 namespace android {
@@ -31,13 +33,6 @@ namespace uirenderer {
  */
 class PaintUtils {
 public:
-    static inline GLenum getFilter(const SkPaint* paint) {
-        if (!paint || paint->getFilterQuality() != kNone_SkFilterQuality) {
-            return GL_LINEAR;
-        }
-        return GL_NEAREST;
-    }
-
     static bool isOpaquePaint(const SkPaint* paint) {
         if (!paint) return true;  // default (paintless) behavior is SrcOver, black
 
@@ -47,49 +42,18 @@ public:
         }
 
         // Only let simple srcOver / src blending modes declare opaque, since behavior is clear.
-        SkBlendMode mode = paint->getBlendMode();
+        const auto mode = paint->asBlendMode();
         return mode == SkBlendMode::kSrcOver || mode == SkBlendMode::kSrc;
     }
 
-    static bool isBlendedShader(const SkShader* shader) {
-        if (shader == nullptr) {
-            return false;
-        }
-        return !shader->isOpaque();
-    }
+    static bool isBlendedShader(const SkShader* shader) { return shader && !shader->isOpaque(); }
 
     static bool isBlendedColorFilter(const SkColorFilter* filter) {
-        if (filter == nullptr) {
-            return false;
-        }
-        return (filter->getFlags() & SkColorFilter::kAlphaUnchanged_Flag) == 0;
+        return filter && !filter->isAlphaUnchanged();
     }
-
-    struct TextShadow {
-        SkScalar radius;
-        float dx;
-        float dy;
-        SkColor color;
-    };
-
-    static inline bool getTextShadow(const SkPaint* paint, TextShadow* textShadow) {
-        SkDrawLooper::BlurShadowRec blur;
-        if (paint && paint->getLooper() && paint->getLooper()->asABlurShadow(&blur)) {
-            if (textShadow) {
-                textShadow->radius = Blur::convertSigmaToRadius(blur.fSigma);
-                textShadow->dx = blur.fOffset.fX;
-                textShadow->dy = blur.fOffset.fY;
-                textShadow->color = blur.fColor;
-            }
-            return true;
-        }
-        return false;
-    }
-
-    static inline bool hasTextShadow(const SkPaint* paint) { return getTextShadow(paint, nullptr); }
 
     static inline SkBlendMode getBlendModeDirect(const SkPaint* paint) {
-        return paint ? paint->getBlendMode() : SkBlendMode::kSrcOver;
+        return paint ? paint->getBlendMode_or(SkBlendMode::kSrcOver) : SkBlendMode::kSrcOver;
     }
 
     static inline int getAlphaDirect(const SkPaint* paint) {

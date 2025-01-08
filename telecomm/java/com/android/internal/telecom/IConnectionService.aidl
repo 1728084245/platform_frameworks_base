@@ -20,6 +20,8 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.telecom.CallAudioState;
+import android.telecom.CallEndpoint;
+import android.telecom.Connection;
 import android.telecom.ConnectionRequest;
 import android.telecom.Logging.Session;
 import android.telecom.PhoneAccountHandle;
@@ -53,6 +55,20 @@ oneway interface IConnectionService {
     void createConnectionFailed(in PhoneAccountHandle connectionManagerPhoneAccount, String callId,
             in ConnectionRequest request, boolean isIncoming, in Session.Info sessionInfo);
 
+    void createConference(
+            in PhoneAccountHandle connectionManagerPhoneAccount,
+            String callId,
+            in ConnectionRequest request,
+            boolean isIncoming,
+            boolean isUnknown,
+            in Session.Info sessionInfo);
+
+    void createConferenceComplete(String callId, in Session.Info sessionInfo);
+
+    void createConferenceFailed(in PhoneAccountHandle connectionManagerPhoneAccount, String callId,
+            in ConnectionRequest request, boolean isIncoming, in Session.Info sessionInfo);
+
+
     void abort(String callId, in Session.Info sessionInfo);
 
     void answerVideo(String callId, int videoState, in Session.Info sessionInfo);
@@ -63,7 +79,14 @@ oneway interface IConnectionService {
 
     void reject(String callId, in Session.Info sessionInfo);
 
+    void rejectWithReason(String callId, int rejectReason, in Session.Info sessionInfo);
+
     void rejectWithMessage(String callId, String message, in Session.Info sessionInfo);
+
+    void transfer(String callId, in Uri number, boolean isConfirmationRequired,
+            in Session.Info sessionInfo);
+
+    void consultativeTransfer(String callId, String otherCallId, in Session.Info sessionInfo);
 
     void disconnect(String callId, in Session.Info sessionInfo);
 
@@ -75,6 +98,14 @@ oneway interface IConnectionService {
 
     void onCallAudioStateChanged(String activeCallId, in CallAudioState callAudioState,
     in Session.Info sessionInfo);
+
+    void onCallEndpointChanged(String activeCallId, in CallEndpoint callEndpoint,
+    in Session.Info sessionInfo);
+
+    void onAvailableCallEndpointsChanged(String activeCallId,
+    in List<CallEndpoint> availableCallEndpoints, in Session.Info sessionInfo);
+
+    void onMuteStateChanged(String activeCallId, boolean isMuted, in Session.Info sessionInfo);
 
     void playDtmfTone(String callId, char digit, in Session.Info sessionInfo);
 
@@ -88,11 +119,18 @@ oneway interface IConnectionService {
 
     void swapConference(String conferenceCallId, in Session.Info sessionInfo);
 
+    void addConferenceParticipants(String CallId, in List<Uri> participants,
+    in Session.Info sessionInfo);
+
     void onPostDialContinue(String callId, boolean proceed, in Session.Info sessionInfo);
 
     void pullExternalCall(String callId, in Session.Info sessionInfo);
 
     void sendCallEvent(String callId, String event, in Bundle extras, in Session.Info sessionInfo);
+
+    void onCallFilteringCompleted(String callId,
+            in Connection.CallFilteringCompletionInfo completionInfo,
+            in Session.Info sessionInfo);
 
     void onExtrasChanged(String callId, in Bundle extras, in Session.Info sessionInfo);
 
@@ -112,4 +150,9 @@ oneway interface IConnectionService {
             int error, in Session.Info sessionInfo);
 
     void handoverComplete(String callId, in Session.Info sessionInfo);
+
+    void onUsingAlternativeUi(String callId, boolean isUsingAlternativeUi,
+            in Session.Info sessionInfo);
+
+    void onTrackedByNonUiService(String callId, boolean isTracked, in Session.Info sessionInfo);
 }

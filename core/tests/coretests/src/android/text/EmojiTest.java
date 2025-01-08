@@ -21,8 +21,9 @@ import static org.junit.Assert.assertTrue;
 
 import android.icu.lang.UCharacterDirection;
 import android.icu.text.Bidi;
-import android.support.test.filters.SmallTest;
-import android.support.test.runner.AndroidJUnit4;
+
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -39,7 +40,7 @@ import org.junit.runner.RunWith;
 public class EmojiTest {
 
     @Test
-    public void testIsNewEmoji_Emoji5() {
+    public void testIsNewEmoji_Emoji() {
         // each row in the data is the range of emoji
         final int[][][] data = new int[][][]{
                 {       // EMOJI 5
@@ -65,11 +66,44 @@ public class EmojiTest {
                         {0x1F9B0, 0x1F9B9},
                         {0x1F9C1, 0x1F9C2},
                         {0x1F9E7, 0x1F9FF},
+                },
+                {       // EMOJI 12
+                        {0x1F6D5, 0x1F6D5},
+                        {0x1F6FA, 0x1F6FA},
+                        {0x1F93F, 0x1F93F},
+                        {0x1F971, 0x1F971},
+                        {0x1F97B, 0x1F97B},
+                        {0x1F7E0, 0x1F7EB},
+                        {0x1F90D, 0x1F90F},
+                        {0x1F9A5, 0x1F9AA},
+                        {0x1F9AE, 0x1F9AF},
+                        {0x1F9BA, 0x1F9BF},
+                        {0x1F9C3, 0x1F9CA},
+                        {0x1F9CD, 0x1F9CF},
+                        {0x1FA70, 0x1FA73},
+                        {0x1FA78, 0x1FA7A},
+                        {0x1FA80, 0x1FA82},
+                        {0x1FA90, 0x1FA95},
+                },
+                {       // EMOJI 13
+                        {0x1F6D6, 0x1F6D7},
+                        {0x1F6FB, 0x1F6FC},
+                        {0x1F90C, 0x1F90C},
+                        {0x1F972, 0x1F972},
+                        {0x1F977, 0x1F978},
+                        {0x1F9A3, 0x1F9A4},
+                        {0x1F9AB, 0x1F9AD},
+                        {0x1F9CB, 0x1F9CB},
+                        {0x1FA74, 0x1FA74},
+                        {0x1FA83, 0x1FA86},
+                        {0x1FA96, 0x1FAA8},
+                        {0x1FAB0, 0x1FAB6},
+                        {0x1FAC0, 0x1FAC2},
+                        {0x1FAD0, 0x1FAD6},
                 }
         };
 
         final Bidi icuBidi = new Bidi(0 /* maxLength */, 0 /* maxRunCount */);
-        icuBidi.setCustomClassifier(new AndroidBidi.EmojiBidiOverride());
 
         for (int version = 0; version < data.length; version++) {
             for (int row = 0; row < data[version].length; row++) {
@@ -106,6 +140,15 @@ public class EmojiTest {
                 {       // EMOJI 11
                         {0x1F9B5, 0x1F9B6},
                         {0x1F9B8, 0x1F9B9}
+                },
+                {       // EMOJI 12
+                        {0x1F90F, 0x1F90F},
+                        {0x1F9BB, 0x1F9BB},
+                        {0x1F9CD, 0x1F9CF},
+                },
+                {       // EMOJI 13
+                        {0x1F90C, 0x1F90C},
+                        {0x1F977, 0x1F977}
                 }
         };
         for (int version = 0; version < data.length; version++) {

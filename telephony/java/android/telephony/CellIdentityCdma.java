@@ -16,8 +16,15 @@
 
 package android.telephony;
 
+import static android.text.TextUtils.formatSimple;
+
+import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.os.Parcel;
 import android.telephony.cdma.CdmaCellLocation;
+
+import com.android.internal.telephony.util.TelephonyUtils;
+import com.android.telephony.Rlog;
 
 import java.util.Objects;
 
@@ -73,6 +80,7 @@ public final class CellIdentityCdma extends CellIdentity {
         mBasestationId = CellInfo.UNAVAILABLE;
         mLongitude = CellInfo.UNAVAILABLE;
         mLatitude = CellInfo.UNAVAILABLE;
+        mGlobalCellId = null;
     }
 
     /**
@@ -89,8 +97,8 @@ public final class CellIdentityCdma extends CellIdentity {
      *
      * @hide
      */
-    public CellIdentityCdma(
-            int nid, int sid, int bid, int lon, int lat, String alphal, String alphas) {
+    public CellIdentityCdma(int nid, int sid, int bid, int lon, int lat,
+            @Nullable String alphal, @Nullable String alphas) {
         super(TAG, CellInfo.TYPE_CDMA, null, null, alphal, alphas);
         mNetworkId = inRangeOrUnavailable(nid, 0, NETWORK_ID_MAX);
         mSystemId = inRangeOrUnavailable(sid, 0, SYSTEM_ID_MAX);
@@ -104,33 +112,34 @@ public final class CellIdentityCdma extends CellIdentity {
         } else {
             mLongitude = mLatitude = CellInfo.UNAVAILABLE;
         }
+        updateGlobalCellId();
     }
 
-    /** @hide */
-    public CellIdentityCdma(android.hardware.radio.V1_0.CellIdentityCdma cid) {
-        this(cid.networkId, cid.systemId, cid.baseStationId, cid.longitude, cid.latitude, "", "");
-    }
-
-    /** @hide */
-    public CellIdentityCdma(android.hardware.radio.V1_2.CellIdentityCdma cid) {
-        this(cid.base.networkId, cid.base.systemId, cid.base.baseStationId, cid.base.longitude,
-                cid.base.latitude, cid.operatorNames.alphaLong, cid.operatorNames.alphaShort);
-    }
-
-    private CellIdentityCdma(CellIdentityCdma cid) {
+    private CellIdentityCdma(@NonNull CellIdentityCdma cid) {
         this(cid.mNetworkId, cid.mSystemId, cid.mBasestationId, cid.mLongitude, cid.mLatitude,
                 cid.mAlphaLong, cid.mAlphaShort);
     }
 
-    CellIdentityCdma copy() {
+    @NonNull CellIdentityCdma copy() {
         return new CellIdentityCdma(this);
     }
 
     /** @hide */
-    public CellIdentityCdma sanitizeLocationInfo() {
+    @Override
+    public @NonNull CellIdentityCdma sanitizeLocationInfo() {
         return new CellIdentityCdma(CellInfo.UNAVAILABLE, CellInfo.UNAVAILABLE,
                 CellInfo.UNAVAILABLE, CellInfo.UNAVAILABLE, CellInfo.UNAVAILABLE,
                 mAlphaLong, mAlphaShort);
+    }
+
+    /** @hide */
+    @Override
+    protected void updateGlobalCellId() {
+        mGlobalCellId = null;
+        if (mNetworkId == CellInfo.UNAVAILABLE || mSystemId == CellInfo.UNAVAILABLE
+                || mBasestationId == CellInfo.UNAVAILABLE) return;
+
+        mGlobalCellId = formatSimple("%04x%04x%04x", mSystemId, mNetworkId,  mBasestationId);
     }
 
     /**
@@ -198,6 +207,7 @@ public final class CellIdentityCdma extends CellIdentity {
     }
 
     /** @hide */
+    @NonNull
     @Override
     public CdmaCellLocation asCellLocation() {
         CdmaCellLocation cl = new CdmaCellLocation();
@@ -235,8 +245,8 @@ public final class CellIdentityCdma extends CellIdentity {
         .append(":{ mNetworkId=").append(mNetworkId)
         .append(" mSystemId=").append(mSystemId)
         .append(" mBasestationId=").append(mBasestationId)
-        .append(" mLongitude=").append(mLongitude)
-        .append(" mLatitude=").append(mLatitude)
+        .append(" mLongitude=").append(Rlog.pii(TelephonyUtils.IS_DEBUGGABLE, mLongitude))
+        .append(" mLatitude=").append(Rlog.pii(TelephonyUtils.IS_DEBUGGABLE, mLatitude))
         .append(" mAlphaLong=").append(mAlphaLong)
         .append(" mAlphaShort=").append(mAlphaShort)
         .append("}").toString();
@@ -263,12 +273,13 @@ public final class CellIdentityCdma extends CellIdentity {
         mLongitude = in.readInt();
         mLatitude = in.readInt();
 
+        updateGlobalCellId();
         if (DBG) log(toString());
     }
 
     /** Implement the Parcelable interface */
     @SuppressWarnings("hiding")
-    public static final Creator<CellIdentityCdma> CREATOR =
+    public static final @android.annotation.NonNull Creator<CellIdentityCdma> CREATOR =
             new Creator<CellIdentityCdma>() {
         @Override
         public CellIdentityCdma createFromParcel(Parcel in) {

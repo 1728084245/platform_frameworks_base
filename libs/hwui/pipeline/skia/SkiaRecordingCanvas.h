@@ -15,10 +15,17 @@
  */
 #pragma once
 
-#include <SkLiteRecorder.h>
+#include "HolePunch.h"
+#include "RecordingCanvas.h"
 #include "ReorderBarrierDrawables.h"
 #include "SkiaCanvas.h"
 #include "SkiaDisplayList.h"
+#include "pipeline/skia/AnimatedDrawables.h"
+
+class SkBitmap;
+class SkMatrix;
+class SkPaint;
+class SkRRect;
 
 namespace android {
 namespace uirenderer {
@@ -39,20 +46,23 @@ public:
     }
 
     virtual void resetRecording(int width, int height,
-                                uirenderer::RenderNode* renderNode) override {
+                                uirenderer::RenderNode* renderNode = nullptr) override {
         initDisplayList(renderNode, width, height);
     }
 
-    virtual uirenderer::DisplayList* finishRecording() override;
+    virtual void punchHole(const SkRRect& rect, float alpha) override;
 
-    virtual void drawBitmap(Bitmap& bitmap, float left, float top, const SkPaint* paint) override;
-    virtual void drawBitmap(Bitmap& bitmap, const SkMatrix& matrix, const SkPaint* paint) override;
+    virtual void finishRecording(uirenderer::RenderNode* destination) override;
+    std::unique_ptr<SkiaDisplayList> finishRecording();
+
+    virtual void drawBitmap(Bitmap& bitmap, float left, float top, const Paint* paint) override;
+    virtual void drawBitmap(Bitmap& bitmap, const SkMatrix& matrix, const Paint* paint) override;
     virtual void drawBitmap(Bitmap& bitmap, float srcLeft, float srcTop, float srcRight,
                             float srcBottom, float dstLeft, float dstTop, float dstRight,
-                            float dstBottom, const SkPaint* paint) override;
+                            float dstBottom, const Paint* paint) override;
     virtual void drawNinePatch(Bitmap& hwuiBitmap, const android::Res_png_9patch& chunk,
                                float dstLeft, float dstTop, float dstRight, float dstBottom,
-                               const SkPaint* paint) override;
+                               const Paint* paint) override;
     virtual double drawAnimatedImage(AnimatedImageDrawable* animatedImage) override;
 
     virtual void drawRoundRect(uirenderer::CanvasPropertyPrimitive* left,
@@ -66,19 +76,23 @@ public:
                             uirenderer::CanvasPropertyPrimitive* y,
                             uirenderer::CanvasPropertyPrimitive* radius,
                             uirenderer::CanvasPropertyPaint* paint) override;
+    virtual void drawRipple(const RippleDrawableParams& params) override;
 
     virtual void drawVectorDrawable(VectorDrawableRoot* vectorDrawable) override;
 
-    virtual void insertReorderBarrier(bool enableReorder) override;
+    virtual void enableZ(bool enableZ) override;
+    virtual void drawMesh(const Mesh& mesh, sk_sp<SkBlender> blender, const Paint& paint) override;
     virtual void drawLayer(uirenderer::DeferredLayerUpdater* layerHandle) override;
     virtual void drawRenderNode(uirenderer::RenderNode* renderNode) override;
-    virtual void callDrawGLFunction(Functor* functor,
-                                    uirenderer::GlFunctorLifecycleListener* listener) override;
+
+    void drawWebViewFunctor(int functor) override;
 
 private:
-    SkLiteRecorder mRecorder;
+    RecordingCanvas mRecorder;
     std::unique_ptr<SkiaDisplayList> mDisplayList;
     StartReorderBarrierDrawable* mCurrentBarrier;
+
+    static void FilterForImage(SkPaint&);
 
     /**
      *  A new SkiaDisplayList is created or recycled if available.
@@ -89,46 +103,13 @@ private:
      */
     void initDisplayList(uirenderer::RenderNode* renderNode, int width, int height);
 
-    inline static const SkPaint* bitmapPaint(const SkPaint* origPaint, SkPaint* tmpPaint,
-                                             sk_sp<SkColorFilter> colorSpaceFilter) {
-        bool fixBlending = false;
-        bool fixAA = false;
-        if (origPaint) {
-            // kClear blend mode is drawn as kDstOut on HW for compatibility with Android O and
-            // older.
-            fixBlending = sApiLevel <= 27 && origPaint->getBlendMode() == SkBlendMode::kClear;
-            fixAA = origPaint->isAntiAlias();
-        }
+    void handleMutableImages(Bitmap& bitmap, DrawImagePayload& payload);
 
-        if (fixBlending || fixAA || colorSpaceFilter) {
-            if (origPaint) {
-                *tmpPaint = *origPaint;
-            }
+    void onFilterPaint(Paint& paint) override;
 
-            if (fixBlending) {
-                tmpPaint->setBlendMode(SkBlendMode::kDstOut);
-            }
-
-            if (colorSpaceFilter) {
-                if (tmpPaint->getColorFilter()) {
-                    tmpPaint->setColorFilter(SkColorFilter::MakeComposeFilter(
-                            tmpPaint->refColorFilter(), colorSpaceFilter));
-                } else {
-                    tmpPaint->setColorFilter(colorSpaceFilter);
-                }
-                LOG_ALWAYS_FATAL_IF(!tmpPaint->getColorFilter());
-            }
-
-            // disabling AA on bitmap draws matches legacy HWUI behavior
-            tmpPaint->setAntiAlias(false);
-            return tmpPaint;
-        } else {
-            return origPaint;
-        }
-    }
-
+    using INHERITED = SkiaCanvas;
 };
 
-};  // namespace skiapipeline
-};  // namespace uirenderer
-};  // namespace android
+}  // namespace skiapipeline
+}  // namespace uirenderer
+}  // namespace android

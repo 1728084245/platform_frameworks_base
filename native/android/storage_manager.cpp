@@ -18,7 +18,9 @@
 
 #include <android/storage_manager.h>
 #include <storage/IMountService.h>
+#include <storage/ObbInfo.h>
 
+#include <androidfw/ObbFile.h>
 #include <binder/Binder.h>
 #include <binder/IServiceManager.h>
 #include <cutils/atomic.h>
@@ -28,7 +30,6 @@
 #include <utils/String16.h>
 #include <utils/Vector.h>
 #include <utils/threads.h>
-
 
 using namespace android;
 
@@ -79,6 +80,20 @@ protected:
         return cb;
     }
 
+    ObbInfo* getObbInfo(char* canonicalPath) {
+        sp<ObbFile> obbFile = new ObbFile();
+        if (!obbFile->readFrom(canonicalPath)) {
+            return nullptr;
+        }
+
+        String16 fileName(canonicalPath);
+        String16 packageName(obbFile->getPackageName());
+        size_t length;
+        const unsigned char* salt = obbFile->getSalt(&length);
+        return new ObbInfo(fileName, packageName,
+                obbFile->getVersion(), obbFile->getFlags(), length, salt);
+    }
+
 public:
     AStorageManager()
     {
@@ -125,8 +140,7 @@ public:
         }
     }
 
-    void mountObb(const char* rawPath, const char* key, AStorageManager_obbCallbackFunc func,
-            void* data) {
+    void mountObb(const char* rawPath, AStorageManager_obbCallbackFunc func, void* data) {
         // Resolve path before sending to MountService
         char canonicalPath[PATH_MAX];
         if (realpath(rawPath, canonicalPath) == NULL) {
@@ -134,11 +148,16 @@ public:
             return;
         }
 
+        sp<ObbInfo> obbInfo = getObbInfo(canonicalPath);
+        if (obbInfo == nullptr) {
+            ALOGE("Couldn't get obb info for %s: %s", canonicalPath, strerror(errno));
+            return;
+        }
+
         ObbCallback* cb = registerObbCallback(func, data);
         String16 rawPath16(rawPath);
         String16 canonicalPath16(canonicalPath);
-        String16 key16(key);
-        mMountService->mountObb(rawPath16, canonicalPath16, key16, mObbActionListener, cb->nonce);
+        mMountService->mountObb(rawPath16, canonicalPath16, mObbActionListener, cb->nonce, obbInfo);
     }
 
     void unmountObb(const char* filename, const bool force, AStorageManager_obbCallbackFunc func, void* data) {
@@ -156,7 +175,7 @@ public:
         String16 filename16(filename);
         String16 path16;
         if (mMountService->getMountedObbPath(filename16, path16)) {
-            return String8(path16).string();
+            return String8(path16).c_str();
         } else {
             return NULL;
         }
@@ -164,7 +183,7 @@ public:
 };
 
 void ObbActionListener::onObbResult(const android::String16& filename, const int32_t nonce, const int32_t state) {
-    mStorageManager->fireCallback(String8(filename).string(), nonce, state);
+    mStorageManager->fireCallback(String8(filename).c_str(), nonce, state);
 }
 
 
@@ -185,7 +204,11 @@ void AStorageManager_delete(AStorageManager* mgr) {
 
 void AStorageManager_mountObb(AStorageManager* mgr, const char* filename, const char* key,
         AStorageManager_obbCallbackFunc cb, void* data) {
-    mgr->mountObb(filename, key, cb, data);
+    if (key != nullptr && key[0] != '\0') {
+        ALOGE("mounting encrypted OBBs is no longer supported");
+        return;
+    }
+    mgr->mountObb(filename, cb, data);
 }
 
 void AStorageManager_unmountObb(AStorageManager* mgr, const char* filename, const int force,

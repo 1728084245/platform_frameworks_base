@@ -16,15 +16,15 @@
 
 package android.widget;
 
-import android.annotation.UnsupportedAppUsage;
-import android.content.BroadcastReceiver;
+import android.annotation.IntRange;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.res.TypedArray;
+import android.os.Build;
 import android.os.Message;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.view.inspector.InspectableProperty;
 import android.widget.RemoteViews.RemoteView;
 
 /**
@@ -48,8 +48,6 @@ public class ViewFlipper extends ViewAnimator {
     private boolean mRunning = false;
     private boolean mStarted = false;
     private boolean mVisible = false;
-    @UnsupportedAppUsage
-    private boolean mUserPresent = true;
 
     public ViewFlipper(Context context) {
         super(context);
@@ -67,38 +65,9 @@ public class ViewFlipper extends ViewAnimator {
         a.recycle();
     }
 
-    private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            final String action = intent.getAction();
-            if (Intent.ACTION_SCREEN_OFF.equals(action)) {
-                mUserPresent = false;
-                updateRunning();
-            } else if (Intent.ACTION_USER_PRESENT.equals(action)) {
-                mUserPresent = true;
-                updateRunning(false);
-            }
-        }
-    };
-
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-
-        // Listen for broadcasts related to user-presence
-        final IntentFilter filter = new IntentFilter();
-        filter.addAction(Intent.ACTION_SCREEN_OFF);
-        filter.addAction(Intent.ACTION_USER_PRESENT);
-
-        // OK, this is gross but needed. This class is supported by the
-        // remote views machanism and as a part of that the remote views
-        // can be inflated by a context for another user without the app
-        // having interact users permission - just for loading resources.
-        // For exmaple, when adding widgets from a user profile to the
-        // home screen. Therefore, we register the receiver as the current
-        // user not the one the context is for.
-        getContext().registerReceiverAsUser(mReceiver, android.os.Process.myUserHandle(),
-                filter, null, getHandler());
 
         if (mAutoStart) {
             // Automatically start when requested
@@ -110,8 +79,6 @@ public class ViewFlipper extends ViewAnimator {
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
         mVisible = false;
-
-        getContext().unregisterReceiver(mReceiver);
         updateRunning();
     }
 
@@ -129,8 +96,19 @@ public class ViewFlipper extends ViewAnimator {
      *            time in milliseconds
      */
     @android.view.RemotableViewMethod
-    public void setFlipInterval(int milliseconds) {
+    public void setFlipInterval(@IntRange(from = 0) int milliseconds) {
         mFlipInterval = milliseconds;
+    }
+
+    /**
+     * Get the delay before flipping to the next view.
+     *
+     * @return delay time in milliseconds
+     */
+    @InspectableProperty
+    @IntRange(from = 0)
+    public int getFlipInterval() {
+        return mFlipInterval;
     }
 
     /**
@@ -170,9 +148,9 @@ public class ViewFlipper extends ViewAnimator {
      *            addition to queuing future flips. If omitted, defaults to
      *            true.
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private void updateRunning(boolean flipNow) {
-        boolean running = mVisible && mStarted && mUserPresent;
+        boolean running = mVisible && mStarted;
         if (running != mRunning) {
             if (running) {
                 showOnly(mWhichChild, flipNow);
@@ -184,13 +162,14 @@ public class ViewFlipper extends ViewAnimator {
         }
         if (LOGD) {
             Log.d(TAG, "updateRunning() mVisible=" + mVisible + ", mStarted=" + mStarted
-                    + ", mUserPresent=" + mUserPresent + ", mRunning=" + mRunning);
+                    + ", mRunning=" + mRunning);
         }
     }
 
     /**
      * Returns true if the child views are flipping.
      */
+    @InspectableProperty(hasAttributeId = false)
     public boolean isFlipping() {
         return mStarted;
     }
@@ -207,6 +186,7 @@ public class ViewFlipper extends ViewAnimator {
      * Returns true if this view automatically calls {@link #startFlipping()}
      * when it becomes attached to a window.
      */
+    @InspectableProperty
     public boolean isAutoStart() {
         return mAutoStart;
     }

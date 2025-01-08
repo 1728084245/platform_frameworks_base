@@ -53,6 +53,12 @@ enum : ApiVersion {
   SDK_O = 26,
   SDK_O_MR1 = 27,
   SDK_P = 28,
+  SDK_Q = 29,
+  SDK_R = 30,
+  SDK_S = 31,
+  SDK_S_V2 = 32,
+  SDK_TIRAMISU = 33,
+  SDK_U = 34,
 };
 
 /*
@@ -72,7 +78,7 @@ struct ConfigDescription : public ResTable_config {
    * The resulting configuration has the appropriate sdkVersion defined
    * for backwards compatibility.
    */
-  static bool Parse(const android::StringPiece& str, ConfigDescription* out = nullptr);
+  static bool Parse(android::StringPiece str, ConfigDescription* out = nullptr);
 
   /**
    * If the configuration uses an axis that was added after
@@ -151,8 +157,8 @@ inline ConfigDescription::ConfigDescription(const android::ResTable_config& o) {
   size = sizeof(android::ResTable_config);
 }
 
-inline ConfigDescription::ConfigDescription(const ConfigDescription& o) {
-  *static_cast<android::ResTable_config*>(this) = o;
+inline ConfigDescription::ConfigDescription(const ConfigDescription& o)
+  : android::ResTable_config(o) {
 }
 
 inline ConfigDescription::ConfigDescription(ConfigDescription&& o) noexcept {
@@ -177,9 +183,8 @@ inline ConfigDescription& ConfigDescription::operator=(ConfigDescription&& o) no
   return *this;
 }
 
-inline bool ConfigDescription::MatchWithDensity(
-    const ConfigDescription& o) const {
-  return match(o) && (density == 0 || density == o.density);
+inline bool ConfigDescription::MatchWithDensity(const ConfigDescription& o) const {
+  return match(o) && (density == 0 || o.density != 0);
 }
 
 inline bool ConfigDescription::operator<(const ConfigDescription& o) const {
@@ -208,7 +213,7 @@ inline bool ConfigDescription::operator>(const ConfigDescription& o) const {
 
 inline ::std::ostream& operator<<(::std::ostream& out,
                                   const ConfigDescription& o) {
-  return out << o.toString().string();
+  return out << o.toString().c_str();
 }
 
 }  // namespace android

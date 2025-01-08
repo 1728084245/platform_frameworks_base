@@ -13,15 +13,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package android.os;
 
-import android.test.suitebuilder.annotation.SmallTest;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.fail;
+
+import android.platform.test.ravenwood.RavenwoodRule;
+
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
+
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.runner.RunWith;
 
 import java.util.Locale;
 
-import junit.framework.TestCase;
+@RunWith(AndroidJUnit4.class)
+public class LocaleListTest {
+    @Rule
+    public final RavenwoodRule mRavenwood = new RavenwoodRule();
 
-public class LocaleListTest extends TestCase {
+    @Test
     @SmallTest
     public void testConstructor() throws Exception {
         LocaleList ll;
@@ -50,6 +65,7 @@ public class LocaleListTest extends TestCase {
         assertEquals("fr,de", ll.toLanguageTags());
     }
 
+    @Test
     @SmallTest
     public void testConstructor_nullThrows() throws Exception {
         try {
@@ -60,6 +76,7 @@ public class LocaleListTest extends TestCase {
         }
     }
 
+    @Test
     @SmallTest
     public void testGetDefault_localeSetDefaultCalledButNoChangeNecessary() throws Exception {
         final Locale originalLocale = Locale.getDefault();
@@ -79,5 +96,51 @@ public class LocaleListTest extends TestCase {
 
         // restore the original values
         LocaleList.setDefault(originalLocaleList, originalLocaleIndex);
+    }
+
+    @Test
+    @SmallTest
+    public void testIntersection() {
+        LocaleList localesWithN = new LocaleList(
+                Locale.ENGLISH,
+                Locale.FRENCH,
+                Locale.GERMAN,
+                Locale.ITALIAN,
+                Locale.JAPANESE,
+                Locale.KOREAN,
+                Locale.CHINESE,
+                Locale.SIMPLIFIED_CHINESE,
+                Locale.TRADITIONAL_CHINESE,
+                Locale.FRANCE,
+                Locale.GERMANY,
+                Locale.JAPAN,
+                Locale.CANADA,
+                Locale.CANADA_FRENCH);
+        LocaleList localesWithE = new LocaleList(
+                Locale.ENGLISH,
+                Locale.FRENCH,
+                Locale.GERMAN,
+                Locale.JAPANESE,
+                Locale.KOREAN,
+                Locale.CHINESE,
+                Locale.SIMPLIFIED_CHINESE,
+                Locale.TRADITIONAL_CHINESE,
+                Locale.FRANCE,
+                Locale.GERMANY,
+                Locale.CANADA_FRENCH);
+        LocaleList localesWithNAndE = new LocaleList(
+                Locale.ENGLISH,
+                Locale.FRENCH,
+                Locale.GERMAN,
+                Locale.JAPANESE,
+                Locale.KOREAN,
+                Locale.CHINESE,
+                Locale.SIMPLIFIED_CHINESE,
+                Locale.TRADITIONAL_CHINESE,
+                Locale.FRANCE,
+                Locale.GERMANY,
+                Locale.CANADA_FRENCH);
+
+        assertEquals(localesWithNAndE, new LocaleList(localesWithE.getIntersection(localesWithN)));
     }
 }

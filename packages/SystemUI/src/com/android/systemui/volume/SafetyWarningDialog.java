@@ -27,7 +27,6 @@ import android.util.Log;
 import android.view.KeyEvent;
 import android.view.WindowManager;
 
-
 import com.android.systemui.statusbar.phone.SystemUIDialog;
 
 abstract public class SafetyWarningDialog extends SystemUIDialog
@@ -64,7 +63,8 @@ abstract public class SafetyWarningDialog extends SystemUIDialog
         setOnDismissListener(this);
 
         final IntentFilter filter = new IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS);
-        context.registerReceiver(mReceiver, filter);
+        context.registerReceiver(mReceiver, filter,
+                Context.RECEIVER_EXPORTED_UNAUDITED);
     }
 
     abstract protected void cleanUp();
@@ -95,14 +95,18 @@ abstract public class SafetyWarningDialog extends SystemUIDialog
     }
 
     @Override
-    protected void onStart() {
-        super.onStart();
+    protected void start() {
         mShowTime = System.currentTimeMillis();
     }
 
     @Override
     public void onDismiss(DialogInterface unused) {
-        mContext.unregisterReceiver(mReceiver);
+        try {
+            mContext.unregisterReceiver(mReceiver);
+        } catch (IllegalArgumentException e) {
+            // Don't crash if the receiver has already been unregistered.
+            e.printStackTrace();
+        }
         cleanUp();
     }
 

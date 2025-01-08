@@ -18,13 +18,16 @@
 
 #include <fcntl.h>  // For tests.
 #include <pthread.h>
+#ifndef _WIN32
 #include <sys/mman.h>  // For tests.
+#endif
 #include <sys/stat.h>  // For tests.
 
 #include "MinikinSkia.h"
 #include "SkPaint.h"
-#include "SkStream.h"  // Fot tests.
+#include "SkStream.h"  // For tests.
 #include "SkTypeface.h"
+#include "utils/TypefaceUtils.h"
 
 #include <minikin/FontCollection.h>
 #include <minikin/FontFamily.h>
@@ -123,17 +126,23 @@ Typeface* Typeface::createWithDifferentBaseWeight(Typeface* src, int weight) {
 }
 
 Typeface* Typeface::createFromFamilies(std::vector<std::shared_ptr<minikin::FontFamily>>&& families,
-                                       int weight, int italic) {
+                                       int weight, int italic, const Typeface* fallback) {
     Typeface* result = new Typeface;
-    result->fFontCollection.reset(new minikin::FontCollection(families));
+    if (fallback == nullptr) {
+        result->fFontCollection = minikin::FontCollection::create(std::move(families));
+    } else {
+        result->fFontCollection =
+                fallback->fFontCollection->createCollectionWithFamilies(std::move(families));
+    }
 
     if (weight == RESOLVE_BY_FONT_TABLE || italic == RESOLVE_BY_FONT_TABLE) {
         int weightFromFont;
         bool italicFromFont;
 
         const minikin::FontStyle defaultStyle;
-        const minikin::MinikinFont* mf = families.empty() ? nullptr
-                : families[0]->getClosestMatch(defaultStyle).font->typeface().get();
+        const minikin::MinikinFont* mf =
+                families.empty() ? nullptr
+                                 : families[0]->getClosestMatch(defaultStyle).typeface().get();
         if (mf != nullptr) {
             SkTypeface* skTypeface = reinterpret_cast<const MinikinFontSkia*>(mf)->GetSkTypeface();
             const SkFontStyle& style = skTypeface->fontStyle();
@@ -169,6 +178,7 @@ void Typeface::setDefault(const Typeface* face) {
 }
 
 void Typeface::setRobotoTypefaceForTest() {
+#ifndef _WIN32
     const char* kRobotoFont = "/system/fonts/Roboto-Regular.ttf";
 
     int fd = open(kRobotoFont, O_RDONLY);
@@ -176,17 +186,20 @@ void Typeface::setRobotoTypefaceForTest() {
     struct stat st = {};
     LOG_ALWAYS_FATAL_IF(fstat(fd, &st) == -1, "Failed to stat file %s", kRobotoFont);
     void* data = mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
-    std::unique_ptr<SkMemoryStream> fontData(new SkMemoryStream(data, st.st_size));
-    sk_sp<SkTypeface> typeface = SkTypeface::MakeFromStream(fontData.release());
+    std::unique_ptr<SkStreamAsset> fontData(new SkMemoryStream(data, st.st_size));
+    sk_sp<SkFontMgr> fm = android::FreeTypeFontMgr();
+    LOG_ALWAYS_FATAL_IF(fm == nullptr, "Could not load FreeType SkFontMgr");
+    sk_sp<SkTypeface> typeface = fm->makeFromStream(std::move(fontData));
     LOG_ALWAYS_FATAL_IF(typeface == nullptr, "Failed to make typeface from %s", kRobotoFont);
 
-    std::shared_ptr<minikin::MinikinFont> font = std::make_shared<MinikinFontSkia>(
-            std::move(typeface), data, st.st_size, 0, std::vector<minikin::FontVariation>());
-    std::vector<minikin::Font> fonts;
+    std::shared_ptr<minikin::MinikinFont> font =
+            std::make_shared<MinikinFontSkia>(std::move(typeface), 0, data, st.st_size, kRobotoFont,
+                                              0, std::vector<minikin::FontVariation>());
+    std::vector<std::shared_ptr<minikin::Font>> fonts;
     fonts.push_back(minikin::Font::Builder(font).build());
 
-    std::shared_ptr<minikin::FontCollection> collection = std::make_shared<minikin::FontCollection>(
-            std::make_shared<minikin::FontFamily>(std::move(fonts)));
+    std::shared_ptr<minikin::FontCollection> collection =
+            minikin::FontCollection::create(minikin::FontFamily::create(std::move(fonts)));
 
     Typeface* hwTypeface = new Typeface();
     hwTypeface->fFontCollection = collection;
@@ -195,5 +208,6 @@ void Typeface::setRobotoTypefaceForTest() {
     hwTypeface->fStyle = minikin::FontStyle();
 
     Typeface::setDefault(hwTypeface);
+#endif
 }
 }  // namespace android

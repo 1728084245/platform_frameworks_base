@@ -15,13 +15,36 @@
  */
 
 #include "SkiaRecordingCanvas.h"
-
+#include "hwui/Paint.h"
+#include <SkBlendMode.h>
+#include <SkData.h>
+#include <SkDrawable.h>
+#include <SkImage.h>
 #include <SkImagePriv.h>
+#include <SkMatrix.h>
+#include <SkPaint.h>
+#include <SkPoint.h>
+#include <SkRect.h>
+#include <SkRefCnt.h>
+#include <SkRRect.h>
+#include <SkSamplingOptions.h>
+#include <SkTypes.h>
+#include "CanvasTransform.h"
+#ifdef __ANDROID__ // Layoutlib does not support Layers
 #include "Layer.h"
 #include "LayerDrawable.h"
+#endif
 #include "NinePatchUtils.h"
 #include "RenderNode.h"
 #include "pipeline/skia/AnimatedDrawables.h"
+#include "pipeline/skia/BackdropFilterDrawable.h"
+#ifdef __ANDROID__ // Layoutlib does not support GL, Vulcan etc.
+#include "pipeline/skia/GLFunctorDrawable.h"
+#include "pipeline/skia/VkFunctorDrawable.h"
+#include "pipeline/skia/VkInteropFunctorDrawable.h"
+#endif
+#include <log/log.h>
+#include <ui/FatVector.h>
 
 namespace android {
 namespace uirenderer {
@@ -34,7 +57,7 @@ namespace skiapipeline {
 void SkiaRecordingCanvas::initDisplayList(uirenderer::RenderNode* renderNode, int width,
                                           int height) {
     mCurrentBarrier = nullptr;
-    SkASSERT(mDisplayList.get() == nullptr);
+    LOG_FATAL_IF(mDisplayList.get() != nullptr);
 
     if (renderNode) {
         mDisplayList = renderNode->detachAvailableList();
@@ -45,13 +68,39 @@ void SkiaRecordingCanvas::initDisplayList(uirenderer::RenderNode* renderNode, in
 
     mDisplayList->attachRecorder(&mRecorder, SkIRect::MakeWH(width, height));
     SkiaCanvas::reset(&mRecorder);
+    mDisplayList->setHasHolePunches(false);
 }
 
-uirenderer::DisplayList* SkiaRecordingCanvas::finishRecording() {
+void SkiaRecordingCanvas::punchHole(const SkRRect& rect, float alpha) {
+    // Add the marker annotation to allow HWUI to determine the current
+    // clip/transformation and alpha should be applied
+    SkVector vector = rect.getSimpleRadii();
+    float data[3];
+    data[0] = vector.x();
+    data[1] = vector.y();
+    data[2] = alpha;
+    mRecorder.drawAnnotation(rect.rect(), HOLE_PUNCH_ANNOTATION.c_str(),
+                             SkData::MakeWithCopy(data, sizeof(data)));
+
+    // Clear the current rect within the layer itself
+    SkPaint paint = SkPaint();
+    paint.setColor(SkColors::kBlack);
+    paint.setAlphaf(alpha);
+    paint.setBlendMode(SkBlendMode::kDstOut);
+    mRecorder.drawRRect(rect, paint);
+
+    mDisplayList->setHasHolePunches(true);
+}
+
+std::unique_ptr<SkiaDisplayList> SkiaRecordingCanvas::finishRecording() {
     // close any existing chunks if necessary
-    insertReorderBarrier(false);
+    enableZ(false);
     mRecorder.restoreToCount(1);
-    return mDisplayList.release();
+    return std::move(mDisplayList);
+}
+
+void SkiaRecordingCanvas::finishRecording(uirenderer::RenderNode* destination) {
+    destination->setStagingDisplayList(uirenderer::DisplayList(finishRecording()));
 }
 
 // ----------------------------------------------------------------------------
@@ -77,7 +126,16 @@ void SkiaRecordingCanvas::drawCircle(uirenderer::CanvasPropertyPrimitive* x,
     drawDrawable(mDisplayList->allocateDrawable<AnimatedCircle>(x, y, radius, paint));
 }
 
-void SkiaRecordingCanvas::insertReorderBarrier(bool enableReorder) {
+void SkiaRecordingCanvas::drawRipple(const skiapipeline::RippleDrawableParams& params) {
+    mRecorder.drawRippleDrawable(params);
+}
+
+void SkiaRecordingCanvas::enableZ(bool enableZ) {
+    if (mCurrentBarrier && enableZ) {
+        // Already in a re-order section, nothing to do
+        return;
+    }
+
     if (nullptr != mCurrentBarrier) {
         // finish off the existing chunk
         SkDrawable* drawable =
@@ -85,116 +143,161 @@ void SkiaRecordingCanvas::insertReorderBarrier(bool enableReorder) {
         mCurrentBarrier = nullptr;
         drawDrawable(drawable);
     }
-    if (enableReorder) {
-        mCurrentBarrier = (StartReorderBarrierDrawable*)
-                                  mDisplayList->allocateDrawable<StartReorderBarrierDrawable>(
-                                          mDisplayList.get());
+    if (enableZ) {
+        mCurrentBarrier =
+                mDisplayList->allocateDrawable<StartReorderBarrierDrawable>(mDisplayList.get());
         drawDrawable(mCurrentBarrier);
     }
 }
 
 void SkiaRecordingCanvas::drawLayer(uirenderer::DeferredLayerUpdater* layerUpdater) {
+#ifdef __ANDROID__ // Layoutlib does not support Layers
     if (layerUpdater != nullptr) {
         // Create a ref-counted drawable, which is kept alive by sk_sp in SkLiteDL.
         sk_sp<SkDrawable> drawable(new LayerDrawable(layerUpdater));
         drawDrawable(drawable.get());
     }
+#endif
 }
+
 
 void SkiaRecordingCanvas::drawRenderNode(uirenderer::RenderNode* renderNode) {
     // Record the child node. Drawable dtor will be invoked when mChildNodes deque is cleared.
     mDisplayList->mChildNodes.emplace_back(renderNode, asSkCanvas(), true, mCurrentBarrier);
     auto& renderNodeDrawable = mDisplayList->mChildNodes.back();
+    if (Properties::getRenderPipelineType() == RenderPipelineType::SkiaVulkan) {
+        // Put Vulkan WebViews with non-rectangular clips in a HW layer
+        renderNode->mutateStagingProperties().setClipMayBeComplex(mRecorder.isClipMayBeComplex());
+    }
+
+    // draw backdrop filter drawable if needed.
+    if (renderNode->stagingProperties().layerProperties().getBackdropImageFilter()) {
+        auto* backdropFilterDrawable =
+                mDisplayList->allocateDrawable<BackdropFilterDrawable>(renderNode, asSkCanvas());
+        drawDrawable(backdropFilterDrawable);
+    }
+
     drawDrawable(&renderNodeDrawable);
 
     // use staging property, since recording on UI thread
     if (renderNode->stagingProperties().isProjectionReceiver()) {
         mDisplayList->mProjectionReceiver = &renderNodeDrawable;
-        // set projectionReceiveIndex so that RenderNode.hasProjectionReceiver returns true
-        mDisplayList->projectionReceiveIndex = mDisplayList->mChildNodes.size() - 1;
     }
 }
 
-void SkiaRecordingCanvas::callDrawGLFunction(Functor* functor,
-                                             uirenderer::GlFunctorLifecycleListener* listener) {
-    // Drawable dtor will be invoked when mChildFunctors deque is cleared.
-    mDisplayList->mChildFunctors.emplace_back(functor, listener, asSkCanvas());
-    drawDrawable(&mDisplayList->mChildFunctors.back());
-}
-
-class VectorDrawable : public SkDrawable {
-public:
-    VectorDrawable(VectorDrawableRoot* tree)
-            : mRoot(tree)
-            , mBounds(tree->stagingProperties()->getBounds()) {}
-
-protected:
-    virtual SkRect onGetBounds() override { return mBounds; }
-    virtual void onDraw(SkCanvas* canvas) override {
-        mRoot->draw(canvas, mBounds);
+void SkiaRecordingCanvas::drawWebViewFunctor(int functor) {
+#ifdef __ANDROID__ // Layoutlib does not support GL, Vulcan etc.
+    FunctorDrawable* functorDrawable;
+    if (Properties::getRenderPipelineType() == RenderPipelineType::SkiaVulkan) {
+        functorDrawable = mDisplayList->allocateDrawable<VkFunctorDrawable>(functor, asSkCanvas());
+    } else {
+        functorDrawable = mDisplayList->allocateDrawable<GLFunctorDrawable>(functor, asSkCanvas());
     }
-
-private:
-    sp<VectorDrawableRoot> mRoot;
-    SkRect mBounds;
-};
+    mDisplayList->mChildFunctors.push_back(functorDrawable);
+    mRecorder.drawWebView(functorDrawable);
+#endif
+}
 
 void SkiaRecordingCanvas::drawVectorDrawable(VectorDrawableRoot* tree) {
-    drawDrawable(mDisplayList->allocateDrawable<VectorDrawable>(tree));
-    mDisplayList->mVectorDrawables.push_back(tree);
+    mRecorder.drawVectorDrawable(tree);
+    SkMatrix mat;
+    this->getMatrix(&mat);
+    mDisplayList->appendVD(tree, mat);
 }
 
 // ----------------------------------------------------------------------------
 // Recording Canvas draw operations: Bitmaps
 // ----------------------------------------------------------------------------
 
-
-void SkiaRecordingCanvas::drawBitmap(Bitmap& bitmap, float left, float top, const SkPaint* paint) {
-    SkPaint tmpPaint;
-    sk_sp<SkColorFilter> colorFilter;
-    sk_sp<SkImage> image = bitmap.makeImage(&colorFilter);
-    mRecorder.drawImage(image, left, top, bitmapPaint(paint, &tmpPaint, colorFilter));
-    // if image->unique() is true, then mRecorder.drawImage failed for some reason. It also means
-    // it is not safe to store a raw SkImage pointer, because the image object will be destroyed
-    // when this function ends.
-    if (!bitmap.isImmutable() && image.get() && !image->unique()) {
-        mDisplayList->mMutableImages.push_back(image.get());
+void SkiaRecordingCanvas::FilterForImage(SkPaint& paint) {
+    // kClear blend mode is drawn as kDstOut on HW for compatibility with Android O and
+    // older.
+    if (sApiLevel <= 27 && paint.asBlendMode() == SkBlendMode::kClear) {
+        paint.setBlendMode(SkBlendMode::kDstOut);
     }
 }
 
-void SkiaRecordingCanvas::drawBitmap(Bitmap& bitmap, const SkMatrix& matrix, const SkPaint* paint) {
+void SkiaRecordingCanvas::handleMutableImages(Bitmap& bitmap, DrawImagePayload& payload) {
+    // if image->unique() is true, then mRecorder.drawImage failed for some reason. It also means
+    // it is not safe to store a raw SkImage pointer, because the image object will be destroyed
+    // when this function ends.
+    if (!bitmap.isImmutable() && payload.image.get() && !payload.image->unique()) {
+        mDisplayList->mMutableImages.push_back(payload.image.get());
+    }
+
+    if (bitmap.hasGainmap()) {
+        auto gainmapBitmap = bitmap.gainmap()->bitmap;
+        // Not all DrawImagePayload receivers will store the gainmap (such as DrawImageLattice),
+        // so only store it in the mutable list if it was actually recorded
+        if (!gainmapBitmap->isImmutable() && payload.gainmapImage.get() &&
+            !payload.gainmapImage->unique()) {
+            mDisplayList->mMutableImages.push_back(payload.gainmapImage.get());
+        }
+    }
+}
+
+void SkiaRecordingCanvas::onFilterPaint(android::Paint& paint) {
+    INHERITED::onFilterPaint(paint);
+    SkShader* shader = paint.getShader();
+    // TODO(b/264559422): This only works for very specifically a BitmapShader.
+    //  It's better than nothing, though
+    SkImage* image = shader ? shader->isAImage(nullptr, nullptr) : nullptr;
+    if (image) {
+        mDisplayList->mMutableImages.push_back(image);
+    }
+}
+
+void SkiaRecordingCanvas::drawBitmap(Bitmap& bitmap, float left, float top, const Paint* paint) {
+    auto payload = DrawImagePayload(bitmap);
+
+    applyLooper(
+            paint,
+            [&](const Paint& p) {
+                mRecorder.drawImage(DrawImagePayload(payload), left, top, p.sampling(), &p);
+            },
+            FilterForImage);
+
+    handleMutableImages(bitmap, payload);
+}
+
+void SkiaRecordingCanvas::drawBitmap(Bitmap& bitmap, const SkMatrix& matrix, const Paint* paint) {
     SkAutoCanvasRestore acr(&mRecorder, true);
     concat(matrix);
 
-    SkPaint tmpPaint;
-    sk_sp<SkColorFilter> colorFilter;
-    sk_sp<SkImage> image = bitmap.makeImage(&colorFilter);
-    mRecorder.drawImage(image, 0, 0, bitmapPaint(paint, &tmpPaint, colorFilter));
-    if (!bitmap.isImmutable() && image.get() && !image->unique()) {
-        mDisplayList->mMutableImages.push_back(image.get());
-    }
+    auto payload = DrawImagePayload(bitmap);
+
+    applyLooper(
+            paint,
+            [&](const Paint& p) {
+                mRecorder.drawImage(DrawImagePayload(payload), 0, 0, p.sampling(), &p);
+            },
+            FilterForImage);
+
+    handleMutableImages(bitmap, payload);
 }
 
 void SkiaRecordingCanvas::drawBitmap(Bitmap& bitmap, float srcLeft, float srcTop, float srcRight,
                                      float srcBottom, float dstLeft, float dstTop, float dstRight,
-                                     float dstBottom, const SkPaint* paint) {
+                                     float dstBottom, const Paint* paint) {
     SkRect srcRect = SkRect::MakeLTRB(srcLeft, srcTop, srcRight, srcBottom);
     SkRect dstRect = SkRect::MakeLTRB(dstLeft, dstTop, dstRight, dstBottom);
 
-    SkPaint tmpPaint;
-    sk_sp<SkColorFilter> colorFilter;
-    sk_sp<SkImage> image = bitmap.makeImage(&colorFilter);
-    mRecorder.drawImageRect(image, srcRect, dstRect, bitmapPaint(paint, &tmpPaint, colorFilter),
-                            SkCanvas::kFast_SrcRectConstraint);
-    if (!bitmap.isImmutable() && image.get() && !image->unique() && !srcRect.isEmpty() &&
-        !dstRect.isEmpty()) {
-        mDisplayList->mMutableImages.push_back(image.get());
-    }
+    auto payload = DrawImagePayload(bitmap);
+
+    applyLooper(
+            paint,
+            [&](const Paint& p) {
+                mRecorder.drawImageRect(DrawImagePayload(payload), srcRect, dstRect, p.sampling(),
+                                        &p, SkCanvas::kFast_SrcRectConstraint);
+            },
+            FilterForImage);
+
+    handleMutableImages(bitmap, payload);
 }
 
 void SkiaRecordingCanvas::drawNinePatch(Bitmap& bitmap, const Res_png_9patch& chunk, float dstLeft,
                                         float dstTop, float dstRight, float dstBottom,
-                                        const SkPaint* paint) {
+                                        const Paint* paint) {
     SkCanvas::Lattice lattice;
     NinePatchUtils::SetLatticeDivs(&lattice, chunk, bitmap.width(), bitmap.height());
 
@@ -207,35 +310,29 @@ void SkiaRecordingCanvas::drawNinePatch(Bitmap& bitmap, const Res_png_9patch& ch
         numFlags = (lattice.fXCount + 1) * (lattice.fYCount + 1);
     }
 
-    SkAutoSTMalloc<25, SkCanvas::Lattice::RectType> flags(numFlags);
-    SkAutoSTMalloc<25, SkColor> colors(numFlags);
+    // Most times, we do not have very many flags/colors, so the stack allocated part of
+    // FatVector will save us a heap allocation.
+    FatVector<SkCanvas::Lattice::RectType, 25> flags(numFlags);
+    FatVector<SkColor, 25> colors(numFlags);
     if (numFlags > 0) {
-        NinePatchUtils::SetLatticeFlags(&lattice, flags.get(), numFlags, chunk, colors.get());
+        NinePatchUtils::SetLatticeFlags(&lattice, flags.data(), numFlags, chunk, colors.data());
     }
 
     lattice.fBounds = nullptr;
     SkRect dst = SkRect::MakeLTRB(dstLeft, dstTop, dstRight, dstBottom);
+    auto payload = DrawImagePayload(bitmap);
 
-    SkPaint tmpPaint;
-    sk_sp<SkColorFilter> colorFilter;
-    sk_sp<SkImage> image = bitmap.makeImage(&colorFilter);
-    const SkPaint* filteredPaint = bitmapPaint(paint, &tmpPaint, colorFilter);
-    // Besides kNone, the other three SkFilterQualities are treated the same. And Android's
-    // Java API only supports kLow and kNone anyway.
-    if (!filteredPaint || filteredPaint->getFilterQuality() == kNone_SkFilterQuality) {
-        if (filteredPaint != &tmpPaint) {
-            if (paint) {
-                tmpPaint = *paint;
-            }
-            filteredPaint = &tmpPaint;
-        }
-        tmpPaint.setFilterQuality(kLow_SkFilterQuality);
-    }
+    // HWUI always draws 9-patches with linear filtering, regardless of the Paint.
+    const SkFilterMode filter = SkFilterMode::kLinear;
 
-    mRecorder.drawImageLattice(image.get(), lattice, dst, filteredPaint);
-    if (!bitmap.isImmutable() && image.get() && !image->unique() && !dst.isEmpty()) {
-        mDisplayList->mMutableImages.push_back(image.get());
-    }
+    applyLooper(
+            paint,
+            [&](const SkPaint& p) {
+                mRecorder.drawImageLattice(DrawImagePayload(payload), lattice, dst, filter, &p);
+            },
+            FilterForImage);
+
+    handleMutableImages(bitmap, payload);
 }
 
 double SkiaRecordingCanvas::drawAnimatedImage(AnimatedImageDrawable* animatedImage) {
@@ -244,6 +341,11 @@ double SkiaRecordingCanvas::drawAnimatedImage(AnimatedImageDrawable* animatedIma
     return 0;
 }
 
-};  // namespace skiapipeline
-};  // namespace uirenderer
-};  // namespace android
+void SkiaRecordingCanvas::drawMesh(const Mesh& mesh, sk_sp<SkBlender> blender, const Paint& paint) {
+    mDisplayList->mMeshBufferData.push_back(mesh.refBufferData());
+    mRecorder.drawMesh(mesh, blender, paint);
+}
+
+}  // namespace skiapipeline
+}  // namespace uirenderer
+}  // namespace android

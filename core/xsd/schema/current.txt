@@ -11,7 +11,9 @@ package com.android.xml.permission.configfile {
 
   public class AllowIgnoreLocationSettings {
     ctor public AllowIgnoreLocationSettings();
+    method public String getAttributionTag();
     method public String get_package();
+    method public void setAttributionTag(String);
     method public void set_package(String);
   }
 
@@ -41,6 +43,12 @@ package com.android.xml.permission.configfile {
 
   public class AllowUnthrottledLocation {
     ctor public AllowUnthrottledLocation();
+    method public String get_package();
+    method public void set_package(String);
+  }
+
+  public class AppDataIsolationWhitelistedApp {
+    ctor public AppDataIsolationWhitelistedApp();
     method public String get_package();
     method public void set_package(String);
   }
@@ -160,6 +168,7 @@ package com.android.xml.permission.configfile {
     method public java.util.List<com.android.xml.permission.configfile.AllowInPowerSaveExceptIdle> getAllowInPowerSaveExceptIdle_optional();
     method public java.util.List<com.android.xml.permission.configfile.AllowInPowerSave> getAllowInPowerSave_optional();
     method public java.util.List<com.android.xml.permission.configfile.AllowUnthrottledLocation> getAllowUnthrottledLocation_optional();
+    method public java.util.List<com.android.xml.permission.configfile.AppDataIsolationWhitelistedApp> getAppDataIsolationWhitelistedApp_optional();
     method public java.util.List<com.android.xml.permission.configfile.AppLink> getAppLink_optional();
     method public java.util.List<com.android.xml.permission.configfile.AssignPermission> getAssignPermission_optional();
     method public java.util.List<com.android.xml.permission.configfile.BackupTransportWhitelistedService> getBackupTransportWhitelistedService_optional();
@@ -174,6 +183,7 @@ package com.android.xml.permission.configfile {
     method public java.util.List<com.android.xml.permission.configfile.OemPermissions> getOemPermissions_optional();
     method public java.util.List<com.android.xml.permission.configfile.Permission> getPermission_optional();
     method public java.util.List<com.android.xml.permission.configfile.PrivappPermissions> getPrivappPermissions_optional();
+    method public java.util.List<com.android.xml.permission.configfile.SignaturePermissions> getSignaturePermissions_optional();
     method public java.util.List<com.android.xml.permission.configfile.SplitPermission> getSplitPermission_optional();
     method public java.util.List<com.android.xml.permission.configfile.SystemUserBlacklistedApp> getSystemUserBlacklistedApp_optional();
     method public java.util.List<com.android.xml.permission.configfile.SystemUserWhitelistedApp> getSystemUserWhitelistedApp_optional();
@@ -196,6 +206,26 @@ package com.android.xml.permission.configfile {
 
   public static class PrivappPermissions.Permission {
     ctor public PrivappPermissions.Permission();
+    method public String getName();
+    method public void setName(String);
+  }
+
+  public class SignaturePermissions {
+    ctor public SignaturePermissions();
+    method public java.util.List<com.android.xml.permission.configfile.SignaturePermissions.DenyPermission> getDenyPermission();
+    method public java.util.List<com.android.xml.permission.configfile.SignaturePermissions.Permission> getPermission();
+    method public String get_package();
+    method public void set_package(String);
+  }
+
+  public static class SignaturePermissions.DenyPermission {
+    ctor public SignaturePermissions.DenyPermission();
+    method public String getName();
+    method public void setName(String);
+  }
+
+  public static class SignaturePermissions.Permission {
+    ctor public SignaturePermissions.Permission();
     method public String getName();
     method public void setName(String);
   }

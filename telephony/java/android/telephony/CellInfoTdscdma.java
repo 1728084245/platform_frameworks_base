@@ -20,6 +20,8 @@ import android.annotation.NonNull;
 import android.os.Parcel;
 import android.os.Parcelable;
 
+import com.android.telephony.Rlog;
+
 import java.util.Objects;
 
 /**
@@ -52,27 +54,12 @@ public final class CellInfoTdscdma extends CellInfo implements Parcelable {
     }
 
     /** @hide */
-    public CellInfoTdscdma(android.hardware.radio.V1_0.CellInfo ci) {
-        super(ci);
-        final android.hardware.radio.V1_0.CellInfoTdscdma cit = ci.tdscdma.get(0);
-        mCellIdentityTdscdma = new CellIdentityTdscdma(cit.cellIdentityTdscdma);
-        mCellSignalStrengthTdscdma = new CellSignalStrengthTdscdma(cit.signalStrengthTdscdma);
-    }
-
-    /** @hide */
-    public CellInfoTdscdma(android.hardware.radio.V1_2.CellInfo ci) {
-        super(ci);
-        final android.hardware.radio.V1_2.CellInfoTdscdma cit = ci.tdscdma.get(0);
-        mCellIdentityTdscdma = new CellIdentityTdscdma(cit.cellIdentityTdscdma);
-        mCellSignalStrengthTdscdma = new CellSignalStrengthTdscdma(cit.signalStrengthTdscdma);
-    }
-
-    /** @hide */
-    public CellInfoTdscdma(android.hardware.radio.V1_4.CellInfo ci, long timeStamp) {
-        super(ci, timeStamp);
-        final android.hardware.radio.V1_2.CellInfoTdscdma cit = ci.info.tdscdma();
-        mCellIdentityTdscdma = new CellIdentityTdscdma(cit.cellIdentityTdscdma);
-        mCellSignalStrengthTdscdma = new CellSignalStrengthTdscdma(cit.signalStrengthTdscdma);
+    public CellInfoTdscdma(int connectionStatus, boolean registered, long timeStamp,
+            CellIdentityTdscdma cellIdentityTdscdma,
+            CellSignalStrengthTdscdma cellSignalStrengthTdscdma) {
+        super(connectionStatus, registered, timeStamp);
+        mCellIdentityTdscdma = cellIdentityTdscdma;
+        mCellSignalStrengthTdscdma = cellSignalStrengthTdscdma;
     }
 
     /**

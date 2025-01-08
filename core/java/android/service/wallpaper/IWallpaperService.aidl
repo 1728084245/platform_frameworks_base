@@ -16,6 +16,7 @@
 
 package android.service.wallpaper;
 
+import android.app.WallpaperInfo;
 import android.graphics.Rect;
 import android.service.wallpaper.IWallpaperConnection;
 
@@ -24,6 +25,8 @@ import android.service.wallpaper.IWallpaperConnection;
  */
 oneway interface IWallpaperService {
     void attach(IWallpaperConnection connection,
-    		IBinder windowToken, int windowType, boolean isPreview,
-    		int reqWidth, int reqHeight, in Rect padding);
+            IBinder windowToken, int windowType, boolean isPreview,
+            int reqWidth, int reqHeight, in Rect padding, int displayId, int which,
+            in WallpaperInfo info);
+    void detach(IBinder windowToken);
 }

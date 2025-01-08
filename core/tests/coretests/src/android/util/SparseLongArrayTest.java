@@ -19,9 +19,10 @@ package android.util;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-import android.support.annotation.NonNull;
-import android.support.test.filters.SmallTest;
-import android.support.test.runner.AndroidJUnit4;
+import android.annotation.NonNull;
+
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -152,5 +153,17 @@ public class SparseLongArrayTest {
         assertEquals(TEST_SIZE - (endIndex - startIndex + 1), mSparseLongArray.size());
         assertRemoved(startIndex, endIndex);
         assertTrue(isSame(sparseLongArray2, mSparseLongArray));
+    }
+
+    @Test
+    public void testIncrementValue() {
+        final SparseLongArray sla = new SparseLongArray();
+
+        sla.put(4, 6);
+        sla.incrementValue(4, 4);
+        sla.incrementValue(2, 5);
+
+        assertEquals(6 + 4, sla.get(4));
+        assertEquals(5, sla.get(2));
     }
 }

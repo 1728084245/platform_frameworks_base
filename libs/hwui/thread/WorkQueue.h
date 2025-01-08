@@ -26,13 +26,12 @@
 #include <functional>
 #include <future>
 #include <mutex>
-#include <variant>
 #include <vector>
 
 namespace android::uirenderer {
 
 struct MonotonicClock {
-    static nsecs_t now() { return systemTime(CLOCK_MONOTONIC); }
+    static nsecs_t now() { return systemTime(SYSTEM_TIME_MONOTONIC); }
 };
 
 class WorkQueue {
@@ -58,7 +57,7 @@ private:
 
 public:
     WorkQueue(std::function<void()>&& wakeFunc, std::mutex& lock)
-            : mWakeFunc(move(wakeFunc)), mLock(lock) {}
+            : mWakeFunc(std::move(wakeFunc)), mLock(lock) {}
 
     void process() {
         auto now = clock::now();

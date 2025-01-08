@@ -31,6 +31,7 @@
 #include <SkPath.h>
 #include <SkPathMeasure.h>
 #include <SkRect.h>
+#include <SkRefCnt.h>
 #include <SkShader.h>
 #include <SkSurface.h>
 
@@ -58,12 +59,6 @@ namespace VectorDrawable {
         bool retVal = VD_SET_PROP((mPrimitiveFields.field), (value)); \
         onPropertyChanged();                                          \
         retVal;                                                       \
-    })
-#define UPDATE_SKPROP(field, value)                                    \
-    ({                                                                 \
-        bool retVal = ((field) != (value));                            \
-        if ((field) != (value)) SkRefCnt_SafeAssign((field), (value)); \
-        retVal;                                                        \
     })
 
 /* A VectorDrawable is composed of a tree of nodes.
@@ -103,7 +98,7 @@ private:
     bool* mStagingDirty;
 };
 
-class ANDROID_API Node {
+class Node {
 public:
     class Properties {
     public:
@@ -126,14 +121,16 @@ public:
     virtual void syncProperties() = 0;
     virtual void setAntiAlias(bool aa) = 0;
 
+    virtual void forEachFillColor(const std::function<void(SkColor)>& func) const { }
+
 protected:
     std::string mName;
     PropertyChangedListener* mPropertyChangedListener = nullptr;
 };
 
-class ANDROID_API Path : public Node {
+class Path : public Node {
 public:
-    struct ANDROID_API Data {
+    struct Data {
         std::vector<char> verbs;
         std::vector<size_t> verbSizes;
         std::vector<float> points;
@@ -204,7 +201,7 @@ private:
     bool mStagingPropertiesDirty = true;
 };
 
-class ANDROID_API FullPath : public Path {
+class FullPath : public Path {
 public:
     class FullPathProperties : public Properties {
     public:
@@ -223,29 +220,28 @@ public:
             int fillType = 0; /* non-zero or kWinding_FillType in Skia */
         };
         explicit FullPathProperties(Node* mNode) : Properties(mNode), mTrimDirty(false) {}
-        ~FullPathProperties() {
-            SkSafeUnref(fillGradient);
-            SkSafeUnref(strokeGradient);
-        }
+        ~FullPathProperties() {}
         void syncProperties(const FullPathProperties& prop) {
             mPrimitiveFields = prop.mPrimitiveFields;
             mTrimDirty = true;
-            UPDATE_SKPROP(fillGradient, prop.fillGradient);
-            UPDATE_SKPROP(strokeGradient, prop.strokeGradient);
+            fillGradient = prop.fillGradient;
+            strokeGradient = prop.strokeGradient;
             onPropertyChanged();
         }
         void setFillGradient(SkShader* gradient) {
-            if (UPDATE_SKPROP(fillGradient, gradient)) {
+            if (fillGradient.get() != gradient) {
+                fillGradient = sk_ref_sp(gradient);
                 onPropertyChanged();
             }
         }
         void setStrokeGradient(SkShader* gradient) {
-            if (UPDATE_SKPROP(strokeGradient, gradient)) {
+            if (strokeGradient.get() != gradient) {
+                strokeGradient = sk_ref_sp(gradient);
                 onPropertyChanged();
             }
         }
-        SkShader* getFillGradient() const { return fillGradient; }
-        SkShader* getStrokeGradient() const { return strokeGradient; }
+        SkShader* getFillGradient() const { return fillGradient.get(); }
+        SkShader* getStrokeGradient() const { return strokeGradient.get(); }
         float getStrokeWidth() const { return mPrimitiveFields.strokeWidth; }
         void setStrokeWidth(float strokeWidth) {
             VD_SET_PRIMITIVE_FIELD_AND_NOTIFY(strokeWidth, strokeWidth);
@@ -325,8 +321,8 @@ public:
             count,
         };
         PrimitiveFields mPrimitiveFields;
-        SkShader* fillGradient = nullptr;
-        SkShader* strokeGradient = nullptr;
+        sk_sp<SkShader> fillGradient;
+        sk_sp<SkShader> strokeGradient;
     };
 
     // Called from UI thread
@@ -356,6 +352,9 @@ public:
         }
     }
     virtual void setAntiAlias(bool aa) { mAntiAlias = aa; }
+    void forEachFillColor(const std::function<void(SkColor)>& func) const override {
+        func(mStagingProperties.getFillColor());
+    }
 
 protected:
     const SkPath& getUpdatedPath(bool useStagingData, SkPath* tempStagingPath) override;
@@ -371,7 +370,7 @@ private:
     bool mAntiAlias = true;
 };
 
-class ANDROID_API ClipPath : public Path {
+class ClipPath : public Path {
 public:
     ClipPath(const ClipPath& path) : Path(path) {}
     ClipPath(const char* path, size_t strLength) : Path(path, strLength) {}
@@ -380,7 +379,7 @@ public:
     virtual void setAntiAlias(bool aa) {}
 };
 
-class ANDROID_API Group : public Node {
+class Group : public Node {
 public:
     class GroupProperties : public Properties {
     public:
@@ -487,6 +486,12 @@ public:
         }
     }
 
+    void forEachFillColor(const std::function<void(SkColor)>& func) const override {
+        for (auto& child : mChildren) {
+            child->forEachFillColor(func);
+        }
+    }
+
 private:
     GroupProperties mProperties = GroupProperties(this);
     GroupProperties mStagingProperties = GroupProperties(this);
@@ -494,7 +499,7 @@ private:
     std::vector<std::unique_ptr<Node> > mChildren;
 };
 
-class ANDROID_API Tree : public VirtualLightRefBase {
+class Tree : public VirtualLightRefBase {
 public:
     explicit Tree(Group* rootNode) : mRootNode(rootNode) {
         mRootNode->setPropertyChangedListener(&mPropertyChangedListener);
@@ -502,8 +507,8 @@ public:
 
     // Copy properties from the tree and use the give node as the root node
     Tree(const Tree* copy, Group* rootNode) : Tree(rootNode) {
-        mStagingProperties.syncAnimatableProperties(*copy->stagingProperties());
-        mStagingProperties.syncNonAnimatableProperties(*copy->stagingProperties());
+        mStagingProperties.syncAnimatableProperties(copy->stagingProperties());
+        mStagingProperties.syncNonAnimatableProperties(copy->stagingProperties());
     }
     // Draws the VD onto a bitmap cache, then the bitmap cache will be rendered onto the input
     // canvas. Returns the number of pixels needed for the bitmap cache.
@@ -513,7 +518,6 @@ public:
 
     Bitmap& getBitmapUpdateIfDirty();
     void setAllowCaching(bool allowCaching) { mAllowCaching = allowCaching; }
-    SkPaint* getPaint();
     void syncProperties() {
         if (mStagingProperties.mNonAnimatablePropertiesDirty) {
             mCache.dirty |= (mProperties.mNonAnimatableProperties.viewportWidth !=
@@ -550,8 +554,7 @@ public:
             SkRect bounds;
             int scaledWidth = 0;
             int scaledHeight = 0;
-            SkColorFilter* colorFilter = nullptr;
-            ~NonAnimatableProperties() { SkSafeUnref(colorFilter); }
+            sk_sp<SkColorFilter> colorFilter;
         } mNonAnimatableProperties;
         bool mNonAnimatablePropertiesDirty = true;
 
@@ -561,8 +564,7 @@ public:
         void syncNonAnimatableProperties(const TreeProperties& prop) {
             // Copy over the data that can only be changed in UI thread
             if (mNonAnimatableProperties.colorFilter != prop.mNonAnimatableProperties.colorFilter) {
-                SkRefCnt_SafeAssign(mNonAnimatableProperties.colorFilter,
-                                    prop.mNonAnimatableProperties.colorFilter);
+                mNonAnimatableProperties.colorFilter = prop.mNonAnimatableProperties.colorFilter;
             }
             mNonAnimatableProperties = prop.mNonAnimatableProperties;
         }
@@ -599,12 +601,13 @@ public:
             }
         }
         void setColorFilter(SkColorFilter* filter) {
-            if (UPDATE_SKPROP(mNonAnimatableProperties.colorFilter, filter)) {
+            if (mNonAnimatableProperties.colorFilter.get() != filter) {
+                mNonAnimatableProperties.colorFilter = sk_ref_sp(filter);
                 mNonAnimatablePropertiesDirty = true;
                 mTree->onPropertyChanged(this);
             }
         }
-        SkColorFilter* getColorFilter() const { return mNonAnimatableProperties.colorFilter; }
+        SkColorFilter* getColorFilter() const { return mNonAnimatableProperties.colorFilter.get(); }
 
         float getViewportWidth() const { return mNonAnimatableProperties.viewportWidth; }
         float getViewportHeight() const { return mNonAnimatableProperties.viewportHeight; }
@@ -626,7 +629,7 @@ public:
     };
     void onPropertyChanged(TreeProperties* prop);
     TreeProperties* mutateStagingProperties() { return &mStagingProperties; }
-    const TreeProperties* stagingProperties() const { return &mStagingProperties; }
+    const TreeProperties& stagingProperties() const { return mStagingProperties; }
 
     // This should only be called from animations on RT
     TreeProperties* mutateProperties() { return &mProperties; }
@@ -644,13 +647,10 @@ public:
      * Draws VD cache into a canvas. This should always be called from RT and it works with Skia
      * pipelines only.
      */
-    void draw(SkCanvas* canvas, const SkRect& bounds);
+    void draw(SkCanvas* canvas, const SkRect& bounds, const SkPaint& paint);
 
-    /**
-     * Draws VD into a GPU backed surface.
-     * This should always be called from RT and it works with Skia pipeline only.
-     */
-    void updateCache(sp<skiapipeline::VectorDrawableAtlas>& atlas, GrContext* context);
+    void getPaintFor(Paint* outPaint, const TreeProperties &props) const;
+    BitmapPalette computePalette();
 
     void setAntiAlias(bool aa) { mRootNode->setAntiAlias(aa); }
 
@@ -658,37 +658,9 @@ private:
     class Cache {
     public:
         sk_sp<Bitmap> bitmap;  // used by HWUI pipeline and software
-        // TODO: use surface instead of bitmap when drawing in software canvas
         bool dirty = true;
-
-        // the rest of the code in Cache is used by Skia pipelines only
-
-        ~Cache() { clear(); }
-
-        /**
-         * Stores a weak pointer to the atlas and a key.
-         */
-        void setAtlas(sp<skiapipeline::VectorDrawableAtlas> atlas,
-                      skiapipeline::AtlasKey newAtlasKey);
-
-        /**
-         * Gets a surface and bounds from the atlas.
-         *
-         * @return nullptr if the altas has been deleted.
-         */
-        sk_sp<SkSurface> getSurface(SkRect* bounds);
-
-        /**
-         * Releases atlas key from the atlas, which makes it available for reuse.
-         */
-        void clear();
-
-    private:
-        wp<skiapipeline::VectorDrawableAtlas> mAtlas;
-        skiapipeline::AtlasKey mAtlasKey = INVALID_ATLAS_KEY;
     };
 
-    SkPaint* updatePaint(SkPaint* outPaint, TreeProperties* prop);
     bool allocateBitmapIfNeeded(Cache& cache, int width, int height);
     bool canReuseBitmap(Bitmap*, int width, int height);
     void updateBitmapCache(Bitmap& outCache, bool useStagingData);
@@ -704,8 +676,6 @@ private:
     TreeProperties mProperties = TreeProperties(this);
     TreeProperties mStagingProperties = TreeProperties(this);
 
-    SkPaint mPaint;
-
     Cache mStagingCache;
     Cache mCache;
 
@@ -718,6 +688,8 @@ private:
 }  // namespace VectorDrawable
 
 typedef VectorDrawable::Path::Data PathData;
+typedef uirenderer::VectorDrawable::Tree VectorDrawableRoot;
+
 }  // namespace uirenderer
 }  // namespace android
 

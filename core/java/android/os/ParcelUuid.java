@@ -16,7 +16,8 @@
 
 package android.os;
 
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.Nullable;
+import android.compat.annotation.UnsupportedAppUsage;
 
 import java.util.UUID;
 
@@ -25,6 +26,7 @@ import java.util.UUID;
  * immutable representation of a 128-bit universally unique
  * identifier.
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public final class ParcelUuid implements Parcelable {
 
     private final UUID mUuid;
@@ -91,7 +93,7 @@ public final class ParcelUuid implements Parcelable {
     *         or {@code false} if not.
     */
    @Override
-   public boolean equals(Object object) {
+   public boolean equals(@Nullable Object object) {
        if (object == null) {
            return false;
        }
@@ -109,7 +111,7 @@ public final class ParcelUuid implements Parcelable {
        return (this.mUuid.equals(that.mUuid));
    }
 
-   public static final Parcelable.Creator<ParcelUuid> CREATOR =
+   public static final @android.annotation.NonNull Parcelable.Creator<ParcelUuid> CREATOR =
                new Parcelable.Creator<ParcelUuid>() {
         @UnsupportedAppUsage
         public ParcelUuid createFromParcel(Parcel source) {

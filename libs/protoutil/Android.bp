@@ -12,9 +12,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_base_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_base_license"],
+}
 
-cc_library {
-    name: "libprotoutil",
+cc_defaults {
+    name: "libprotoutil_defaults",
 
     cflags: [
         "-Wall",
@@ -26,31 +34,56 @@ cc_library {
 
     srcs: [
         "src/EncodedBuffer.cpp",
+        "src/ProtoFileReader.cpp",
         "src/ProtoOutputStream.cpp",
+        "src/ProtoReader.cpp",
         "src/protobuf.cpp",
     ],
 
-    export_include_dirs: ["include"],
-
     shared_libs: [
+        "libbase",
+        "libutils",
         "libcutils",
         "liblog",
+    ],
+}
+
+cc_library {
+    name: "libprotoutil",
+
+    defaults: ["libprotoutil_defaults"],
+
+    export_include_dirs: ["include"],
+
+    min_sdk_version: "30",
+    apex_available: [
+        "//apex_available:platform",
+        "com.android.os.statsd",
     ],
 }
 
 cc_test {
     name: "libprotoutil_test",
 
-    srcs: [
-        "tests/EncodedBuffer_test.cpp",
-    ],
+    defaults: ["libprotoutil_defaults"],
+
+    local_include_dirs: ["include"],
+
+    srcs: ["tests/*"],
 
     shared_libs: [
-        "libcutils",
-        "libprotoutil",
+        "libprotobuf-cpp-full",
     ],
 
     static_libs: [
         "libgmock",
     ],
+
+    test_suites: [
+        "general-tests",
+    ],
+
+    proto: {
+        type: "full",
+    },
 }

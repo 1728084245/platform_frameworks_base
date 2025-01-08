@@ -45,12 +45,14 @@ interface IWebViewUpdateService {
      * it would then try to update the provider to such a package while in reality the update
      * service would switch to another one.
      */
+    @JavaPassthrough(annotation="@android.annotation.RequiresPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS)")
     String changeProviderAndSetting(String newProvider);
 
     /**
      * DevelopmentSettings uses this to get the current available WebView
      * providers (to display as choices to the user).
      */
+    @UnsupportedAppUsage(maxTargetSdk = 30, trackingBug = 170729553)
     WebViewProviderInfo[] getValidWebViewPackages();
 
     /**
@@ -61,25 +63,13 @@ interface IWebViewUpdateService {
     /**
      * Used by DevelopmentSetting to get the name of the WebView provider currently in use.
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = 30, trackingBug = 170729553)
     String getCurrentWebViewPackageName();
 
     /**
      * Used by public API for debugging purposes.
      */
     PackageInfo getCurrentWebViewPackage();
-
-    /**
-     * Used by Settings to determine whether a certain package can be enabled/disabled by the user -
-     * the package should not be modifiable in this way if it is a fallback package.
-     */
-    @UnsupportedAppUsage
-    boolean isFallbackPackage(String packageName);
-
-    /**
-     * Enable or disable the WebView package fallback mechanism.
-     */
-    void enableFallbackLogic(boolean enable);
 
     /**
      * Used by Settings to determine whether multiprocess is enabled.
@@ -90,4 +80,9 @@ interface IWebViewUpdateService {
      * Used by Settings to enable/disable multiprocess.
      */
     void enableMultiProcess(boolean enable);
+
+    /**
+     * Used by Settings to get the default WebView package.
+     */
+    WebViewProviderInfo getDefaultWebViewPackage();
 }

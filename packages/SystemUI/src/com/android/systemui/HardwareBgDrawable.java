@@ -24,6 +24,7 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.LayerDrawable;
 
 import com.android.settingslib.Utils;
+import com.android.systemui.res.R;
 
 public class HardwareBgDrawable extends LayerDrawable {
 
@@ -61,7 +62,7 @@ public class HardwareBgDrawable extends LayerDrawable {
                             : R.drawable.rounded_bg_bottom).mutate(),
             };
         }
-        layers[1].setTint(Utils.getColorAttr(context, android.R.attr.colorPrimary));
+        layers[1].setTintList(Utils.getColorAttr(context, android.R.attr.colorPrimary));
         return layers;
     }
 

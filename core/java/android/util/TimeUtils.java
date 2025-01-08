@@ -18,17 +18,20 @@ package android.util;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.TestApi;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Build;
 import android.os.SystemClock;
 
-import libcore.timezone.CountryTimeZones;
-import libcore.timezone.CountryTimeZones.TimeZoneMapping;
-import libcore.timezone.TimeZoneFinder;
-import libcore.timezone.ZoneInfoDB;
+import com.android.i18n.timezone.CountryTimeZones;
+import com.android.i18n.timezone.CountryTimeZones.TimeZoneMapping;
+import com.android.i18n.timezone.TimeZoneFinder;
+import com.android.i18n.timezone.ZoneInfoDb;
 
 import java.io.PrintWriter;
 import java.text.SimpleDateFormat;
+import java.time.Instant;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
@@ -38,10 +41,43 @@ import java.util.List;
 /**
  * A class containing utility methods related to time zones.
  */
+@android.ravenwood.annotation.RavenwoodKeepPartialClass
+@android.ravenwood.annotation.RavenwoodKeepStaticInitializer
 public class TimeUtils {
     /** @hide */ public TimeUtils() {}
     /** {@hide} */
-    private static SimpleDateFormat sLoggingFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+    private static final SimpleDateFormat sLoggingFormat =
+            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+
+    /** @hide */
+    public static final SimpleDateFormat sDumpDateFormat =
+            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
+
+    /**
+     * This timestamp is used in TimeUtils methods and by the SettingsUI to filter time zones
+     * to only "effective" ones in a country. It is compared against the notUsedAfter metadata that
+     * Android records for some time zones.
+     *
+     * <p>What is notUsedAfter?</p>
+     * Android chooses to avoid making users choose between functionally identical time zones at the
+     * expense of not being able to represent local times in the past.
+     *
+     * notUsedAfter exists because some time zones can "merge" with other time zones after a given
+     * point in time (i.e. they change to have identical transitions, offsets, display names, etc.).
+     * From the notUsedAfter time, the zone will express the same local time as the one it merged
+     * with.
+     *
+     * <p>Why hardcoded?</p>
+     * Rather than using System.currentTimeMillis(), a timestamp known to be in the recent past is
+     * used to ensure consistent behavior across devices and time, and avoid assumptions that the
+     * system clock on a device is currently set correctly. The fixed value should be updated
+     * occasionally, but it doesn't have to be very often as effective time zones for a country
+     * don't change very often.
+     *
+     * @hide
+     */
+    public static final Instant MIN_USE_DATE_OF_TIMEZONE =
+            Instant.ofEpochMilli(1546300800000L); // 1/1/2019 00:00 UTC
 
     /**
      * Tries to return a time zone that would have had the specified offset
@@ -58,19 +94,25 @@ public class TimeUtils {
     }
 
     /**
-     * Tries to return a frozen ICU time zone that would have had the specified offset
-     * and DST value at the specified moment in the specified country.
-     * Returns null if no suitable zone could be found.
+     * Returns a frozen ICU time zone that has / would have had the specified offset and DST value
+     * at the specified moment in the specified country. Returns null if no suitable zone could be
+     * found.
      */
     private static android.icu.util.TimeZone getIcuTimeZone(
-            int offset, boolean dst, long when, String country) {
-        if (country == null) {
+            int offsetMillis, boolean isDst, long whenMillis, String countryIso) {
+        if (countryIso == null) {
             return null;
         }
 
         android.icu.util.TimeZone bias = android.icu.util.TimeZone.getDefault();
-        return TimeZoneFinder.getInstance()
-                .lookupTimeZoneByCountryAndOffset(country, offset, dst, when, bias);
+        CountryTimeZones countryTimeZones =
+                TimeZoneFinder.getInstance().lookupCountryTimeZones(countryIso);
+        if (countryTimeZones == null) {
+            return null;
+        }
+        CountryTimeZones.OffsetResult offsetResult = countryTimeZones.lookupByOffsetWithBias(
+                whenMillis, bias, offsetMillis, isDst);
+        return offsetResult != null ? offsetResult.getTimeZone() : null;
     }
 
     /**
@@ -78,7 +120,7 @@ public class TimeUtils {
      *
      * <p>The list returned may be different from other on-device sources like
      * {@link android.icu.util.TimeZone#getRegion(String)} as it can be curated to avoid
-     * contentious mappings.
+     * contentious or obsolete mappings.
      *
      * @param countryCode the ISO 3166-1 alpha-2 code for the country as can be obtained using
      *     {@link java.util.Locale#getCountry()}
@@ -98,8 +140,8 @@ public class TimeUtils {
 
         List<String> timeZoneIds = new ArrayList<>();
         for (TimeZoneMapping timeZoneMapping : countryTimeZones.getTimeZoneMappings()) {
-            if (timeZoneMapping.showInPicker) {
-                timeZoneIds.add(timeZoneMapping.timeZoneId);
+            if (timeZoneMapping.isShownInPickerAt(MIN_USE_DATE_OF_TIMEZONE)) {
+                timeZoneIds.add(timeZoneMapping.getTimeZoneId());
             }
         }
         return Collections.unmodifiableList(timeZoneIds);
@@ -113,8 +155,8 @@ public class TimeUtils {
      *
      * <p>Time zone database updates should be expected to occur periodically due to
      * political and legal changes that cannot be anticipated in advance.  Therefore,
-     * when computing the UTC time for a future event, applications should be aware that
-     * the results may differ following a time zone database update.  This method allows
+     * when computing the time for a future event, applications should be aware that the
+     * results may differ following a time zone database update.  This method allows
      * applications to detect that a database change has occurred, and to recalculate any
      * cached times accordingly.
      *
@@ -123,7 +165,7 @@ public class TimeUtils {
      * during the lifetime of an activity.
      */
     public static String getTimeZoneDatabaseVersion() {
-        return ZoneInfoDB.getInstance().getVersion();
+        return ZoneInfoDb.getInstance().getVersion();
     }
 
     /** @hide Field length that can hold 999 days of time */
@@ -140,6 +182,7 @@ public class TimeUtils {
     private static char[] sFormatStr = new char[HUNDRED_DAY_FIELD_LEN+10];
     private static char[] sTmpFormatStr = new char[HUNDRED_DAY_FIELD_LEN+10];
 
+    @android.ravenwood.annotation.RavenwoodKeep
     static private int accumField(int amt, int suffix, boolean always, int zeropad) {
         if (amt > 999) {
             int num = 0;
@@ -162,6 +205,7 @@ public class TimeUtils {
         return 0;
     }
 
+    @android.ravenwood.annotation.RavenwoodKeep
     static private int printFieldLocked(char[] formatStr, int amt, char suffix, int pos,
             boolean always, int zeropad) {
         if (always || amt > 0) {
@@ -202,6 +246,7 @@ public class TimeUtils {
         return pos;
     }
 
+    @android.ravenwood.annotation.RavenwoodKeep
     private static int formatDurationLocked(long duration, int fieldLen) {
         if (sFormatStr.length < fieldLen) {
             sFormatStr = new char[fieldLen];
@@ -274,6 +319,7 @@ public class TimeUtils {
     }
 
     /** @hide Just for debugging; not internationalized. */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static void formatDuration(long duration, StringBuilder builder) {
         synchronized (sFormatSync) {
             int len = formatDurationLocked(duration, 0);
@@ -282,6 +328,7 @@ public class TimeUtils {
     }
 
     /** @hide Just for debugging; not internationalized. */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static void formatDuration(long duration, StringBuilder builder, int fieldLen) {
         synchronized (sFormatSync) {
             int len = formatDurationLocked(duration, fieldLen);
@@ -291,6 +338,7 @@ public class TimeUtils {
 
     /** @hide Just for debugging; not internationalized. */
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
+    @android.ravenwood.annotation.RavenwoodKeep
     public static void formatDuration(long duration, PrintWriter pw, int fieldLen) {
         synchronized (sFormatSync) {
             int len = formatDurationLocked(duration, fieldLen);
@@ -299,6 +347,8 @@ public class TimeUtils {
     }
 
     /** @hide Just for debugging; not internationalized. */
+    @TestApi
+    @android.ravenwood.annotation.RavenwoodKeep
     public static String formatDuration(long duration) {
         synchronized (sFormatSync) {
             int len = formatDurationLocked(duration, 0);
@@ -308,11 +358,23 @@ public class TimeUtils {
 
     /** @hide Just for debugging; not internationalized. */
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
+    @android.ravenwood.annotation.RavenwoodKeep
     public static void formatDuration(long duration, PrintWriter pw) {
         formatDuration(duration, pw, 0);
     }
 
     /** @hide Just for debugging; not internationalized. */
+    @android.ravenwood.annotation.RavenwoodKeep
+    public static void formatDuration(long time, long now, StringBuilder sb) {
+        if (time == 0) {
+            sb.append("--");
+            return;
+        }
+        formatDuration(time-now, sb, 0);
+    }
+
+    /** @hide Just for debugging; not internationalized. */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static void formatDuration(long time, long now, PrintWriter pw) {
         if (time == 0) {
             pw.print("--");
@@ -322,8 +384,21 @@ public class TimeUtils {
     }
 
     /** @hide Just for debugging; not internationalized. */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static String formatUptime(long time) {
-        final long diff = time - SystemClock.uptimeMillis();
+        return formatTime(time, SystemClock.uptimeMillis());
+    }
+
+    /** @hide Just for debugging; not internationalized. */
+    @android.ravenwood.annotation.RavenwoodKeep
+    public static String formatRealtime(long time) {
+        return formatTime(time, SystemClock.elapsedRealtime());
+    }
+
+    /** @hide Just for debugging; not internationalized. */
+    @android.ravenwood.annotation.RavenwoodKeep
+    public static String formatTime(long time, long referenceTime) {
+        long diff = time - referenceTime;
         if (diff > 0) {
             return time + " (in " + diff + " ms)";
         }
@@ -341,7 +416,8 @@ public class TimeUtils {
      * @return String representation of the time.
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+    @android.ravenwood.annotation.RavenwoodKeep
     public static String logTimeOfDay(long millis) {
         Calendar c = Calendar.getInstance();
         if (millis >= 0) {
@@ -353,6 +429,7 @@ public class TimeUtils {
     }
 
     /** {@hide} */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static String formatForLogging(long millis) {
         if (millis <= 0) {
             return "unknown";
@@ -360,4 +437,52 @@ public class TimeUtils {
             return sLoggingFormat.format(new Date(millis));
         }
     }
-}
+
+    /**
+     * Dump a currentTimeMillis style timestamp for dumpsys.
+     *
+     * @hide
+     */
+    @android.ravenwood.annotation.RavenwoodKeep
+    public static void dumpTime(PrintWriter pw, long time) {
+        pw.print(sDumpDateFormat.format(new Date(time)));
+    }
+
+    /**
+     * This method is used to find if a clock time is inclusively between two other clock times
+     * @param reference The time of the day we want check if it is between start and end
+     * @param start The start time reference
+     * @param end The end time
+     * @return true if the reference time is between the two clock times, and false otherwise.
+     */
+    public static boolean isTimeBetween(@NonNull LocalTime reference,
+                                        @NonNull LocalTime start,
+                                        @NonNull LocalTime end) {
+        //    ////////E----+-----S////////
+        if ((reference.isBefore(start) && reference.isAfter(end)
+                //    -----+----S//////////E------
+                || (reference.isBefore(end) && reference.isBefore(start) && start.isBefore(end))
+                //    ---------S//////////E---+---
+                || (reference.isAfter(end) && reference.isAfter(start)) && start.isBefore(end))) {
+            return false;
+        } else {
+            return true;
+        }
+    }
+
+    /**
+     * Dump a currentTimeMillis style timestamp for dumpsys, with the delta time from now.
+     *
+     * @hide
+     */
+    @android.ravenwood.annotation.RavenwoodKeep
+    public static void dumpTimeWithDelta(PrintWriter pw, long time, long now) {
+        pw.print(sDumpDateFormat.format(new Date(time)));
+        if (time == now) {
+            pw.print(" (now)");
+        } else {
+            pw.print(" (");
+            TimeUtils.formatDuration(time, now, pw);
+            pw.print(")");
+        }
+    }}

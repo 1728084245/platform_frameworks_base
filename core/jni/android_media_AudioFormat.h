@@ -37,6 +37,20 @@
 #define ENCODING_AAC_XHE        16
 #define ENCODING_AC4            17
 #define ENCODING_E_AC3_JOC      18
+#define ENCODING_DOLBY_MAT      19
+#define ENCODING_OPUS           20
+#define ENCODING_PCM_24BIT_PACKED 21
+#define ENCODING_PCM_32BIT 22
+#define ENCODING_MPEGH_BL_L3 23
+#define ENCODING_MPEGH_BL_L4 24
+#define ENCODING_MPEGH_LC_L3 25
+#define ENCODING_MPEGH_LC_L4 26
+#define ENCODING_DTS_UHD_P1 27
+#define ENCODING_DRA 28
+#define ENCODING_DTS_HD_MA 29
+#define ENCODING_DTS_UHD_P2 30
+#define ENCODING_DSD 31
+#define ENCODING_AC4_L4 32
 
 #define ENCODING_INVALID    0
 #define ENCODING_DEFAULT    1
@@ -45,6 +59,7 @@
 
 #define CHANNEL_INVALID 0
 #define CHANNEL_OUT_DEFAULT 1
+#define CHANNEL_IN_DEFAULT 1
 
 static inline audio_format_t audioFormatToNative(int audioFormat)
 {
@@ -71,20 +86,48 @@ static inline audio_format_t audioFormatToNative(int audioFormat)
         return AUDIO_FORMAT_AAC_HE_V1;
     case ENCODING_AAC_HE_V2:
         return AUDIO_FORMAT_AAC_HE_V2;
-    case ENCODING_DOLBY_TRUEHD:
-        return AUDIO_FORMAT_DOLBY_TRUEHD;
     case ENCODING_IEC61937:
         return AUDIO_FORMAT_IEC61937;
+    case ENCODING_DOLBY_TRUEHD:
+        return AUDIO_FORMAT_DOLBY_TRUEHD;
     case ENCODING_AAC_ELD:
         return AUDIO_FORMAT_AAC_ELD;
     case ENCODING_AAC_XHE:
         return AUDIO_FORMAT_AAC_XHE;
     case ENCODING_AC4:
         return AUDIO_FORMAT_AC4;
+    case ENCODING_AC4_L4:
+        return AUDIO_FORMAT_AC4_L4;
     case ENCODING_E_AC3_JOC:
         return AUDIO_FORMAT_E_AC3_JOC;
     case ENCODING_DEFAULT:
         return AUDIO_FORMAT_DEFAULT;
+    case ENCODING_DOLBY_MAT:
+        return AUDIO_FORMAT_MAT;
+    case ENCODING_OPUS:
+        return AUDIO_FORMAT_OPUS;
+    case ENCODING_PCM_24BIT_PACKED:
+        return AUDIO_FORMAT_PCM_24_BIT_PACKED;
+    case ENCODING_PCM_32BIT:
+        return AUDIO_FORMAT_PCM_32_BIT;
+    case ENCODING_MPEGH_BL_L3:
+        return AUDIO_FORMAT_MPEGH_BL_L3;
+    case ENCODING_MPEGH_BL_L4:
+        return AUDIO_FORMAT_MPEGH_BL_L4;
+    case ENCODING_MPEGH_LC_L3:
+        return AUDIO_FORMAT_MPEGH_LC_L3;
+    case ENCODING_MPEGH_LC_L4:
+        return AUDIO_FORMAT_MPEGH_LC_L4;
+    case ENCODING_DTS_UHD_P1:
+        return AUDIO_FORMAT_DTS_UHD;
+    case ENCODING_DRA:
+        return AUDIO_FORMAT_DRA;
+    case ENCODING_DTS_HD_MA:
+        return AUDIO_FORMAT_DTS_HD_MA;
+    case ENCODING_DTS_UHD_P2:
+        return AUDIO_FORMAT_DTS_UHD_P2;
+    case ENCODING_DSD:
+        return AUDIO_FORMAT_DSD;
     default:
         return AUDIO_FORMAT_INVALID;
     }
@@ -100,10 +143,15 @@ static inline int audioFormatFromNative(audio_format_t nativeFormat)
     case AUDIO_FORMAT_PCM_FLOAT:
         return ENCODING_PCM_FLOAT;
 
-    // map these to ENCODING_PCM_FLOAT
-    case AUDIO_FORMAT_PCM_8_24_BIT:
+    // As of S, these extend integer precision formats now return more specific values
+    // than ENCODING_PCM_FLOAT.
     case AUDIO_FORMAT_PCM_24_BIT_PACKED:
+        return ENCODING_PCM_24BIT_PACKED;
     case AUDIO_FORMAT_PCM_32_BIT:
+        return ENCODING_PCM_32BIT;
+
+    // map this to ENCODING_PCM_FLOAT
+    case AUDIO_FORMAT_PCM_8_24_BIT:
         return ENCODING_PCM_FLOAT;
 
     case AUDIO_FORMAT_AC3:
@@ -127,16 +175,42 @@ static inline int audioFormatFromNative(audio_format_t nativeFormat)
     case AUDIO_FORMAT_DOLBY_TRUEHD:
         return ENCODING_DOLBY_TRUEHD;
     case AUDIO_FORMAT_AAC_ELD:
-            return ENCODING_AAC_ELD;
-    // FIXME needs addition of AUDIO_FORMAT_AAC_XHE
-    //case AUDIO_FORMAT_AAC_XHE:
-    //    return ENCODING_AAC_XHE;
+        return ENCODING_AAC_ELD;
+    case AUDIO_FORMAT_AAC_XHE:
+        return ENCODING_AAC_XHE;
     case AUDIO_FORMAT_AC4:
         return ENCODING_AC4;
+    case AUDIO_FORMAT_AC4_L4:
+        return ENCODING_AC4_L4;
     case AUDIO_FORMAT_E_AC3_JOC:
         return ENCODING_E_AC3_JOC;
+    case AUDIO_FORMAT_MAT:
+    case AUDIO_FORMAT_MAT_1_0:
+    case AUDIO_FORMAT_MAT_2_0:
+    case AUDIO_FORMAT_MAT_2_1:
+        return ENCODING_DOLBY_MAT;
+    case AUDIO_FORMAT_OPUS:
+        return ENCODING_OPUS;
+    case AUDIO_FORMAT_MPEGH_BL_L3:
+        return ENCODING_MPEGH_BL_L3;
+    case AUDIO_FORMAT_MPEGH_BL_L4:
+        return ENCODING_MPEGH_BL_L4;
+    case AUDIO_FORMAT_MPEGH_LC_L3:
+        return ENCODING_MPEGH_LC_L3;
+    case AUDIO_FORMAT_MPEGH_LC_L4:
+        return ENCODING_MPEGH_LC_L4;
+    case AUDIO_FORMAT_DTS_UHD:
+        return ENCODING_DTS_UHD_P1;
+    case AUDIO_FORMAT_DRA:
+        return ENCODING_DRA;
+    case AUDIO_FORMAT_DTS_HD_MA:
+        return ENCODING_DTS_HD_MA;
+    case AUDIO_FORMAT_DTS_UHD_P2:
+        return ENCODING_DTS_UHD_P2;
     case AUDIO_FORMAT_DEFAULT:
         return ENCODING_DEFAULT;
+    case AUDIO_FORMAT_DSD:
+        return ENCODING_DSD;
     default:
         return ENCODING_INVALID;
     }
@@ -184,12 +258,22 @@ static inline int outChannelMaskFromNative(audio_channel_mask_t nativeMask)
 
 static inline audio_channel_mask_t inChannelMaskToNative(int channelMask)
 {
-    return (audio_channel_mask_t)channelMask;
+    switch (channelMask) {
+        case CHANNEL_IN_DEFAULT:
+            return AUDIO_CHANNEL_NONE;
+        default:
+            return (audio_channel_mask_t)channelMask;
+    }
 }
 
 static inline int inChannelMaskFromNative(audio_channel_mask_t nativeMask)
 {
-    return (int)nativeMask;
+    switch (nativeMask) {
+        case AUDIO_CHANNEL_NONE:
+            return CHANNEL_IN_DEFAULT;
+        default:
+            return (int)nativeMask;
+    }
 }
 
 #endif // ANDROID_MEDIA_AUDIOFORMAT_H

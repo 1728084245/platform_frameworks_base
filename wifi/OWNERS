@@ -1,5 +1,3 @@
 set noparent
 
-etancohen@google.com
-satk@google.com
-silberst@google.com
+include platform/packages/modules/Wifi:/WIFI_OWNERS

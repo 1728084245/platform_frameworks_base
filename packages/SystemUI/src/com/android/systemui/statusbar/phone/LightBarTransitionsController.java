@@ -21,40 +21,98 @@ import android.content.Context;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.SystemClock;
+import android.util.MathUtils;
 import android.util.TimeUtils;
 
-import com.android.systemui.Dependency;
+import androidx.annotation.VisibleForTesting;
+
+import com.android.app.animation.Interpolators;
+import com.android.internal.policy.GestureNavigationSettingsObserver;
 import com.android.systemui.Dumpable;
-import com.android.systemui.Interpolators;
-import com.android.systemui.SysUiServiceProvider;
+import com.android.systemui.dagger.qualifiers.Background;
+import com.android.systemui.plugins.statusbar.StatusBarStateController;
+import com.android.systemui.shared.system.QuickStepContract;
 import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.CommandQueue.Callbacks;
-import com.android.systemui.statusbar.policy.KeyguardMonitor;
+import com.android.systemui.statusbar.policy.KeyguardStateController;
 
-import java.io.FileDescriptor;
+import dagger.assisted.Assisted;
+import dagger.assisted.AssistedFactory;
+import dagger.assisted.AssistedInject;
+
 import java.io.PrintWriter;
+import java.lang.ref.WeakReference;
 
 /**
  * Class to control all aspects about light bar changes.
  */
-public class LightBarTransitionsController implements Dumpable, Callbacks {
+public class LightBarTransitionsController implements Dumpable {
 
-    public static final long DEFAULT_TINT_ANIMATION_DURATION = 120;
+    public static final int DEFAULT_TINT_ANIMATION_DURATION = 120;
     private static final String EXTRA_DARK_INTENSITY = "dark_intensity";
+
+    private static class Callback implements Callbacks, StatusBarStateController.StateListener {
+        private final WeakReference<LightBarTransitionsController> mSelf;
+
+        Callback(LightBarTransitionsController self) {
+            mSelf = new WeakReference<>(self);
+        }
+
+        @Override
+        public void appTransitionPending(int displayId, boolean forced) {
+            LightBarTransitionsController self = mSelf.get();
+            if (self != null) {
+                self.appTransitionPending(displayId, forced);
+            }
+        }
+
+        @Override
+        public void appTransitionCancelled(int displayId) {
+            LightBarTransitionsController self = mSelf.get();
+            if (self != null) {
+                self.appTransitionCancelled(displayId);
+            }
+        }
+
+        @Override
+        public void appTransitionStarting(int displayId, long startTime, long duration,
+                boolean forced) {
+            LightBarTransitionsController self = mSelf.get();
+            if (self != null) {
+                self.appTransitionStarting(displayId, startTime, duration, forced);
+            }
+        }
+
+        @Override
+        public void onDozeAmountChanged(float linear, float eased) {
+            LightBarTransitionsController self = mSelf.get();
+            if (self != null) {
+                self.onDozeAmountChanged(linear, eased);
+            }
+        }
+    }
+
+    private final Callback mCallback;
 
     private final Handler mHandler;
     private final DarkIntensityApplier mApplier;
-    private final KeyguardMonitor mKeyguardMonitor;
+    private final KeyguardStateController mKeyguardStateController;
+    private final StatusBarStateController mStatusBarStateController;
+    private final CommandQueue mCommandQueue;
+    private GestureNavigationSettingsObserver mGestureNavigationSettingsObserver;
 
     private boolean mTransitionDeferring;
     private long mTransitionDeferringStartTime;
     private long mTransitionDeferringDuration;
     private boolean mTransitionPending;
     private boolean mTintChangePending;
+    private boolean mNavigationButtonsForcedVisible;
     private float mPendingDarkIntensity;
     private ValueAnimator mTintAnimator;
     private float mDarkIntensity;
     private float mNextDarkIntensity;
+    private float mDozeAmount;
+    private int mDisplayId;
     private final Runnable mTransitionDeferringDoneRunnable = new Runnable() {
         @Override
         public void run() {
@@ -62,17 +120,38 @@ public class LightBarTransitionsController implements Dumpable, Callbacks {
         }
     };
 
-    public LightBarTransitionsController(Context context, DarkIntensityApplier applier) {
+    private final Context mContext;
+
+    @AssistedInject
+    public LightBarTransitionsController(
+            Context context,
+            @Background Handler bgHandler,
+            @Assisted DarkIntensityApplier applier,
+            CommandQueue commandQueue,
+            KeyguardStateController keyguardStateController,
+            StatusBarStateController statusBarStateController) {
         mApplier = applier;
         mHandler = new Handler();
-        mKeyguardMonitor = Dependency.get(KeyguardMonitor.class);
-        SysUiServiceProvider.getComponent(context, CommandQueue.class)
-                .addCallbacks(this);
+        mKeyguardStateController = keyguardStateController;
+        mStatusBarStateController = statusBarStateController;
+        mCommandQueue = commandQueue;
+        mCallback = new Callback(this);
+        mCommandQueue.addCallback(mCallback);
+        mStatusBarStateController.addCallback(mCallback);
+        mDozeAmount = mStatusBarStateController.getDozeAmount();
+        mContext = context;
+        mDisplayId = mContext.getDisplayId();
+        mGestureNavigationSettingsObserver = new GestureNavigationSettingsObserver(
+                mHandler, bgHandler, mContext, this::onNavigationSettingsChanged);
+        mGestureNavigationSettingsObserver.register();
+        onNavigationSettingsChanged();
     }
 
-    public void destroy(Context context) {
-        SysUiServiceProvider.getComponent(context, CommandQueue.class)
-                .removeCallbacks(this);
+    /** Call to cleanup the LightBarTransitionsController when done with it. */
+    public void destroy() {
+        mCommandQueue.removeCallback(mCallback);
+        mStatusBarStateController.removeCallback(mCallback);
+        mGestureNavigationSettingsObserver.unregister();
     }
 
     public void saveState(Bundle outState) {
@@ -83,28 +162,30 @@ public class LightBarTransitionsController implements Dumpable, Callbacks {
 
     public void restoreState(Bundle savedInstanceState) {
         setIconTintInternal(savedInstanceState.getFloat(EXTRA_DARK_INTENSITY, 0));
+        mNextDarkIntensity = mDarkIntensity;
     }
 
-    @Override
-    public void appTransitionPending(boolean forced) {
-        if (mKeyguardMonitor.isKeyguardGoingAway() && !forced) {
+    private void appTransitionPending(int displayId, boolean forced) {
+        if (mDisplayId != displayId || mKeyguardStateController.isKeyguardGoingAway() && !forced) {
             return;
         }
         mTransitionPending = true;
     }
 
-    @Override
-    public void appTransitionCancelled() {
+    private void appTransitionCancelled(int displayId) {
+        if (mDisplayId != displayId) {
+            return;
+        }
         if (mTransitionPending && mTintChangePending) {
             mTintChangePending = false;
-            animateIconTint(mPendingDarkIntensity, 0 /* delay */, DEFAULT_TINT_ANIMATION_DURATION);
+            animateIconTint(mPendingDarkIntensity, 0 /* delay */,
+                    mApplier.getTintAnimationDuration());
         }
         mTransitionPending = false;
     }
 
-    @Override
-    public void appTransitionStarting(long startTime, long duration, boolean forced) {
-        if (mKeyguardMonitor.isKeyguardGoingAway() && !forced) {
+    private void appTransitionStarting(int displayId, long startTime, long duration, boolean forced) {
+        if (mDisplayId != displayId || mKeyguardStateController.isKeyguardGoingAway() && !forced) {
             return;
         }
         if (mTransitionPending && mTintChangePending) {
@@ -126,6 +207,12 @@ public class LightBarTransitionsController implements Dumpable, Callbacks {
         mTransitionPending = false;
     }
 
+    @VisibleForTesting
+    void setNavigationSettingsObserver(GestureNavigationSettingsObserver observer) {
+        mGestureNavigationSettingsObserver = observer;
+        onNavigationSettingsChanged();
+    }
+
     public void setIconsDark(boolean dark, boolean animate) {
         if (!animate) {
             setIconTintInternal(dark ? 1.0f : 0.0f);
@@ -137,7 +224,7 @@ public class LightBarTransitionsController implements Dumpable, Callbacks {
                     Math.max(0, mTransitionDeferringStartTime - SystemClock.uptimeMillis()),
                     mTransitionDeferringDuration);
         } else {
-            animateIconTint(dark ? 1.0f : 0.0f, 0 /* delay */, DEFAULT_TINT_ANIMATION_DURATION);
+            animateIconTint(dark ? 1.0f : 0.0f, 0 /* delay */, mApplier.getTintAnimationDuration());
         }
     }
 
@@ -173,11 +260,37 @@ public class LightBarTransitionsController implements Dumpable, Callbacks {
 
     private void setIconTintInternal(float darkIntensity) {
         mDarkIntensity = darkIntensity;
-        mApplier.applyDarkIntensity(darkIntensity);
+        dispatchDark();
+    }
+
+    private void dispatchDark() {
+        mApplier.applyDarkIntensity(MathUtils.lerp(mDarkIntensity, 0f, mDozeAmount));
+    }
+
+    public void onDozeAmountChanged(float linear, float eased) {
+        mDozeAmount = eased;
+        dispatchDark();
+    }
+
+    /**
+     * Called when the navigation settings change.
+     */
+    private void onNavigationSettingsChanged() {
+        mNavigationButtonsForcedVisible =
+                mGestureNavigationSettingsObserver.areNavigationButtonForcedVisible();
+    }
+
+    /**
+     * Return whether to use the tint calculated in this class for nav icons.
+     */
+    public boolean supportsIconTintForNavMode(int navigationMode) {
+        // In gesture mode, we already do region sampling to update tint based on content beneath.
+        return !QuickStepContract.isGesturalMode(navigationMode)
+                || mNavigationButtonsForcedVisible;
     }
 
     @Override
-    public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
+    public void dump(PrintWriter pw, String[] args) {
         pw.print("  mTransitionDeferring="); pw.print(mTransitionDeferring);
         if (mTransitionDeferring) {
             pw.println();
@@ -194,6 +307,7 @@ public class LightBarTransitionsController implements Dumpable, Callbacks {
         pw.print("  mPendingDarkIntensity="); pw.print(mPendingDarkIntensity);
         pw.print(" mDarkIntensity="); pw.print(mDarkIntensity);
         pw.print(" mNextDarkIntensity="); pw.println(mNextDarkIntensity);
+        pw.print(" mAreNavigationButtonForcedVisible="); pw.println(mNavigationButtonsForcedVisible);
     }
 
     /**
@@ -201,5 +315,13 @@ public class LightBarTransitionsController implements Dumpable, Callbacks {
      */
     public interface DarkIntensityApplier {
         void applyDarkIntensity(float darkIntensity);
+        int getTintAnimationDuration();
+    }
+
+    /** Injectable factory for construction a LightBarTransitionsController. */
+    @AssistedFactory
+    public interface Factory {
+        /** */
+        LightBarTransitionsController create(DarkIntensityApplier darkIntensityApplier);
     }
 }

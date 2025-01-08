@@ -17,16 +17,23 @@
 #ifndef ANDROID_BOOTANIMATION_H
 #define ANDROID_BOOTANIMATION_H
 
+#include <vector>
+#include <queue>
+#include <climits>
+
 #include <stdint.h>
 #include <sys/types.h>
 
 #include <androidfw/AssetManager.h>
+#include <gui/DisplayEventReceiver.h>
+#include <utils/Looper.h>
 #include <utils/Thread.h>
+#include <binder/IBinder.h>
+
+#include <ui/Rotation.h>
 
 #include <EGL/egl.h>
-#include <GLES/gl.h>
-
-class SkBitmap;
+#include <GLES2/gl2.h>
 
 namespace android {
 
@@ -39,6 +46,8 @@ class SurfaceControl;
 class BootAnimation : public Thread, public IBinder::DeathRecipient
 {
 public:
+    static constexpr int MAX_FADED_FRAMES_COUNT = std::numeric_limits<int>::max();
+
     struct Texture {
         GLint   w;
         GLint   h;
@@ -46,7 +55,7 @@ public:
     };
 
     struct Font {
-        FileMap* map;
+        FileMap* map = nullptr;
         Texture texture;
         int char_width;
         int char_height;
@@ -55,7 +64,7 @@ public:
     struct Animation {
         struct Frame {
             String8 name;
-            FileMap* map;
+            FileMap* map = nullptr;
             int trimX;
             int trimY;
             int trimWidth;
@@ -78,19 +87,36 @@ public:
             String8 trimData;
             SortedVector<Frame> frames;
             bool playUntilComplete;
+            int framesToFadeCount;
             float backgroundColor[3];
             uint8_t* audioData;
             int audioLength;
             Animation* animation;
+            // Controls if dynamic coloring is enabled for this part.
+            bool useDynamicColoring = false;
+            // Defines if this part is played after the dynamic coloring part.
+            bool postDynamicColoring = false;
+
+            bool hasFadingPhase() const {
+                return !playUntilComplete && framesToFadeCount > 0;
+            }
         };
         int fps;
         int width;
         int height;
+        bool progressEnabled;
         Vector<Part> parts;
         String8 audioConf;
         String8 fileName;
         ZipFileRO* zip;
         Font clockFont;
+        Font progressFont;
+         // Controls if dynamic coloring is enabled for the whole animation.
+        bool dynamicColoringEnabled = false;
+        int colorTransitionStart = 0; // Start frame of dynamic color transition.
+        int colorTransitionEnd = 0; // End frame of dynamic color transition.
+        float startColors[4][3]; // Start colors of dynamic color transition.
+        float endColors[4][3];   // End colors of dynamic color transition.
     };
 
     // All callbacks will be called from this class's internal thread.
@@ -114,6 +140,7 @@ public:
     };
 
     explicit BootAnimation(sp<Callbacks> callbacks);
+    virtual ~BootAnimation();
 
     sp<SurfaceComposerClient> session() const;
 
@@ -136,50 +163,90 @@ private:
         void                addTimeDirWatch();
 
         int mInotifyFd;
-        int mSystemWd;
+        int mBootAnimWd;
         int mTimeWd;
         BootAnimation* mBootAnimation;
     };
 
-    status_t initTexture(Texture* texture, AssetManager& asset, const char* name);
-    status_t initTexture(FileMap* map, int* width, int* height);
+    // Display event handling
+    class DisplayEventCallback;
+    std::unique_ptr<DisplayEventReceiver> mDisplayEventReceiver;
+    sp<Looper> mLooper;
+    int displayEventCallback(int fd, int events, void* data);
+    void processDisplayEvents();
+
+    status_t initTexture(Texture* texture, AssetManager& asset, const char* name,
+        bool premultiplyAlpha = true);
+    status_t initTexture(FileMap* map, int* width, int* height,
+        bool premultiplyAlpha = true);
     status_t initFont(Font* font, const char* fallback);
+    void initShaders();
     bool android();
     bool movie();
     void drawText(const char* str, const Font& font, bool bold, int* x, int* y);
     void drawClock(const Font& font, const int xPos, const int yPos);
+    void drawProgress(int percent, const Font& font, const int xPos, const int yPos);
+    void fadeFrame(int frameLeft, int frameBottom, int frameWidth, int frameHeight,
+                   const Animation::Part& part, int fadedFramesCount);
+    void drawTexturedQuad(float xStart, float yStart, float width, float height);
     bool validClock(const Animation::Part& part);
     Animation* loadAnimation(const String8&);
     bool playAnimation(const Animation&);
     void releaseAnimation(Animation*) const;
     bool parseAnimationDesc(Animation&);
     bool preloadZip(Animation &animation);
+    void findBootAnimationFile();
+    bool findBootAnimationFileInternal(const std::vector<std::string>& files);
+    bool preloadAnimation();
+    EGLConfig getEglConfig(const EGLDisplay&);
+    ui::Size limitSurfaceSize(int width, int height) const;
+    void resizeSurface(int newWidth, int newHeight);
+    void projectSceneToWindow();
+    void rotateAwayFromNaturalOrientationIfNeeded();
+    ui::Rotation parseOrientationProperty();
 
+    bool shouldStopPlayingPart(const Animation::Part& part, int fadedFramesCount,
+                               int lastDisplayedProgress);
     void checkExit();
 
     void handleViewport(nsecs_t timestep);
+    void initDynamicColors();
 
     sp<SurfaceComposerClient>       mSession;
     AssetManager mAssets;
     Texture     mAndroid[2];
     int         mWidth;
     int         mHeight;
+    int         mInitWidth;
+    int         mInitHeight;
+    int         mMaxWidth = 0;
+    int         mMaxHeight = 0;
     int         mCurrentInset;
     int         mTargetInset;
     bool        mUseNpotTextures = false;
     EGLDisplay  mDisplay;
     EGLDisplay  mContext;
     EGLDisplay  mSurface;
+    sp<IBinder> mDisplayToken;
     sp<SurfaceControl> mFlingerSurfaceControl;
     sp<Surface> mFlingerSurface;
     bool        mClockEnabled;
     bool        mTimeIsAccurate;
     bool        mTimeFormat12Hour;
     bool        mShuttingDown;
+    bool        mDynamicColorsApplied = false;
     String8     mZipFileName;
     SortedVector<String8> mLoadedFiles;
     sp<TimeCheckThread> mTimeCheckThread = nullptr;
     sp<Callbacks> mCallbacks;
+    Animation* mAnimation = nullptr;
+    GLuint mImageShader;
+    GLuint mTextShader;
+    GLuint mImageFadeLocation;
+    GLuint mImageTextureLocation;
+    GLuint mTextCropAreaLocation;
+    GLuint mTextTextureLocation;
+    GLuint mImageColorProgressLocation;
 };
 
 // ---------------------------------------------------------------------------

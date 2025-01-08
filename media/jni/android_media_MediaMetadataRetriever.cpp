@@ -22,7 +22,7 @@
 #include <assert.h>
 #include <utils/Log.h>
 #include <utils/threads.h>
-#include <SkBitmap.h>
+#include <android/graphics/bitmap.h>
 #include <media/IMediaHTTPService.h>
 #include <media/mediametadataretriever.h>
 #include <media/mediascanner.h>
@@ -30,14 +30,14 @@
 #include <private/media/VideoFrame.h>
 
 #include "jni.h"
-#include <nativehelper/JNIHelp.h>
+#include <nativehelper/JNIPlatformHelp.h>
 #include "android_runtime/AndroidRuntime.h"
 #include "android_media_MediaDataSource.h"
 #include "android_media_Streams.h"
 #include "android_util_Binder.h"
+#include <com_android_media_playback_flags.h>
 
-#include "android/graphics/GraphicsJNI.h"
-
+namespace playback_flags = com::android::media::playback::flags;
 using namespace android;
 
 struct fields_t {
@@ -45,8 +45,6 @@ struct fields_t {
     jclass bitmapClazz;  // Must be a global ref
     jmethodID createBitmapMethod;
     jmethodID createScaledBitmapMethod;
-    jclass configClazz;  // Must be a global ref
-    jmethodID createConfigMethod;
     jclass bitmapParamsClazz; // Must be a global ref
     jfieldID inPreferredConfig;
     jfieldID outActualConfig;
@@ -130,7 +128,7 @@ android_media_MediaMetadataRetriever_setDataSourceAndHeaders(
     tmp = NULL;
 
     // Don't let somebody trick us in to reading some random block of memory
-    if (strncmp("mem://", pathStr.string(), 6) == 0) {
+    if (strncmp("mem://", pathStr.c_str(), 6) == 0) {
         jniThrowException(
                 env, "java/lang/IllegalArgumentException", "Invalid pathname");
         return;
@@ -153,7 +151,7 @@ android_media_MediaMetadataRetriever_setDataSourceAndHeaders(
             env,
             retriever->setDataSource(
                 httpService,
-                pathStr.string(),
+                pathStr.c_str(),
                 headersVector.size() > 0 ? &headersVector : NULL),
 
             "java/lang/RuntimeException",
@@ -263,7 +261,7 @@ static void rotate(T *dst, const T *src, size_t width, size_t height, int angle)
 
 static jobject getBitmapFromVideoFrame(
         JNIEnv *env, VideoFrame *videoFrame, jint dst_width, jint dst_height,
-        SkColorType outColorType) {
+        AndroidBitmapFormat outColorType) {
     ALOGV("getBitmapFromVideoFrame: dimension = %dx%d, displaySize = %dx%d, bytes = %d",
             videoFrame->mWidth,
             videoFrame->mHeight,
@@ -271,11 +269,7 @@ static jobject getBitmapFromVideoFrame(
             videoFrame->mDisplayHeight,
             videoFrame->mSize);
 
-    ScopedLocalRef<jobject> config(env,
-            env->CallStaticObjectMethod(
-                    fields.configClazz,
-                    fields.createConfigMethod,
-                    GraphicsJNI::colorTypeToLegacyBitmapConfig(outColorType)));
+    ScopedLocalRef<jobject> config(env, ABitmapConfig_getConfigFromFormat(env, outColorType));
 
     uint32_t width, height, displayWidth, displayHeight;
     bool swapWidthAndHeight = false;
@@ -306,10 +300,9 @@ static jobject getBitmapFromVideoFrame(
         return NULL;
     }
 
-    SkBitmap bitmap;
-    GraphicsJNI::getSkBitmap(env, jBitmap, &bitmap);
+    graphics::Bitmap bitmap(env, jBitmap);
 
-    if (outColorType == kRGB_565_SkColorType) {
+    if (outColorType == ANDROID_BITMAP_FORMAT_RGB_565) {
         rotate((uint16_t*)bitmap.getPixels(),
                (uint16_t*)((char*)videoFrame + sizeof(VideoFrame)),
                videoFrame->mWidth,
@@ -350,40 +343,31 @@ static jobject getBitmapFromVideoFrame(
     return jBitmap;
 }
 
-static int getColorFormat(JNIEnv *env, jobject options) {
+static AndroidBitmapFormat getColorFormat(JNIEnv *env, jobject options,
+        AndroidBitmapFormat defaultPreferred = ANDROID_BITMAP_FORMAT_RGBA_8888) {
     if (options == NULL) {
-        return HAL_PIXEL_FORMAT_RGBA_8888;
+        return defaultPreferred;
     }
 
     ScopedLocalRef<jobject> inConfig(env, env->GetObjectField(options, fields.inPreferredConfig));
-    SkColorType prefColorType = GraphicsJNI::getNativeBitmapColorType(env, inConfig.get());
+    AndroidBitmapFormat format = ABitmapConfig_getFormatFromConfig(env, inConfig.get());
 
-    if (prefColorType == kRGB_565_SkColorType) {
-        return HAL_PIXEL_FORMAT_RGB_565;
+    if (format == ANDROID_BITMAP_FORMAT_RGB_565) {
+        return ANDROID_BITMAP_FORMAT_RGB_565;
     }
-    return HAL_PIXEL_FORMAT_RGBA_8888;
+    return ANDROID_BITMAP_FORMAT_RGBA_8888;
 }
 
-static SkColorType setOutColorType(JNIEnv *env, int colorFormat, jobject options) {
-    SkColorType outColorType = kN32_SkColorType;
-    if (colorFormat == HAL_PIXEL_FORMAT_RGB_565) {
-        outColorType = kRGB_565_SkColorType;
-    }
-
+static void setOutConfig(JNIEnv *env, jobject options, AndroidBitmapFormat colorFormat) {
     if (options != NULL) {
-        ScopedLocalRef<jobject> config(env,
-                env->CallStaticObjectMethod(
-                        fields.configClazz,
-                        fields.createConfigMethod,
-                        GraphicsJNI::colorTypeToLegacyBitmapConfig(outColorType)));
-
+        ScopedLocalRef<jobject> config(env, ABitmapConfig_getConfigFromFormat(env, colorFormat));
         env->SetObjectField(options, fields.outActualConfig, config.get());
     }
-    return outColorType;
 }
 
 static jobject android_media_MediaMetadataRetriever_getFrameAtTime(
-        JNIEnv *env, jobject thiz, jlong timeUs, jint option, jint dst_width, jint dst_height)
+        JNIEnv *env, jobject thiz, jlong timeUs, jint option,
+        jint dst_width, jint dst_height, jobject params)
 {
     ALOGV("getFrameAtTime: %lld us option: %d dst width: %d heigh: %d",
             (long long)timeUs, option, dst_width, dst_height);
@@ -393,18 +377,29 @@ static jobject android_media_MediaMetadataRetriever_getFrameAtTime(
         return NULL;
     }
 
+    AndroidBitmapFormat defaultColorFormat =
+            playback_flags::mediametadataretriever_default_rgba8888()
+            ? ANDROID_BITMAP_FORMAT_RGBA_8888
+            : ANDROID_BITMAP_FORMAT_RGB_565;
+    AndroidBitmapFormat colorFormat = getColorFormat(env, params, defaultColorFormat);
+
     // Call native method to retrieve a video frame
     VideoFrame *videoFrame = NULL;
-    sp<IMemory> frameMemory = retriever->getFrameAtTime(timeUs, option);
+    sp<IMemory> frameMemory = retriever->getFrameAtTime(timeUs, option, colorFormat);
+    // TODO: Using unsecurePointer() has some associated security pitfalls
+    //       (see declaration for details).
+    //       Either document why it is safe in this case or address the
+    //       issue (e.g. by copying).
     if (frameMemory != 0) {  // cast the shared structure to a VideoFrame object
-        videoFrame = static_cast<VideoFrame *>(frameMemory->pointer());
+        videoFrame = static_cast<VideoFrame *>(frameMemory->unsecurePointer());
     }
     if (videoFrame == NULL) {
         ALOGE("getFrameAtTime: videoFrame is a NULL pointer");
         return NULL;
     }
 
-    return getBitmapFromVideoFrame(env, videoFrame, dst_width, dst_height, kRGB_565_SkColorType);
+    setOutConfig(env, params, colorFormat);
+    return getBitmapFromVideoFrame(env, videoFrame, dst_width, dst_height, colorFormat);
 }
 
 static jobject android_media_MediaMetadataRetriever_getImageAtIndex(
@@ -417,22 +412,25 @@ static jobject android_media_MediaMetadataRetriever_getImageAtIndex(
         return NULL;
     }
 
-    int colorFormat = getColorFormat(env, params);
+    AndroidBitmapFormat colorFormat = getColorFormat(env, params);
 
     // Call native method to retrieve an image
     VideoFrame *videoFrame = NULL;
     sp<IMemory> frameMemory = retriever->getImageAtIndex(index, colorFormat);
     if (frameMemory != 0) {  // cast the shared structure to a VideoFrame object
-        videoFrame = static_cast<VideoFrame *>(frameMemory->pointer());
+        // TODO: Using unsecurePointer() has some associated security pitfalls
+        //       (see declaration for details).
+        //       Either document why it is safe in this case or address the
+        //       issue (e.g. by copying).
+        videoFrame = static_cast<VideoFrame *>(frameMemory->unsecurePointer());
     }
     if (videoFrame == NULL) {
         ALOGE("getImageAtIndex: videoFrame is a NULL pointer");
         return NULL;
     }
 
-    SkColorType outColorType = setOutColorType(env, colorFormat, params);
-
-    return getBitmapFromVideoFrame(env, videoFrame, -1, -1, outColorType);
+    setOutConfig(env, params, colorFormat);
+    return getBitmapFromVideoFrame(env, videoFrame, -1, -1, colorFormat);
 }
 
 static jobject android_media_MediaMetadataRetriever_getThumbnailImageAtIndex(
@@ -446,7 +444,7 @@ static jobject android_media_MediaMetadataRetriever_getThumbnailImageAtIndex(
         return NULL;
     }
 
-    int colorFormat = getColorFormat(env, params);
+    AndroidBitmapFormat colorFormat = getColorFormat(env, params);
     jint dst_width = -1, dst_height = -1;
 
     // Call native method to retrieve an image
@@ -454,7 +452,11 @@ static jobject android_media_MediaMetadataRetriever_getThumbnailImageAtIndex(
     sp<IMemory> frameMemory = retriever->getImageAtIndex(
             index, colorFormat, true /*metaOnly*/, true /*thumbnail*/);
     if (frameMemory != 0) {
-        videoFrame = static_cast<VideoFrame *>(frameMemory->pointer());
+        // TODO: Using unsecurePointer() has some associated security pitfalls
+        //       (see declaration for details).
+        //       Either document why it is safe in this case or address the
+        //       issue (e.g. by copying).
+        videoFrame = static_cast<VideoFrame *>(frameMemory->unsecurePointer());
         int32_t thumbWidth = videoFrame->mWidth;
         int32_t thumbHeight = videoFrame->mHeight;
         videoFrame = NULL;
@@ -467,7 +469,13 @@ static jobject android_media_MediaMetadataRetriever_getThumbnailImageAtIndex(
                 || thumbPixels * 6 >= maxPixels) {
             frameMemory = retriever->getImageAtIndex(
                     index, colorFormat, false /*metaOnly*/, true /*thumbnail*/);
-            videoFrame = static_cast<VideoFrame *>(frameMemory->pointer());
+            if (frameMemory != 0) {
+                // TODO: Using unsecurePointer() has some associated security pitfalls
+                //       (see declaration for details).
+                //       Either document why it is safe in this case or address the
+                //       issue (e.g. by copying).
+                videoFrame = static_cast<VideoFrame *>(frameMemory->unsecurePointer());
+            }
 
             if (thumbPixels > maxPixels) {
                 int downscale = ceil(sqrt(thumbPixels / (float)maxPixels));
@@ -485,9 +493,8 @@ static jobject android_media_MediaMetadataRetriever_getThumbnailImageAtIndex(
     // thumbnails extracted by BitmapFactory APIs.
     videoFrame->mRotationAngle = 0;
 
-    SkColorType outColorType = setOutColorType(env, colorFormat, params);
-
-    return getBitmapFromVideoFrame(env, videoFrame, dst_width, dst_height, outColorType);
+    setOutConfig(env, params, colorFormat);
+    return getBitmapFromVideoFrame(env, videoFrame, dst_width, dst_height, colorFormat);
 }
 
 static jobject android_media_MediaMetadataRetriever_getFrameAtIndex(
@@ -501,15 +508,7 @@ static jobject android_media_MediaMetadataRetriever_getFrameAtIndex(
         return NULL;
     }
 
-    int colorFormat = getColorFormat(env, params);
 
-    std::vector<sp<IMemory> > frames;
-    status_t err = retriever->getFrameAtIndex(&frames, frameIndex, numFrames, colorFormat);
-    if (err != OK || frames.size() == 0) {
-        jniThrowException(env,
-                "java/lang/IllegalStateException", "No frames from retriever");
-        return NULL;
-    }
     jobject arrayList = env->NewObject(fields.arrayListClazz, fields.arrayListInit);
     if (arrayList == NULL) {
         jniThrowException(env,
@@ -517,18 +516,33 @@ static jobject android_media_MediaMetadataRetriever_getFrameAtIndex(
         return NULL;
     }
 
-    SkColorType outColorType = setOutColorType(env, colorFormat, params);
-
-    for (size_t i = 0; i < frames.size(); i++) {
-        if (frames[i] == NULL || frames[i]->pointer() == NULL) {
+    AndroidBitmapFormat colorFormat = getColorFormat(env, params);
+    setOutConfig(env, params, colorFormat);
+    size_t i = 0;
+    for (; i < numFrames; i++) {
+        sp<IMemory> frame = retriever->getFrameAtIndex(frameIndex + i, colorFormat);
+        if (frame == NULL || frame->unsecurePointer() == NULL) {
             ALOGE("video frame at index %zu is a NULL pointer", frameIndex + i);
-            continue;
+            break;
         }
-        VideoFrame *videoFrame = static_cast<VideoFrame *>(frames[i]->pointer());
-        jobject bitmapObj = getBitmapFromVideoFrame(env, videoFrame, -1, -1, outColorType);
+        // TODO: Using unsecurePointer() has some associated security pitfalls
+        //       (see declaration for details).
+        //       Either document why it is safe in this case or address the
+        //       issue (e.g. by copying).
+        VideoFrame *videoFrame = static_cast<VideoFrame *>(frame->unsecurePointer());
+        jobject bitmapObj = getBitmapFromVideoFrame(env, videoFrame, -1, -1, colorFormat);
         env->CallBooleanMethod(arrayList, fields.arrayListAdd, bitmapObj);
         env->DeleteLocalRef(bitmapObj);
     }
+
+    if (i == 0) {
+        env->DeleteLocalRef(arrayList);
+
+        jniThrowException(env,
+                "java/lang/IllegalStateException", "No frames from retriever");
+        return NULL;
+    }
+
     return arrayList;
 }
 
@@ -548,7 +562,11 @@ static jbyteArray android_media_MediaMetadataRetriever_getEmbeddedPicture(
     // the method name to getEmbeddedPicture().
     sp<IMemory> albumArtMemory = retriever->extractAlbumArt();
     if (albumArtMemory != 0) {  // cast the shared structure to a MediaAlbumArt object
-        mediaAlbumArt = static_cast<MediaAlbumArt *>(albumArtMemory->pointer());
+        // TODO: Using unsecurePointer() has some associated security pitfalls
+        //       (see declaration for details).
+        //       Either document why it is safe in this case or address the
+        //       issue (e.g. by copying).
+        mediaAlbumArt = static_cast<MediaAlbumArt *>(albumArtMemory->unsecurePointer());
     }
     if (mediaAlbumArt == NULL) {
         ALOGE("getEmbeddedPicture: Call to getEmbeddedPicture failed.");
@@ -637,21 +655,6 @@ static void android_media_MediaMetadataRetriever_native_init(JNIEnv *env)
         return;
     }
 
-    clazz.reset(env->FindClass("android/graphics/Bitmap$Config"));
-    if (clazz.get() == NULL) {
-        return;
-    }
-    fields.configClazz = (jclass) env->NewGlobalRef(clazz.get());
-    if (fields.configClazz == NULL) {
-        return;
-    }
-    fields.createConfigMethod =
-            env->GetStaticMethodID(fields.configClazz, "nativeToConfig",
-                    "(I)Landroid/graphics/Bitmap$Config;");
-    if (fields.createConfigMethod == NULL) {
-        return;
-    }
-
     clazz.reset(env->FindClass("android/media/MediaMetadataRetriever$BitmapParams"));
     if (clazz.get() == NULL) {
         return;
@@ -708,11 +711,11 @@ static const JNINativeMethod nativeMethods[] = {
             (void *)android_media_MediaMetadataRetriever_setDataSourceAndHeaders
         },
 
-        {"setDataSource",   "(Ljava/io/FileDescriptor;JJ)V",
+        {"_setDataSource",   "(Ljava/io/FileDescriptor;JJ)V",
                 (void *)android_media_MediaMetadataRetriever_setDataSourceFD},
         {"_setDataSource",   "(Landroid/media/MediaDataSource;)V",
                 (void *)android_media_MediaMetadataRetriever_setDataSourceCallback},
-        {"_getFrameAtTime", "(JIII)Landroid/graphics/Bitmap;",
+        {"_getFrameAtTime", "(JIIILandroid/media/MediaMetadataRetriever$BitmapParams;)Landroid/graphics/Bitmap;",
                 (void *)android_media_MediaMetadataRetriever_getFrameAtTime},
         {
             "_getImageAtIndex",
@@ -732,7 +735,7 @@ static const JNINativeMethod nativeMethods[] = {
             (void *)android_media_MediaMetadataRetriever_getFrameAtIndex
         },
 
-        {"extractMetadata", "(I)Ljava/lang/String;",
+        {"nativeExtractMetadata", "(I)Ljava/lang/String;",
                 (void *)android_media_MediaMetadataRetriever_extractMetadata},
         {"getEmbeddedPicture", "(I)[B",
                 (void *)android_media_MediaMetadataRetriever_getEmbeddedPicture},

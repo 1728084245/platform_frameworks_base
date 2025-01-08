@@ -18,27 +18,17 @@
 // This source file is automatically generated
 
 #pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #pragma GCC diagnostic ignored "-Wunused-function"
 
 #include <GLES3/gl3.h>
 #include <GLES3/gl3ext.h>
 
 #include <jni.h>
-#include <nativehelper/JNIHelp.h>
+#include <nativehelper/JNIPlatformHelp.h>
 #include <android_runtime/AndroidRuntime.h>
 #include <utils/misc.h>
 #include <assert.h>
-
-static int initialized = 0;
-
-static jclass nioAccessClass;
-static jclass bufferClass;
-static jmethodID getBasePointerID;
-static jmethodID getBaseArrayID;
-static jmethodID getBaseArrayOffsetID;
-static jfieldID positionID;
-static jfieldID limitID;
-static jfieldID elementSizeShiftID;
 
 
 /* special calls implemented in Android's GLES wrapper used to more
@@ -74,28 +64,9 @@ static void glVertexAttribIPointerBounds(GLuint indx, GLint size, GLenum type,
 #endif
 }
 
-/* Cache method IDs each time the class is loaded. */
-
 static void
 nativeClassInit(JNIEnv *_env, jclass glImplClass)
 {
-    jclass nioAccessClassLocal = _env->FindClass("java/nio/NIOAccess");
-    nioAccessClass = (jclass) _env->NewGlobalRef(nioAccessClassLocal);
-
-    jclass bufferClassLocal = _env->FindClass("java/nio/Buffer");
-    bufferClass = (jclass) _env->NewGlobalRef(bufferClassLocal);
-
-    getBasePointerID = _env->GetStaticMethodID(nioAccessClass,
-            "getBasePointer", "(Ljava/nio/Buffer;)J");
-    getBaseArrayID = _env->GetStaticMethodID(nioAccessClass,
-            "getBaseArray", "(Ljava/nio/Buffer;)Ljava/lang/Object;");
-    getBaseArrayOffsetID = _env->GetStaticMethodID(nioAccessClass,
-            "getBaseArrayOffset", "(Ljava/nio/Buffer;)I");
-
-    positionID = _env->GetFieldID(bufferClass, "position", "I");
-    limitID = _env->GetFieldID(bufferClass, "limit", "I");
-    elementSizeShiftID =
-        _env->GetFieldID(bufferClass, "_elementSizeShift", "I");
 }
 
 static void *
@@ -106,23 +77,17 @@ getPointer(JNIEnv *_env, jobject buffer, jarray *array, jint *remaining, jint *o
     jint elementSizeShift;
     jlong pointer;
 
-    position = _env->GetIntField(buffer, positionID);
-    limit = _env->GetIntField(buffer, limitID);
-    elementSizeShift = _env->GetIntField(buffer, elementSizeShiftID);
+    pointer = jniGetNioBufferFields(_env, buffer, &position, &limit, &elementSizeShift);
     *remaining = (limit - position) << elementSizeShift;
-    pointer = _env->CallStaticLongMethod(nioAccessClass,
-            getBasePointerID, buffer);
     if (pointer != 0L) {
-        *array = NULL;
+        *array = nullptr;
+        pointer += position << elementSizeShift;
         return reinterpret_cast<void*>(pointer);
     }
 
-    *array = (jarray) _env->CallStaticObjectMethod(nioAccessClass,
-            getBaseArrayID, buffer);
-    *offset = _env->CallStaticIntMethod(nioAccessClass,
-            getBaseArrayOffsetID, buffer);
-
-    return NULL;
+    *array = jniGetNioBufferBaseArray(_env, buffer);
+    *offset = jniGetNioBufferBaseArrayOffset(_env, buffer);
+    return nullptr;
 }
 
 class ByteArrayGetter {
@@ -244,16 +209,18 @@ releasePointer(JNIEnv *_env, jarray array, void *data, jboolean commit)
 
 static void *
 getDirectBufferPointer(JNIEnv *_env, jobject buffer) {
-    char* buf = (char*) _env->GetDirectBufferAddress(buffer);
-    if (buf) {
-        jint position = _env->GetIntField(buffer, positionID);
-        jint elementSizeShift = _env->GetIntField(buffer, elementSizeShiftID);
-        buf += position << elementSizeShift;
-    } else {
+    jint position;
+    jint limit;
+    jint elementSizeShift;
+    jlong pointer;
+    pointer = jniGetNioBufferFields(_env, buffer, &position, &limit, &elementSizeShift);
+    if (pointer == 0) {
         jniThrowException(_env, "java/lang/IllegalArgumentException",
                           "Must use a native order direct Buffer");
+        return nullptr;
     }
-    return (void*) buf;
+    pointer += position << elementSizeShift;
+    return reinterpret_cast<void*>(pointer);
 }
 
 // --------------------------------------------------------------------------
@@ -497,7 +464,7 @@ android_glDrawRangeElements__IIIIILjava_nio_Buffer_2
 
 exit:
     if (_array) {
-        releasePointer(_env, _array, indices, JNI_FALSE);
+        releasePointer(_env, _array, (void *)((char *)indices - _bufferOffset), JNI_FALSE);
     }
     if (_exception) {
         jniThrowException(_env, _exceptionType, _exceptionMessage);
@@ -550,7 +517,7 @@ android_glTexImage3D__IIIIIIIIILjava_nio_Buffer_2
         (GLvoid *)pixels
     );
     if (_array) {
-        releasePointer(_env, _array, pixels, JNI_FALSE);
+        releasePointer(_env, _array, (void *)((char *)pixels - _bufferOffset), JNI_FALSE);
     }
     if (_exception) {
         jniThrowException(_env, _exceptionType, _exceptionMessage);
@@ -614,7 +581,7 @@ android_glTexSubImage3D__IIIIIIIIIILjava_nio_Buffer_2
 
 exit:
     if (_array) {
-        releasePointer(_env, _array, pixels, JNI_FALSE);
+        releasePointer(_env, _array, (void *)((char *)pixels - _bufferOffset), JNI_FALSE);
     }
     if (_exception) {
         jniThrowException(_env, _exceptionType, _exceptionMessage);
@@ -694,7 +661,7 @@ android_glCompressedTexImage3D__IIIIIIIILjava_nio_Buffer_2
 
 exit:
     if (_array) {
-        releasePointer(_env, _array, data, JNI_FALSE);
+        releasePointer(_env, _array, (void *)((char *)data - _bufferOffset), JNI_FALSE);
     }
     if (_exception) {
         jniThrowException(_env, _exceptionType, _exceptionMessage);
@@ -757,7 +724,7 @@ android_glCompressedTexSubImage3D__IIIIIIIIIILjava_nio_Buffer_2
 
 exit:
     if (_array) {
-        releasePointer(_env, _array, data, JNI_FALSE);
+        releasePointer(_env, _array, (void *)((char *)data - _bufferOffset), JNI_FALSE);
     }
     if (_exception) {
         jniThrowException(_env, _exceptionType, _exceptionMessage);
@@ -3012,6 +2979,7 @@ exit:
 
     if (_exception) {
         jniThrowException(_env, _exceptionType, _exceptionMessage);
+        return (jint)0;
     }
     return (jint)_returnValue;
 }
@@ -3981,6 +3949,7 @@ exit:
 
     if (_exception) {
         jniThrowException(_env, _exceptionType, _exceptionMessage);
+        return (jint)0;
     }
     return (jint)_returnValue;
 }
@@ -5477,7 +5446,8 @@ android_glGetProgramBinary__II_3II_3IILjava_nio_Buffer_2
 
 exit:
     if (_array) {
-        releasePointer(_env, _array, binary, _exception ? JNI_FALSE : JNI_TRUE);
+        releasePointer(_env, _array, (void *)((char *)binary - _bufferOffset),
+                       _exception ? JNI_FALSE : JNI_TRUE);
     }
     if (binaryFormat_base) {
         _env->ReleaseIntArrayElements(binaryFormat_ref, (jint*)binaryFormat_base,
@@ -5551,7 +5521,8 @@ android_glGetProgramBinary__IILjava_nio_IntBuffer_2Ljava_nio_IntBuffer_2Ljava_ni
 
 exit:
     if (_binaryArray) {
-        releasePointer(_env, _binaryArray, binary, _exception ? JNI_FALSE : JNI_TRUE);
+        releasePointer(_env, _binaryArray, (void *)((char *)binary - _binaryBufferOffset),
+                       _exception ? JNI_FALSE : JNI_TRUE);
     }
     if (_binaryFormatArray) {
         _env->ReleaseIntArrayElements(_binaryFormatArray, (jint*)binaryFormat, _exception ? JNI_ABORT : 0);
@@ -5596,7 +5567,7 @@ android_glProgramBinary__IILjava_nio_Buffer_2I
 
 exit:
     if (_array) {
-        releasePointer(_env, _array, binary, JNI_FALSE);
+        releasePointer(_env, _array, (void *)((char *)binary - _bufferOffset), JNI_FALSE);
     }
     if (_exception) {
         jniThrowException(_env, _exceptionType, _exceptionMessage);

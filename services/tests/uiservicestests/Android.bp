@@ -2,6 +2,15 @@
 // Build FrameworksUiServicesTests package
 //########################################################################
 
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_base_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_base_license"],
+}
+
 android_test {
     name: "FrameworksUiServicesTests",
 
@@ -11,27 +20,53 @@ android_test {
     ],
 
     static_libs: [
+        "frameworks-base-testutils",
         "services.accessibility",
         "services.core",
         "services.devicepolicy",
         "services.net",
         "services.usage",
+        "service-permission.stubs.system_server",
         "guava",
-        "androidx.test.rules", "hamcrest-library",
+        "androidx.test.rules",
+        "hamcrest-library",
         "mockito-target-inline-minus-junit4",
+        "platform-compat-test-rules",
         "platform-test-annotations",
+        "platformprotosnano",
+        "statsdprotolite",
+        "StatsdTestUtils",
+        "hamcrest-library",
+        "servicestests-utils",
         "testables",
+        "truth",
+        "TestParameterInjector",
+        // TODO: remove once Android migrates to JUnit 4.12,
+        // which provides assertThrows
+        "testng",
+        "flag-junit",
+        "notification_flags_lib",
+        "platform-test-rules",
+        "SettingsLib",
+        "libprotobuf-java-lite",
+        "platformprotoslite",
+        "platform-parametric-runner-lib",
     ],
 
     libs: [
-        "android.test.runner",
-        "android.test.base",
+        "android.test.runner.stubs.system",
+        "android.test.base.stubs.system",
+        "android.test.mock.stubs.system",
     ],
 
     dxflags: ["--multi-dex"],
 
     platform_apis: true,
-    test_suites: ["device-tests"],
+
+    test_suites: [
+        "device-tests",
+        "automotive-tests",
+    ],
 
     certificate: "platform",
 
@@ -41,10 +76,8 @@ android_test {
     jni_libs: [
         "libdexmakerjvmtiagent",
         "libmultiplejvmtiagentsinterferenceagent",
-        "libbacktrace",
         "libbase",
         "libbinder",
-        "libbinderthreadstate",
         "libc++",
         "libcutils",
         "liblog",
@@ -53,6 +86,19 @@ android_test {
         "libui",
         "libunwindstack",
         "libutils",
-        "netd_aidl_interface-V2-cpp",
+        "netd_aidl_interface-V5-cpp",
     ],
+
+    // Required for TestParameterInjector
+    javacflags: ["-parameters"],
+}
+
+test_module_config {
+    name: "FrameworksUiServicesTests_notification",
+    base: "FrameworksUiServicesTests",
+    test_suites: [
+        "automotive-tests",
+        "device-tests",
+    ],
+    exclude_annotations: ["androidx.test.filters.LargeTest"],
 }

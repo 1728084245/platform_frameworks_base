@@ -144,7 +144,7 @@ public class AccessibilityClickableSpan extends ClickableSpan
                 R.id.accessibilityActionClickOnClickableSpan, arguments);
     }
 
-    public static final Parcelable.Creator<AccessibilityClickableSpan> CREATOR =
+    public static final @android.annotation.NonNull Parcelable.Creator<AccessibilityClickableSpan> CREATOR =
             new Parcelable.Creator<AccessibilityClickableSpan>() {
                 @Override
                 public AccessibilityClickableSpan createFromParcel(Parcel parcel) {
@@ -156,4 +156,12 @@ public class AccessibilityClickableSpan extends ClickableSpan
                     return new AccessibilityClickableSpan[size];
                 }
             };
+
+    /**
+     * @return the ID of the original clickable span that this is applied to.
+     * @hide
+     */
+    public int getOriginalClickableSpanId() {
+        return mOriginalClickableSpanId;
+    }
 }

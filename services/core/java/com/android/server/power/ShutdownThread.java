@@ -17,7 +17,9 @@
 
 package com.android.server.power;
 
+import android.app.ActivityManagerInternal;
 import android.app.AlertDialog;
+import android.app.BroadcastOptions;
 import android.app.Dialog;
 import android.app.IActivityManager;
 import android.app.ProgressDialog;
@@ -25,9 +27,11 @@ import android.app.admin.SecurityLog;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.DialogInterface;
+import android.content.IIntentReceiver;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.media.AudioAttributes;
+import android.content.pm.PackageManagerInternal;
+import android.os.Bundle;
 import android.os.FileUtils;
 import android.os.Handler;
 import android.os.PowerManager;
@@ -40,33 +44,42 @@ import android.os.SystemVibrator;
 import android.os.Trace;
 import android.os.UserHandle;
 import android.os.UserManager;
+import android.os.VibrationAttributes;
+import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.os.vibrator.persistence.VibrationXmlParser;
+import android.provider.Settings;
+import android.telephony.TelephonyManager;
+import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.Log;
+import android.util.Slog;
 import android.util.TimingsTraceLog;
+import android.view.SurfaceControl;
 import android.view.WindowManager;
 
-import com.android.internal.telephony.ITelephony;
-import com.android.server.RescueParty;
+import com.android.internal.annotations.VisibleForTesting;
+import com.android.server.crashrecovery.CrashRecoveryHelper;
 import com.android.server.LocalServices;
-import com.android.server.pm.PackageManagerService;
 import com.android.server.statusbar.StatusBarManagerInternal;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 public final class ShutdownThread extends Thread {
     // constants
+    private static final boolean DEBUG = false;
     private static final String TAG = "ShutdownThread";
     private static final int ACTION_DONE_POLL_WAIT_MS = 500;
     private static final int RADIOS_STATE_POLL_SLEEP_MS = 100;
     // maximum time we wait for the shutdown broadcast before going on.
-    private static final int MAX_BROADCAST_TIME = 10*1000;
-    private static final int MAX_SHUTDOWN_WAIT_TIME = 20*1000;
-    private static final int MAX_RADIO_WAIT_TIME = 12*1000;
-    private static final int MAX_UNCRYPT_WAIT_TIME = 15*60*1000;
+    private static final int MAX_BROADCAST_TIME = 10 * 1000;
+    private static final int MAX_CHECK_POINTS_DUMP_WAIT_TIME = 10 * 1000;
+    private static final int MAX_RADIO_WAIT_TIME = 12 * 1000;
+    private static final int MAX_UNCRYPT_WAIT_TIME = 15 * 60 * 1000;
     // constants for progress bar. the values are roughly estimated based on timeout.
     private static final int BROADCAST_STOP_PERCENT = 2;
     private static final int ACTIVITY_MANAGER_STOP_PERCENT = 4;
@@ -75,7 +88,7 @@ public final class ShutdownThread extends Thread {
     private static final int MOUNT_SERVICE_STOP_PERCENT = 20;
 
     // length of vibration before shutting down
-    private static final int SHUTDOWN_VIBRATE_MS = 500;
+    @VisibleForTesting static final int DEFAULT_SHUTDOWN_VIBRATE_MS = 500;
 
     // state tracking
     private static final Object sIsStartedGuard = new Object();
@@ -96,16 +109,14 @@ public final class ShutdownThread extends Thread {
     // static instance of this thread
     private static final ShutdownThread sInstance = new ShutdownThread();
 
-    private static final AudioAttributes VIBRATION_ATTRIBUTES = new AudioAttributes.Builder()
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
-            .build();
-
     // Metrics that will be reported to tron after reboot
     private static final ArrayMap<String, Long> TRON_METRICS = new ArrayMap<>();
 
-    // File to use for save metrics
+    // File to use for saving shutdown metrics
     private static final String METRICS_FILE_BASENAME = "/data/system/shutdown-metrics";
+    // File to use for saving shutdown check points
+    private static final String CHECK_POINTS_FILE_BASENAME =
+            "/data/system/shutdown-checkpoints/checkpoints";
 
     // Metrics names to be persisted in shutdown-metrics file
     private static String METRIC_SYSTEM_SERVER = "shutdown_system_server";
@@ -115,6 +126,8 @@ public final class ShutdownThread extends Thread {
     private static String METRIC_RADIOS = "shutdown_radios";
     private static String METRIC_RADIO = "shutdown_radio";
     private static String METRIC_SHUTDOWN_TIME_START = "begin_shutdown";
+
+    private final Injector mInjector;
 
     private final Object mActionDoneSync = new Object();
     private boolean mActionDone;
@@ -128,6 +141,12 @@ public final class ShutdownThread extends Thread {
     private ProgressDialog mProgressDialog;
 
     private ShutdownThread() {
+        this(new Injector());
+    }
+
+    @VisibleForTesting
+    ShutdownThread(Injector injector) {
+        mInjector = injector;
     }
 
     /**
@@ -156,10 +175,16 @@ public final class ShutdownThread extends Thread {
         // any additional calls are just returned
         synchronized (sIsStartedGuard) {
             if (sIsStarted) {
-                Log.d(TAG, "Request to shutdown already running, returning.");
+                if (DEBUG) {
+                    Log.d(TAG, "Request to shutdown already running, returning.");
+                }
                 return;
             }
         }
+
+        // Add checkpoint for this shutdown attempt. The user might still cancel the dialog, but
+        // this point preserves the system trace of the trigger point of the ShutdownThread.
+        ShutdownCheckPoints.recordCheckPoint(/* reason= */ null);
 
         final int longPressBehavior = context.getResources().getInteger(
                         com.android.internal.R.integer.config_longPressOnPowerBehavior);
@@ -169,7 +194,9 @@ public final class ShutdownThread extends Thread {
                         ? com.android.internal.R.string.shutdown_confirm_question
                         : com.android.internal.R.string.shutdown_confirm);
 
-        Log.d(TAG, "Notifying thread to start shutdown longPressBehavior=" + longPressBehavior);
+        if (DEBUG) {
+            Log.d(TAG, "Notifying thread to start shutdown longPressBehavior=" + longPressBehavior);
+        }
 
         if (confirm) {
             final CloseDialogReceiver closer = new CloseDialogReceiver(context);
@@ -205,7 +232,7 @@ public final class ShutdownThread extends Thread {
         CloseDialogReceiver(Context context) {
             mContext = context;
             IntentFilter filter = new IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS);
-            context.registerReceiver(this, filter);
+            context.registerReceiver(this, filter, Context.RECEIVER_EXPORTED);
         }
 
         @Override
@@ -294,6 +321,11 @@ public final class ShutdownThread extends Thread {
                 pd.setMax(100);
                 pd.setProgress(0);
                 pd.setIndeterminate(false);
+                boolean showPercent = context.getResources().getBoolean(
+                    com.android.internal.R.bool.config_showPercentageTextDuringRebootToUpdate);
+                if (!showPercent) {
+                    pd.setProgressPercentFormat(null);
+                }
                 pd.setProgressNumberFormat(null);
                 pd.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
                 pd.setMessage(context.getText(
@@ -307,13 +339,15 @@ public final class ShutdownThread extends Thread {
                             com.android.internal.R.string.reboot_to_update_reboot));
             }
         } else if (mReason != null && mReason.equals(PowerManager.REBOOT_RECOVERY)) {
-            if (RescueParty.isAttemptingFactoryReset()) {
+            if (CrashRecoveryHelper.isRecoveryTriggeredReboot()) {
                 // We're not actually doing a factory reset yet; we're rebooting
                 // to ask the user if they'd like to reset, so give them a less
                 // scary dialog message.
                 pd.setTitle(context.getText(com.android.internal.R.string.power_off));
                 pd.setMessage(context.getText(com.android.internal.R.string.shutdown_progress));
                 pd.setIndeterminate(true);
+            } else if (showSysuiReboot()) {
+                return null;
             } else {
                 // Factory reset path. Set the dialog message accordingly.
                 pd.setTitle(context.getText(com.android.internal.R.string.reboot_to_reset_title));
@@ -337,26 +371,34 @@ public final class ShutdownThread extends Thread {
     }
 
     private static boolean showSysuiReboot() {
-        Log.d(TAG, "Attempting to use SysUI shutdown UI");
+        if (DEBUG) {
+            Log.d(TAG, "Attempting to use SysUI shutdown UI");
+        }
         try {
             StatusBarManagerInternal service = LocalServices.getService(
                     StatusBarManagerInternal.class);
             if (service.showShutdownUi(mReboot, mReason)) {
                 // Sysui will handle shutdown UI.
-                Log.d(TAG, "SysUI handling shutdown UI");
+                if (DEBUG) {
+                    Log.d(TAG, "SysUI handling shutdown UI");
+                }
                 return true;
             }
         } catch (Exception e) {
             // If anything went wrong, ignore it and use fallback ui
         }
-        Log.d(TAG, "SysUI is unavailable");
+        if (DEBUG) {
+            Log.d(TAG, "SysUI is unavailable");
+        }
         return false;
     }
 
     private static void beginShutdownSequence(Context context) {
         synchronized (sIsStartedGuard) {
             if (sIsStarted) {
-                Log.d(TAG, "Shutdown sequence already running, returning.");
+                if (DEBUG) {
+                    Log.d(TAG, "Shutdown sequence already running, returning.");
+                }
                 return;
             }
             sIsStarted = true;
@@ -419,12 +461,14 @@ public final class ShutdownThread extends Thread {
         metricShutdownStart();
         metricStarted(METRIC_SYSTEM_SERVER);
 
-        BroadcastReceiver br = new BroadcastReceiver() {
-            @Override public void onReceive(Context context, Intent intent) {
-                // We don't allow apps to cancel this, so ignore the result.
-                actionDone();
-            }
-        };
+        // Notify SurfaceFlinger that the device is shutting down.
+        // Transaction traces should be captured at this stage.
+        SurfaceControl.notifyShutdown();
+
+        // Start dumping check points for this shutdown in a separate thread.
+        Thread dumpCheckPointsThread = ShutdownCheckPoints.newDumpThread(
+                new File(CHECK_POINTS_FILE_BASENAME));
+        dumpCheckPointsThread.start();
 
         /*
          * Write a system property in case the system_server reboots before we
@@ -444,6 +488,15 @@ public final class ShutdownThread extends Thread {
             SystemProperties.set(REBOOT_SAFEMODE_PROPERTY, "1");
         }
 
+        shutdownTimingLog.traceBegin("DumpPreRebootInfo");
+        try {
+            Slog.i(TAG, "Logging pre-reboot information...");
+            PreRebootLogger.log(mContext);
+        } catch (Exception e) {
+            Slog.e(TAG, "Failed to log pre-reboot information", e);
+        }
+        shutdownTimingLog.traceEnd(); // DumpPreRebootInfo
+
         metricStarted(METRIC_SEND_BROADCAST);
         shutdownTimingLog.traceBegin("SendShutdownBroadcast");
         Log.i(TAG, "Sending shutdown broadcast...");
@@ -452,8 +505,19 @@ public final class ShutdownThread extends Thread {
         mActionDone = false;
         Intent intent = new Intent(Intent.ACTION_SHUTDOWN);
         intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND | Intent.FLAG_RECEIVER_REGISTERED_ONLY);
-        mContext.sendOrderedBroadcastAsUser(intent,
-                UserHandle.ALL, null, br, mHandler, 0, null, null);
+        final Bundle opts = BroadcastOptions.makeBasic()
+                .setDeferralPolicy(BroadcastOptions.DEFERRAL_POLICY_UNTIL_ACTIVE)
+                .toBundle();
+        final ActivityManagerInternal activityManagerInternal = LocalServices.getService(
+                ActivityManagerInternal.class);
+        activityManagerInternal.broadcastIntentWithCallback(intent,
+                new IIntentReceiver.Stub() {
+                    @Override
+                    public void performReceive(Intent intent, int resultCode, String data,
+                            Bundle extras, boolean ordered, boolean sticky, int sendingUser) {
+                        mHandler.post(ShutdownThread.this::actionDone);
+                    }
+                }, null, UserHandle.USER_ALL, null, null, opts);
 
         final long endTime = SystemClock.elapsedRealtime() + MAX_BROADCAST_TIME;
         synchronized (mActionDoneSync) {
@@ -501,8 +565,7 @@ public final class ShutdownThread extends Thread {
         shutdownTimingLog.traceBegin("ShutdownPackageManager");
         metricStarted(METRIC_PM);
 
-        final PackageManagerService pm = (PackageManagerService)
-            ServiceManager.getService("package");
+        final PackageManagerInternal pm = LocalServices.getService(PackageManagerInternal.class);
         if (pm != null) {
             pm.shutdown();
         }
@@ -529,6 +592,14 @@ public final class ShutdownThread extends Thread {
             // done yet, trigger it now.
             uncrypt();
         }
+
+        // Wait for the check points dump thread to finish, or kill it if not finished in time.
+        shutdownTimingLog.traceBegin("ShutdownCheckPointsDumpWait");
+        try {
+            dumpCheckPointsThread.join(MAX_CHECK_POINTS_DUMP_WAIT_TIME);
+        } catch (InterruptedException ex) {
+        }
+        shutdownTimingLog.traceEnd(); // ShutdownCheckPointsDumpWait
 
         shutdownTimingLog.traceEnd(); // SystemServerShutdown
         metricEnded(METRIC_SYSTEM_SERVER);
@@ -584,19 +655,15 @@ public final class ShutdownThread extends Thread {
                 TimingsTraceLog shutdownTimingsTraceLog = newTimingsLog();
                 boolean radioOff;
 
-                final ITelephony phone =
-                        ITelephony.Stub.asInterface(ServiceManager.checkService("phone"));
+                TelephonyManager telephonyManager = mContext.getSystemService(
+                        TelephonyManager.class);
 
-                try {
-                    radioOff = phone == null || !phone.needMobileRadioShutdown();
-                    if (!radioOff) {
-                        Log.w(TAG, "Turning off cellular radios...");
-                        metricStarted(METRIC_RADIO);
-                        phone.shutdownMobileRadios();
-                    }
-                } catch (RemoteException ex) {
-                    Log.e(TAG, "RemoteException during radio shutdown", ex);
-                    radioOff = true;
+                radioOff = telephonyManager == null
+                        || !telephonyManager.isAnyRadioPoweredOn();
+                if (!radioOff) {
+                    Log.w(TAG, "Turning off cellular radios...");
+                    metricStarted(METRIC_RADIO);
+                    telephonyManager.shutdownAllRadios();
                 }
 
                 Log.i(TAG, "Waiting for Radio...");
@@ -611,12 +678,7 @@ public final class ShutdownThread extends Thread {
                     }
 
                     if (!radioOff) {
-                        try {
-                            radioOff = !phone.needMobileRadioShutdown();
-                        } catch (RemoteException ex) {
-                            Log.e(TAG, "RemoteException during radio shutdown", ex);
-                            radioOff = true;
-                        }
+                        radioOff = !telephonyManager.isAnyRadioPoweredOn();
                         if (radioOff) {
                             Log.i(TAG, "Radio turned off.");
                             metricEnded(METRIC_RADIO);
@@ -660,25 +722,49 @@ public final class ShutdownThread extends Thread {
             PowerManagerService.lowLevelReboot(reason);
             Log.e(TAG, "Reboot failed, will attempt shutdown instead");
             reason = null;
-        } else if (SHUTDOWN_VIBRATE_MS > 0 && context != null) {
+        } else if (context != null) {
             // vibrate before shutting down
-            Vibrator vibrator = new SystemVibrator(context);
             try {
-                vibrator.vibrate(SHUTDOWN_VIBRATE_MS, VIBRATION_ATTRIBUTES);
+                sInstance.playShutdownVibration(context);
             } catch (Exception e) {
                 // Failure to vibrate shouldn't interrupt shutdown.  Just log it.
                 Log.w(TAG, "Failed to vibrate during shutdown.", e);
             }
 
-            // vibrator is asynchronous so we need to wait to avoid shutting down too soon.
-            try {
-                Thread.sleep(SHUTDOWN_VIBRATE_MS);
-            } catch (InterruptedException unused) {
-            }
         }
         // Shutdown power
         Log.i(TAG, "Performing low-level shutdown...");
         PowerManagerService.lowLevelShutdown(reason);
+    }
+
+    /**
+     * Plays a vibration for shutdown. Along with playing a shutdown vibration, this method also
+     * sleeps the current Thread for some time, to allow the vibration to finish before the device
+     * shuts down.
+     */
+    @VisibleForTesting // For testing vibrations without shutting down device
+    void playShutdownVibration(Context context) {
+        if (mInjector.isShutdownVibrationDisabled(context)) {
+            Log.i(TAG, "Vibration disabled in config");
+            return;
+        }
+
+        Vibrator vibrator = mInjector.getVibrator(context);
+        if (!vibrator.hasVibrator()) {
+            return;
+        }
+
+        VibrationEffect vibrationEffect = getValidShutdownVibration(context, vibrator);
+        vibrator.vibrate(
+                vibrationEffect,
+                VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH));
+
+        // vibrator is asynchronous so we have to wait to avoid shutting down too soon.
+        long vibrationDuration = vibrationEffect.getDuration();
+        // A negative vibration duration may indicate a vibration effect whose duration is not
+        // known by the system (e.g. pre-baked effects). In that case, use the default shutdown
+        // vibration duration.
+        mInjector.sleep(vibrationDuration < 0 ? DEFAULT_SHUTDOWN_VIBRATE_MS : vibrationDuration);
     }
 
     private static void saveMetrics(boolean reboot, String reason) {
@@ -766,6 +852,88 @@ public final class ShutdownThread extends Thread {
             } catch (IOException e) {
                 Log.e(TAG, "Failed to write timeout message to uncrypt status", e);
             }
+        }
+    }
+
+    /**
+     * Provides a {@link VibrationEffect} to be used for shutdown.
+     *
+     * <p>The vibration to be played is derived from the shutdown vibration file (which the device
+     * should specify at `com.android.internal.R.string.config_defaultShutdownVibrationFile`). A
+     * fallback vibration maybe used in one of these conditions:
+     *      <ul>
+     *          <li>A vibration file has not been specified, or if the specified file does not exist
+     *          <li>If the content of the file does not represent a valid serialization of a
+     *              {@link VibrationEffect}
+     *          <li>If the {@link VibrationEffect} specified in the file is not suitable for
+     *              a shutdown vibration (such as indefinite vibrations)
+     *      </ul>
+     */
+    private VibrationEffect getValidShutdownVibration(Context context, Vibrator vibrator) {
+        VibrationEffect parsedEffect = parseVibrationEffectFromFile(
+                mInjector.getDefaultShutdownVibrationEffectFilePath(context),
+                vibrator);
+
+        if (parsedEffect == null) {
+            return createDefaultVibrationEffect();
+        }
+
+        long parsedEffectDuration = parsedEffect.getDuration();
+        if (parsedEffectDuration == Long.MAX_VALUE) {
+            // This means that the effect does not have a defined end.
+            // Since we don't want to vibrate forever while trying to shutdown, we ignore this
+            // parsed effect and use the default one instead.
+            Log.w(TAG, "The parsed shutdown vibration is indefinite.");
+            return createDefaultVibrationEffect();
+        }
+
+        return parsedEffect;
+    }
+
+    private static VibrationEffect parseVibrationEffectFromFile(
+            String filePath, Vibrator vibrator) {
+        if (!TextUtils.isEmpty(filePath)) {
+            try {
+                return VibrationXmlParser.parseDocument(new FileReader(filePath)).resolve(vibrator);
+            } catch (Exception e) {
+                Log.e(TAG, "Error parsing default shutdown vibration effect.", e);
+            }
+        }
+        return null;
+    }
+
+    private static VibrationEffect createDefaultVibrationEffect() {
+        return VibrationEffect.createOneShot(
+                DEFAULT_SHUTDOWN_VIBRATE_MS, VibrationEffect.DEFAULT_AMPLITUDE);
+    }
+
+    /** Utility class to inject instances, for easy testing. */
+    @VisibleForTesting
+    static class Injector {
+        public Vibrator getVibrator(Context context) {
+            return new SystemVibrator(context);
+        }
+
+        public void sleep(long durationMs) {
+            try {
+                Thread.sleep(durationMs);
+            } catch (InterruptedException unused) {
+                // this is not critical and does not require logging.
+            }
+        }
+
+        public String getDefaultShutdownVibrationEffectFilePath(Context context) {
+            return context.getResources().getString(
+                    com.android.internal.R.string.config_defaultShutdownVibrationFile);
+        }
+
+        public boolean isShutdownVibrationDisabled(Context context) {
+            boolean disabledInConfig = context.getResources().getBoolean(
+                    com.android.internal.R.bool.config_disableShutdownVibrationInZen);
+            boolean isZenMode = Settings.Global.getInt(context.getContentResolver(),
+                    Settings.Global.ZEN_MODE, Settings.Global.ZEN_MODE_OFF)
+                    != Settings.Global.ZEN_MODE_OFF;
+            return disabledInConfig && isZenMode;
         }
     }
 }

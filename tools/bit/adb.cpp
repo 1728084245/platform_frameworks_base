@@ -73,7 +73,7 @@ string
 get_system_property(const string& name, int* err)
 {
     Command cmd("adb");
-    cmd.AddArg("shell");
+    cmd.AddArg("exec-out");
     cmd.AddArg("getprop");
     cmd.AddArg(name);
 
@@ -200,7 +200,7 @@ skip_bytes(int fd, ssize_t size, char* scratch, int scratchSize)
 
 static int
 skip_unknown_field(int fd, uint64_t tag, char* scratch, int scratchSize) {
-    bool done;
+    bool done = false;
     int err;
     uint64_t size;
     switch (tag & 0x7) {
@@ -278,7 +278,7 @@ run_instrumentation_test(const string& packageName, const string& runner, const 
         InstrumentationCallbacks* callbacks)
 {
     Command cmd("adb");
-    cmd.AddArg("shell");
+    cmd.AddArg("exec-out");
     cmd.AddArg("am");
     cmd.AddArg("instrument");
     cmd.AddArg("-w");

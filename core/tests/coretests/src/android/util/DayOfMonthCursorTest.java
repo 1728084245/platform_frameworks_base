@@ -16,29 +16,40 @@
 
 package android.util;
 
-import junit.framework.TestCase;
+import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
+
+import org.junit.Test;
+import org.junit.runner.RunWith;
 
 import java.util.Calendar;
-import android.test.suitebuilder.annotation.SmallTest;
 
 /**
  * Unit tests for {@link DayOfMonthCursor}.
  */
-public class DayOfMonthCursorTest extends TestCase {
+@RunWith(AndroidJUnit4.class)
+public class DayOfMonthCursorTest {
 
+    @Test
     @SmallTest
     public void testMonthRows() {
         DayOfMonthCursor mc = new DayOfMonthCursor(2007,
                 Calendar.SEPTEMBER, 11, Calendar.SUNDAY);
 
-        assertArraysEqual(new int[]{26, 27, 28, 29, 30, 31, 1},
+        assertArrayEquals(new int[]{26, 27, 28, 29, 30, 31, 1},
                 mc.getDigitsForRow(0));
-        assertArraysEqual(new int[]{2, 3, 4, 5, 6, 7, 8},
+        assertArrayEquals(new int[]{2, 3, 4, 5, 6, 7, 8},
                 mc.getDigitsForRow(1));
-        assertArraysEqual(new int[]{30, 1, 2, 3, 4, 5, 6},
+        assertArrayEquals(new int[]{30, 1, 2, 3, 4, 5, 6},
                 mc.getDigitsForRow(5));
     }
 
+    @Test
     @SmallTest
     public void testMoveLeft() {
         DayOfMonthCursor mc = new DayOfMonthCursor(2007,
@@ -69,6 +80,7 @@ public class DayOfMonthCursorTest extends TestCase {
         assertEquals(5, mc.getSelectedColumn());
     }
 
+    @Test
     @SmallTest
     public void testMoveRight() {
         DayOfMonthCursor mc = new DayOfMonthCursor(2007,
@@ -99,6 +111,7 @@ public class DayOfMonthCursorTest extends TestCase {
         assertEquals(1, mc.getSelectedColumn());
     }
 
+    @Test
     @SmallTest
     public void testMoveUp() {
         DayOfMonthCursor mc = new DayOfMonthCursor(2007,
@@ -123,6 +136,7 @@ public class DayOfMonthCursorTest extends TestCase {
         assertEquals(4, mc.getSelectedColumn());
     }
 
+    @Test
     @SmallTest
     public void testMoveDown() {
         DayOfMonthCursor mc = new DayOfMonthCursor(2007,
@@ -145,13 +159,5 @@ public class DayOfMonthCursorTest extends TestCase {
         assertEquals(7, mc.getSelectedDayOfMonth());
         assertEquals(1, mc.getSelectedRow());
         assertEquals(0, mc.getSelectedColumn());
-    }
-
-    private void assertArraysEqual(int[] expected, int[] actual) {
-        assertEquals("array length", expected.length, actual.length);
-        for (int i = 0; i < expected.length; i++) {
-            assertEquals("index " + i,
-                    expected[i], actual[i]);
-        }
     }
 }

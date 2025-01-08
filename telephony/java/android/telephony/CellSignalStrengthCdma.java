@@ -20,7 +20,8 @@ import android.annotation.IntRange;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.PersistableBundle;
-import android.telephony.Rlog;
+
+import com.android.telephony.Rlog;
 
 import java.util.Objects;
 
@@ -74,13 +75,6 @@ public final class CellSignalStrengthCdma extends CellSignalStrength implements 
         mEvdoSnr = inRangeOrUnavailable(evdoSnr, 0, 8);
 
         updateLevel(null, null);
-    }
-
-    /** @hide */
-    public CellSignalStrengthCdma(android.hardware.radio.V1_0.CdmaSignalStrength cdma,
-            android.hardware.radio.V1_0.EvdoSignalStrength evdo) {
-        // Convert from HAL values as part of construction.
-        this(-cdma.dbm, -cdma.ecio, -evdo.dbm, -evdo.ecio, evdo.signalNoiseRatio);
     }
 
     /** @hide */
@@ -313,6 +307,8 @@ public final class CellSignalStrengthCdma extends CellSignalStrength implements 
 
     /**
      * Get the signal strength as dBm
+     *
+     * @return min(CDMA RSSI, EVDO RSSI) of the measured cell.
      */
     @Override
     public int getDbm() {
@@ -461,7 +457,7 @@ public final class CellSignalStrengthCdma extends CellSignalStrength implements 
 
     /** Implement the Parcelable interface */
     @SuppressWarnings("hiding")
-    public static final Parcelable.Creator<CellSignalStrengthCdma> CREATOR =
+    public static final @android.annotation.NonNull Parcelable.Creator<CellSignalStrengthCdma> CREATOR =
             new Parcelable.Creator<CellSignalStrengthCdma>() {
         @Override
         public CellSignalStrengthCdma createFromParcel(Parcel in) {

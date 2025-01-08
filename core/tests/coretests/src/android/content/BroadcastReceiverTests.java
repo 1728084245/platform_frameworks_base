@@ -18,13 +18,16 @@ package android.content;
 
 import static org.junit.Assert.fail;
 
-import android.support.test.InstrumentationRegistry;
-import android.support.test.filters.SmallTest;
-import android.support.test.runner.AndroidJUnit4;
+import androidx.test.InstrumentationRegistry;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+
+import java.util.ArrayList;
+import java.util.List;
 
 @RunWith(AndroidJUnit4.class)
 @SmallTest
@@ -47,14 +50,22 @@ public class BroadcastReceiverTests {
     @Test
     public void testReceiverLimit() {
         final IntentFilter mockFilter = new IntentFilter("android.content.tests.TestAction");
+        final List<EmptyReceiver> receivers = new ArrayList<>(RECEIVER_LIMIT_PER_APP);
         try {
             for (int i = 0; i < RECEIVER_LIMIT_PER_APP + 1; i++) {
-                mContext.registerReceiver(new EmptyReceiver(), mockFilter);
+                final EmptyReceiver receiver = new EmptyReceiver();
+                mContext.registerReceiver(receiver, mockFilter,
+                        Context.RECEIVER_EXPORTED_UNAUDITED);
+                receivers.add(receiver);
             }
             fail("No exception thrown when registering "
                     + (RECEIVER_LIMIT_PER_APP + 1) + " receivers");
         } catch (IllegalStateException ise) {
             // Expected
+        } finally {
+            for (int i = receivers.size() - 1; i >= 0; i--) {
+                mContext.unregisterReceiver(receivers.remove(i));
+            }
         }
     }
 }

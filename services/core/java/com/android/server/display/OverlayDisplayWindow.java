@@ -16,8 +16,6 @@
 
 package com.android.server.display;
 
-import com.android.internal.util.DumpUtils;
-
 import android.content.Context;
 import android.graphics.SurfaceTexture;
 import android.hardware.display.DisplayManager;
@@ -30,11 +28,14 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.TextureView;
+import android.view.TextureView.SurfaceTextureListener;
 import android.view.ThreadedRenderer;
 import android.view.View;
 import android.view.WindowManager;
-import android.view.TextureView.SurfaceTextureListener;
 import android.widget.TextView;
+
+import com.android.internal.util.DumpUtils;
+import com.android.server.display.utils.DebugUtils;
 
 import java.io.PrintWriter;
 
@@ -47,8 +48,10 @@ import java.io.PrintWriter;
  */
 final class OverlayDisplayWindow implements DumpUtils.Dump {
     private static final String TAG = "OverlayDisplayWindow";
-    private static final boolean DEBUG = false;
 
+    // To enable these logs, run:
+    // 'adb shell setprop persist.log.tag.OverlayDisplayWindow DEBUG && adb reboot'
+    private static final boolean DEBUG = DebugUtils.isDebuggable(TAG);
     private final float INITIAL_SCALE = 0.5f;
     private final float MIN_SCALE = 0.3f;
     private final float MAX_SCALE = 1.0f;
@@ -109,7 +112,8 @@ final class OverlayDisplayWindow implements DumpUtils.Dump {
         mWindowManager = (WindowManager)context.getSystemService(
                 Context.WINDOW_SERVICE);
 
-        mDefaultDisplay = mWindowManager.getDefaultDisplay();
+        // TODO(b/148458868): Support multi-display
+        mDefaultDisplay = mContext.getDisplay();
         updateDefaultDisplayInfo();
 
         resize(width, height, densityDpi, false /* doLayout */);
@@ -318,7 +322,7 @@ final class OverlayDisplayWindow implements DumpUtils.Dump {
         public void onSurfaceTextureAvailable(SurfaceTexture surfaceTexture,
                 int width, int height) {
             mListener.onWindowCreated(surfaceTexture,
-                    mDefaultDisplayInfo.getMode().getRefreshRate(),
+                    mDefaultDisplayInfo.getRefreshRate(),
                     mDefaultDisplayInfo.presentationDeadlineNanos, mDefaultDisplayInfo.state);
         }
 

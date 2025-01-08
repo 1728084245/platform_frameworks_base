@@ -16,26 +16,18 @@
 
 package android.security.net.config;
 
-import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.test.AndroidTestCase;
 import android.test.MoreAsserts;
-import android.util.ArraySet;
-import android.util.Pair;
+
 import java.io.IOException;
 import java.net.InetAddress;
-import java.net.Socket;
-import java.net.URL;
 import java.security.KeyStore;
 import java.security.Provider;
-import java.security.Security;
 import java.security.cert.X509Certificate;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Set;
-import javax.net.ssl.HttpsURLConnection;
+
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
@@ -52,7 +44,7 @@ public class XmlConfigTests extends AndroidTestCase {
         NetworkSecurityConfig config = appConfig.getConfigForHostname("");
         assertNotNull(config);
         // Check defaults.
-        assertTrue(config.isCleartextTrafficPermitted());
+        assertFalse(config.isCleartextTrafficPermitted());
         assertFalse(config.isHstsEnforced());
         assertFalse(config.getTrustAnchors().isEmpty());
         PinSet pinSet = config.getPins();
@@ -72,7 +64,7 @@ public class XmlConfigTests extends AndroidTestCase {
         NetworkSecurityConfig config = appConfig.getConfigForHostname("");
         assertNotNull(config);
         // Check defaults.
-        assertTrue(config.isCleartextTrafficPermitted());
+        assertFalse(config.isCleartextTrafficPermitted());
         assertFalse(config.isHstsEnforced());
         assertTrue(config.getTrustAnchors().isEmpty());
         PinSet pinSet = config.getPins();
@@ -91,14 +83,14 @@ public class XmlConfigTests extends AndroidTestCase {
         NetworkSecurityConfig config = appConfig.getConfigForHostname("");
         assertNotNull(config);
         // Check defaults.
-        assertTrue(config.isCleartextTrafficPermitted());
+        assertFalse(config.isCleartextTrafficPermitted());
         assertFalse(config.isHstsEnforced());
         assertTrue(config.getTrustAnchors().isEmpty());
         PinSet pinSet = config.getPins();
         assertTrue(pinSet.pins.isEmpty());
         // Check android.com.
         config = appConfig.getConfigForHostname("android.com");
-        assertTrue(config.isCleartextTrafficPermitted());
+        assertFalse(config.isCleartextTrafficPermitted());
         assertFalse(config.isHstsEnforced());
         assertFalse(config.getTrustAnchors().isEmpty());
         pinSet = config.getPins();
@@ -188,7 +180,7 @@ public class XmlConfigTests extends AndroidTestCase {
         ApplicationConfig appConfig = new ApplicationConfig(source);
         assertTrue(appConfig.hasPerDomainConfigs());
         NetworkSecurityConfig config = appConfig.getConfigForHostname("android.com");
-        assertTrue(config.isCleartextTrafficPermitted());
+        assertFalse(config.isCleartextTrafficPermitted());
         assertFalse(config.isHstsEnforced());
         assertFalse(config.getTrustAnchors().isEmpty());
         PinSet pinSet = config.getPins();
@@ -250,9 +242,9 @@ public class XmlConfigTests extends AndroidTestCase {
         ApplicationConfig appConfig = new ApplicationConfig(source);
         // Check android.com.
         NetworkSecurityConfig config = appConfig.getConfigForHostname("android.com");
-        assertTrue(config.isCleartextTrafficPermitted());
+        assertFalse(config.isCleartextTrafficPermitted());
         assertFalse(config.isHstsEnforced());
-        assertEquals(2, config.getTrustAnchors().size());
+        assertEquals(1, config.getTrustAnchors().size());
         // Try connections.
         SSLContext context = TestUtils.getSSLContext(source);
         TestUtils.assertConnectionSucceeds(context, "android.com", 443);
@@ -267,9 +259,9 @@ public class XmlConfigTests extends AndroidTestCase {
         ApplicationConfig appConfig = new ApplicationConfig(source);
         // Check android.com.
         NetworkSecurityConfig config = appConfig.getConfigForHostname("android.com");
-        assertTrue(config.isCleartextTrafficPermitted());
+        assertFalse(config.isCleartextTrafficPermitted());
         assertFalse(config.isHstsEnforced());
-        assertEquals(2, config.getTrustAnchors().size());
+        assertEquals(1, config.getTrustAnchors().size());
         // Try connections.
         SSLContext context = TestUtils.getSSLContext(source);
         TestUtils.assertConnectionSucceeds(context, "android.com", 443);
@@ -509,5 +501,48 @@ public class XmlConfigTests extends AndroidTestCase {
         SSLContext context = TestUtils.getSSLContext(source);
         TestUtils.assertConnectionSucceeds(context, "android.com", 443);
         TestUtils.assertConnectionSucceeds(context, "developer.android.com", 443);
+    }
+
+    public void testCertificateTransparencyDomainConfig() throws Exception {
+        XmlConfigSource source = new XmlConfigSource(getContext(), R.xml.ct_domains,
+                TestUtils.makeApplicationInfo());
+        ApplicationConfig appConfig = new ApplicationConfig(source);
+        assertTrue(appConfig.hasPerDomainConfigs());
+        NetworkSecurityConfig config = appConfig.getConfigForHostname("");
+        assertNotNull(config);
+        // Check defaults.
+        assertTrue(config.isCertificateTransparencyVerificationRequired());
+
+        config = appConfig.getConfigForHostname("android.com");
+        assertTrue(config.isCertificateTransparencyVerificationRequired());
+
+        config = appConfig.getConfigForHostname("subdomain_user.android.com");
+        assertFalse(config.isCertificateTransparencyVerificationRequired());
+
+        config = appConfig.getConfigForHostname("subdomain_user_ct.android.com");
+        assertTrue(config.isCertificateTransparencyVerificationRequired());
+
+        config = appConfig.getConfigForHostname("subdomain_inline.android.com");
+        assertFalse(config.isCertificateTransparencyVerificationRequired());
+
+        config = appConfig.getConfigForHostname("subdomain_inline_ct.android.com");
+        assertTrue(config.isCertificateTransparencyVerificationRequired());
+    }
+
+    public void testCertificateTransparencyUserConfig() throws Exception {
+        XmlConfigSource source = new XmlConfigSource(getContext(), R.xml.ct_users,
+                TestUtils.makeApplicationInfo());
+        ApplicationConfig appConfig = new ApplicationConfig(source);
+        assertTrue(appConfig.hasPerDomainConfigs());
+        NetworkSecurityConfig config = appConfig.getConfigForHostname("");
+        assertNotNull(config);
+        // Check defaults.
+        assertFalse(config.isCertificateTransparencyVerificationRequired());
+
+        config = appConfig.getConfigForHostname("android.com");
+        assertFalse(config.isCertificateTransparencyVerificationRequired());
+
+        config = appConfig.getConfigForHostname("subdomain.android.com");
+        assertTrue(config.isCertificateTransparencyVerificationRequired());
     }
 }

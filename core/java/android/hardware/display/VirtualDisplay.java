@@ -15,6 +15,7 @@
  */
 package android.hardware.display;
 
+import android.annotation.FlaggedApi;
 import android.view.Display;
 import android.view.Surface;
 
@@ -36,9 +37,8 @@ public final class VirtualDisplay {
     private final Display mDisplay;
     private IVirtualDisplayCallback mToken;
     private Surface mSurface;
-
-    VirtualDisplay(DisplayManagerGlobal global, Display display,
-            IVirtualDisplayCallback token, Surface surface) {
+    VirtualDisplay(DisplayManagerGlobal global, Display display, IVirtualDisplayCallback token,
+            Surface surface) {
         mGlobal = global;
         mDisplay = display;
         mToken = token;
@@ -57,6 +57,13 @@ public final class VirtualDisplay {
      */
     public Surface getSurface() {
         return mSurface;
+    }
+
+    /**
+     * @hide
+     */
+    public IVirtualDisplayCallback getToken() {
+        return mToken;
     }
 
     /**
@@ -101,6 +108,40 @@ public final class VirtualDisplay {
         if (mToken != null) {
             mGlobal.releaseVirtualDisplay(mToken);
             mToken = null;
+        }
+    }
+
+    /**
+     * Sets the on/off state for a virtual display.
+     *
+     * @param isOn Whether the display should be on or off.
+     * @hide
+     */
+    public void setDisplayState(boolean isOn) {
+        if (mToken != null) {
+            mGlobal.setVirtualDisplayState(mToken, isOn);
+        }
+    }
+
+    /**
+     * Sets the rotation of the virtual display.
+     *
+     * @param rotation the new rotation of the display. May be one of {@link Surface#ROTATION_0},
+     *     {@link Surface#ROTATION_90}, {@link Surface#ROTATION_180}, {@link Surface#ROTATION_270}.
+     *     Upon creation, the rotation of the virtual display is always {@link Surface#ROTATION_0}.
+     */
+    @FlaggedApi(android.companion.virtualdevice.flags.Flags.FLAG_VIRTUAL_DISPLAY_ROTATION_API)
+    public void setRotation(@Surface.Rotation int rotation) {
+        if (!android.companion.virtualdevice.flags.Flags.virtualDisplayRotationApi()) {
+            return;
+        }
+        if (rotation != Surface.ROTATION_0 && rotation != Surface.ROTATION_90
+                && rotation != Surface.ROTATION_180 && rotation != Surface.ROTATION_270) {
+            throw new IllegalArgumentException(
+                    "Invalid virtual display rotation value: " + rotation);
+        }
+        if (mToken != null && mDisplay.getRotation() != rotation) {
+            mGlobal.setVirtualDisplayRotation(mToken, rotation);
         }
     }
 

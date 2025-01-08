@@ -20,15 +20,14 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.database.ContentObserver;
-import android.graphics.Point;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Handler;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.provider.Settings;
+import android.util.DisplayMetrics;
 import android.util.Log;
-import android.view.Display;
 import android.view.IWindowManager;
 import android.view.Surface;
 import android.view.WindowManagerGlobal;
@@ -73,18 +72,16 @@ public final class RotationPolicy {
      * otherwise Configuration.ORIENTATION_UNDEFINED if any orientation is lockable.
      */
     public static int getRotationLockOrientation(Context context) {
-        if (!areAllRotationsAllowed(context)) {
-            final Point size = new Point();
-            final IWindowManager wm = WindowManagerGlobal.getWindowManagerService();
-            try {
-                wm.getInitialDisplaySize(Display.DEFAULT_DISPLAY, size);
-                return size.x < size.y ?
-                        Configuration.ORIENTATION_PORTRAIT : Configuration.ORIENTATION_LANDSCAPE;
-            } catch (RemoteException e) {
-                Log.w(TAG, "Unable to get the display size");
-            }
+        if (areAllRotationsAllowed(context)) {
+            return Configuration.ORIENTATION_UNDEFINED;
         }
-        return Configuration.ORIENTATION_UNDEFINED;
+        final DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+        final int rotation =
+                context.getResources().getConfiguration().windowConfiguration.getRotation();
+        final boolean rotated = rotation % 2 != 0;
+        final int w = rotated ? metrics.heightPixels : metrics.widthPixels;
+        final int h = rotated ? metrics.widthPixels : metrics.heightPixels;
+        return w < h ? Configuration.ORIENTATION_PORTRAIT : Configuration.ORIENTATION_LANDSCAPE;
     }
 
     /**
@@ -108,21 +105,23 @@ public final class RotationPolicy {
     /**
      * Enables or disables rotation lock from the system UI toggle.
      */
-    public static void setRotationLock(Context context, final boolean enabled) {
-        final int rotation = areAllRotationsAllowed(context) ? CURRENT_ROTATION : NATURAL_ROTATION;
-        setRotationLockAtAngle(context, enabled, rotation);
+    public static void setRotationLock(Context context, final boolean enabled, String caller) {
+        final int rotation = areAllRotationsAllowed(context)
+                || useCurrentRotationOnRotationLockChange(context) ? CURRENT_ROTATION
+                : NATURAL_ROTATION;
+        setRotationLockAtAngle(context, enabled, rotation, caller);
     }
 
     /**
      * Enables or disables rotation lock at a specific rotation from system UI.
      */
     public static void setRotationLockAtAngle(Context context, final boolean enabled,
-            final int rotation) {
+            final int rotation, String caller) {
         Settings.System.putIntForUser(context.getContentResolver(),
                 Settings.System.HIDE_ROTATION_LOCK_TOGGLE_FOR_ACCESSIBILITY, 0,
                 UserHandle.USER_CURRENT);
 
-        setRotationLock(enabled, rotation);
+        setRotationLock(enabled, rotation, caller);
     }
 
     /**
@@ -130,28 +129,35 @@ public final class RotationPolicy {
      *
      * If rotation is locked for accessibility, the system UI toggle is hidden to avoid confusion.
      */
-    public static void setRotationLockForAccessibility(Context context, final boolean enabled) {
+    public static void setRotationLockForAccessibility(Context context, final boolean enabled,
+            String caller) {
         Settings.System.putIntForUser(context.getContentResolver(),
                 Settings.System.HIDE_ROTATION_LOCK_TOGGLE_FOR_ACCESSIBILITY, enabled ? 1 : 0,
                         UserHandle.USER_CURRENT);
 
-        setRotationLock(enabled, NATURAL_ROTATION);
+        setRotationLock(enabled, NATURAL_ROTATION, caller);
     }
 
     private static boolean areAllRotationsAllowed(Context context) {
         return context.getResources().getBoolean(R.bool.config_allowAllRotations);
     }
 
-    private static void setRotationLock(final boolean enabled, final int rotation) {
+    private static boolean useCurrentRotationOnRotationLockChange(Context context) {
+        return context.getResources().getBoolean(
+                R.bool.config_useCurrentRotationOnRotationLockChange);
+    }
+
+    private static void setRotationLock(final boolean enabled, final int rotation,
+            final String caller) {
         AsyncTask.execute(new Runnable() {
             @Override
             public void run() {
                 try {
                     IWindowManager wm = WindowManagerGlobal.getWindowManagerService();
                     if (enabled) {
-                        wm.freezeRotation(rotation);
+                        wm.freezeRotation(rotation, caller);
                     } else {
-                        wm.thawRotation();
+                        wm.thawRotation(caller);
                     }
                 } catch (RemoteException exc) {
                     Log.w(TAG, "Unable to save auto-rotate setting");

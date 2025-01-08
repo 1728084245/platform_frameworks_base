@@ -17,6 +17,8 @@
 package com.android.internal.widget;
 
 import android.app.PendingIntent;
+import android.app.RemoteLockscreenValidationResult;
+import android.app.RemoteLockscreenValidationSession;
 import android.app.trust.IStrongAuthTracker;
 import android.os.Bundle;
 import android.security.keystore.recovery.WrappedApplicationKey;
@@ -24,6 +26,9 @@ import android.security.keystore.recovery.KeyChainSnapshot;
 import android.security.keystore.recovery.KeyChainProtectionParams;
 import android.security.keystore.recovery.RecoveryCertPath;
 import com.android.internal.widget.ICheckCredentialProgressCallback;
+import com.android.internal.widget.IWeakEscrowTokenActivatedListener;
+import com.android.internal.widget.IWeakEscrowTokenRemovedListener;
+import com.android.internal.widget.LockscreenCredential;
 import com.android.internal.widget.VerifyCredentialResponse;
 
 import java.util.Map;
@@ -42,26 +47,29 @@ interface ILockSettings {
     long getLong(in String key, in long defaultValue, in int userId);
     @UnsupportedAppUsage
     String getString(in String key, in String defaultValue, in int userId);
-    void setLockCredential(in String credential, int type, in String savedCredential, int requestedQuality, int userId);
+    boolean setLockCredential(in LockscreenCredential credential, in LockscreenCredential savedCredential, int userId);
     void resetKeyStore(int userId);
-    VerifyCredentialResponse checkCredential(in String credential, int type, int userId,
+    VerifyCredentialResponse checkCredential(in LockscreenCredential credential, int userId,
             in ICheckCredentialProgressCallback progressCallback);
-    VerifyCredentialResponse verifyCredential(in String credential, int type, long challenge, int userId);
-    VerifyCredentialResponse verifyTiedProfileChallenge(String credential, int type, long challenge, int userId);
-    boolean checkVoldPassword(int userId);
-    @UnsupportedAppUsage
-    boolean havePattern(int userId);
-    @UnsupportedAppUsage
-    boolean havePassword(int userId);
-    byte[] getHashFactor(String currentCredential, int userId);
-    void setSeparateProfileChallengeEnabled(int userId, boolean enabled, String managedUserPassword);
+    VerifyCredentialResponse verifyCredential(in LockscreenCredential credential, int userId, int flags);
+    VerifyCredentialResponse verifyTiedProfileChallenge(in LockscreenCredential credential, int userId, int flags);
+    VerifyCredentialResponse verifyGatekeeperPasswordHandle(long gatekeeperPasswordHandle, long challenge, int userId);
+    void removeGatekeeperPasswordHandle(long gatekeeperPasswordHandle);
+    int getCredentialType(int userId);
+    int getPinLength(int userId);
+    boolean refreshStoredPinLength(int userId);
+    byte[] getHashFactor(in LockscreenCredential currentCredential, int userId);
+    void setSeparateProfileChallengeEnabled(int userId, boolean enabled, in LockscreenCredential managedUserPassword);
     boolean getSeparateProfileChallengeEnabled(int userId);
     void registerStrongAuthTracker(in IStrongAuthTracker tracker);
     void unregisterStrongAuthTracker(in IStrongAuthTracker tracker);
     void requireStrongAuth(int strongAuthReason, int userId);
+    void reportSuccessfulBiometricUnlock(boolean isStrongBiometric, int userId);
+    void scheduleNonStrongBiometricIdleTimeout(int userId);
     void systemReady();
     void userPresent(int userId);
     int getStrongAuthForUser(int userId);
+    boolean hasPendingEscrowToken(int userId);
 
     // Keystore RecoveryController methods.
     // {@code ServiceSpecificException} may be thrown to signal an error, which caller can
@@ -70,7 +78,9 @@ interface ILockSettings {
             in byte[] recoveryServiceCertFile, in byte[] recoveryServiceSigFile);
     KeyChainSnapshot getKeyChainSnapshot();
     String generateKey(String alias);
+    String generateKeyWithMetadata(String alias, in byte[] metadata);
     String importKey(String alias, in byte[] keyBytes);
+    String importKeyWithMetadata(String alias, in byte[] keyBytes, in byte[] metadata);
     String getKey(String alias);
     void removeKey(String alias);
     void setSnapshotCreatedPendingIntent(in PendingIntent intent);
@@ -87,4 +97,17 @@ interface ILockSettings {
             in byte[] recoveryKeyBlob,
             in List<WrappedApplicationKey> applicationKeys);
     void closeSession(in String sessionId);
+    RemoteLockscreenValidationSession startRemoteLockscreenValidation();
+    RemoteLockscreenValidationResult validateRemoteLockscreen(in byte[] encryptedCredential);
+    boolean hasSecureLockScreen();
+    boolean tryUnlockWithCachedUnifiedChallenge(int userId);
+    void removeCachedUnifiedChallenge(int userId);
+    boolean registerWeakEscrowTokenRemovedListener(in IWeakEscrowTokenRemovedListener listener);
+    boolean unregisterWeakEscrowTokenRemovedListener(in IWeakEscrowTokenRemovedListener listener);
+    long addWeakEscrowToken(in byte[] token, int userId, in IWeakEscrowTokenActivatedListener callback);
+    boolean removeWeakEscrowToken(long handle, int userId);
+    boolean isWeakEscrowTokenActive(long handle, int userId);
+    boolean isWeakEscrowTokenValid(long handle, in byte[] token, int userId);
+    void unlockUserKeyIfUnsecured(int userId);
+    boolean writeRepairModeCredential(int userId);
 }

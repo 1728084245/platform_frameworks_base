@@ -17,17 +17,17 @@
 package android.graphics.drawable;
 
 import android.annotation.NonNull;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.pm.ActivityInfo.Config;
 import android.content.res.ColorStateList;
 import android.content.res.Resources;
 import android.content.res.Resources.Theme;
+import android.graphics.BlendMode;
 import android.graphics.Canvas;
 import android.graphics.ColorFilter;
 import android.graphics.Insets;
 import android.graphics.Outline;
 import android.graphics.PixelFormat;
-import android.graphics.PorterDuff.Mode;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.SystemClock;
@@ -124,9 +124,6 @@ public class DrawableContainer extends Drawable implements Drawable.Callback {
         return result;
     }
 
-    /**
-     * @hide
-     */
     @Override
     public Insets getOpticalInsets() {
         if (mCurrDrawable != null) {
@@ -199,14 +196,14 @@ public class DrawableContainer extends Drawable implements Drawable.Callback {
     }
 
     @Override
-    public void setTintMode(Mode tintMode) {
+    public void setTintBlendMode(@NonNull BlendMode blendMode) {
         mDrawableContainerState.mHasTintMode = true;
 
-        if (mDrawableContainerState.mTintMode != tintMode) {
-            mDrawableContainerState.mTintMode = tintMode;
+        if (mDrawableContainerState.mBlendMode != blendMode) {
+            mDrawableContainerState.mBlendMode = blendMode;
 
             if (mCurrDrawable != null) {
-                mCurrDrawable.setTintMode(tintMode);
+                mCurrDrawable.setTintBlendMode(blendMode);
             }
         }
     }
@@ -246,7 +243,6 @@ public class DrawableContainer extends Drawable implements Drawable.Callback {
         return mDrawableContainerState.isStateful();
     }
 
-    /** @hide */
     @Override
     public boolean hasFocusStateSpecified() {
         if (mCurrDrawable != null) {
@@ -547,7 +543,7 @@ public class DrawableContainer extends Drawable implements Drawable.Callback {
                     d.setTintList(mDrawableContainerState.mTintList);
                 }
                 if (mDrawableContainerState.mHasTintMode) {
-                    d.setTintMode(mDrawableContainerState.mTintMode);
+                    d.setTintBlendMode(mDrawableContainerState.mBlendMode);
                 }
             }
 
@@ -733,7 +729,7 @@ public class DrawableContainer extends Drawable implements Drawable.Callback {
         boolean mHasColorFilter;
 
         ColorStateList mTintList;
-        Mode mTintMode;
+        BlendMode mBlendMode;
         boolean mHasTintList;
         boolean mHasTintMode;
 
@@ -765,7 +761,7 @@ public class DrawableContainer extends Drawable implements Drawable.Callback {
                 mColorFilter = orig.mColorFilter;
                 mHasColorFilter = orig.mHasColorFilter;
                 mTintList = orig.mTintList;
-                mTintMode = orig.mTintMode;
+                mBlendMode = orig.mBlendMode;
                 mHasTintList = orig.mHasTintList;
                 mHasTintMode = orig.mHasTintMode;
 

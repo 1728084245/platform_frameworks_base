@@ -16,7 +16,6 @@
 
 #include "jni.h"
 #include <nativehelper/JNIHelp.h>
-#include "GraphicsJNI.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -25,12 +24,11 @@
 #include <assert.h>
 #include <dlfcn.h>
 
+#include <android/graphics/bitmap.h>
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 #include <GLES3/gl3.h>
 #include <ETC1/etc1.h>
-
-#include <SkBitmap.h>
 
 #include "core_jni_helpers.h"
 
@@ -42,6 +40,10 @@
 #include "poly.h"
 
 namespace android {
+
+static void doThrowIAE(JNIEnv* env, const char* msg = nullptr) {
+    jniThrowException(env, "java/lang/IllegalArgumentException", msg);
+}
 
 static inline
 void mx4transform(float x, float y, float z, float w, const float* pM, float* pDest) {
@@ -539,112 +541,33 @@ jint util_visibilityTest(JNIEnv *env, jclass clazz,
             indices.mData, indexCount);
 }
 
-#define I(_i, _j) ((_j)+ 4*(_i))
-
-static
-void multiplyMM(float* r, const float* lhs, const float* rhs)
-{
-    for (int i=0 ; i<4 ; i++) {
-        const float rhs_i0 = rhs[ I(i,0) ];
-        float ri0 = lhs[ I(0,0) ] * rhs_i0;
-        float ri1 = lhs[ I(0,1) ] * rhs_i0;
-        float ri2 = lhs[ I(0,2) ] * rhs_i0;
-        float ri3 = lhs[ I(0,3) ] * rhs_i0;
-        for (int j=1 ; j<4 ; j++) {
-            const float rhs_ij = rhs[ I(i,j) ];
-            ri0 += lhs[ I(j,0) ] * rhs_ij;
-            ri1 += lhs[ I(j,1) ] * rhs_ij;
-            ri2 += lhs[ I(j,2) ] * rhs_ij;
-            ri3 += lhs[ I(j,3) ] * rhs_ij;
-        }
-        r[ I(i,0) ] = ri0;
-        r[ I(i,1) ] = ri1;
-        r[ I(i,2) ] = ri2;
-        r[ I(i,3) ] = ri3;
-    }
-}
-
-static
-void util_multiplyMM(JNIEnv *env, jclass clazz,
-    jfloatArray result_ref, jint resultOffset,
-    jfloatArray lhs_ref, jint lhsOffset,
-    jfloatArray rhs_ref, jint rhsOffset) {
-
-    FloatArrayHelper resultMat(env, result_ref, resultOffset, 16);
-    FloatArrayHelper lhs(env, lhs_ref, lhsOffset, 16);
-    FloatArrayHelper rhs(env, rhs_ref, rhsOffset, 16);
-
-    bool checkOK = resultMat.check() && lhs.check() && rhs.check();
-
-    if ( !checkOK ) {
-        return;
-    }
-
-    resultMat.bind();
-    lhs.bind();
-    rhs.bind();
-
-    multiplyMM(resultMat.mData, lhs.mData, rhs.mData);
-
-    resultMat.commitChanges();
-}
-
-static
-void multiplyMV(float* r, const float* lhs, const float* rhs)
-{
-    mx4transform(rhs[0], rhs[1], rhs[2], rhs[3], lhs, r);
-}
-
-static
-void util_multiplyMV(JNIEnv *env, jclass clazz,
-    jfloatArray result_ref, jint resultOffset,
-    jfloatArray lhs_ref, jint lhsOffset,
-    jfloatArray rhs_ref, jint rhsOffset) {
-
-    FloatArrayHelper resultV(env, result_ref, resultOffset, 4);
-    FloatArrayHelper lhs(env, lhs_ref, lhsOffset, 16);
-    FloatArrayHelper rhs(env, rhs_ref, rhsOffset, 4);
-
-    bool checkOK = resultV.check() && lhs.check() && rhs.check();
-
-    if ( !checkOK ) {
-        return;
-    }
-
-    resultV.bind();
-    lhs.bind();
-    rhs.bind();
-
-    multiplyMV(resultV.mData, lhs.mData, rhs.mData);
-
-    resultV.commitChanges();
-}
-
 // ---------------------------------------------------------------------------
 
-static int checkInternalFormat(SkColorType colorType, int internalformat,
-    int type)
+// The internal format is no longer the same as pixel format, per Table 2 in
+// https://www.khronos.org/registry/OpenGL-Refpages/es3.1/html/glTexImage2D.xhtml
+static bool checkInternalFormat(int32_t bitmapFormat, int internalformat, int type)
 {
-    switch(colorType) {
-        case kN32_SkColorType:
-            return (type == GL_UNSIGNED_BYTE &&
-                internalformat == GL_RGBA) ? 0 : -1;
-        case kAlpha_8_SkColorType:
-            return (type == GL_UNSIGNED_BYTE &&
-                internalformat == GL_ALPHA) ? 0 : -1;
-        case kARGB_4444_SkColorType:
-            return (type == GL_UNSIGNED_SHORT_4_4_4_4 &&
-                internalformat == GL_RGBA) ? 0 : -1;
-        case kRGB_565_SkColorType:
-            return (type == GL_UNSIGNED_SHORT_5_6_5 &&
-                internalformat == GL_RGB) ? 0 : -1;
-        case kRGBA_F16_SkColorType:
-            return (type == GL_HALF_FLOAT &&
-                internalformat == GL_RGBA16F) ? 0 : -1;
+    if (internalformat == GL_PALETTE8_RGBA8_OES) {
+        return false;
+    }
+    switch(bitmapFormat) {
+        case ANDROID_BITMAP_FORMAT_RGBA_8888:
+            return (type == GL_UNSIGNED_BYTE && internalformat == GL_RGBA) ||
+                   (type == GL_UNSIGNED_BYTE && internalformat == GL_SRGB8_ALPHA8);
+        case ANDROID_BITMAP_FORMAT_A_8:
+            return (type == GL_UNSIGNED_BYTE && internalformat == GL_ALPHA);
+        case ANDROID_BITMAP_FORMAT_RGBA_4444:
+            return (type == GL_UNSIGNED_SHORT_4_4_4_4 && internalformat == GL_RGBA);
+        case ANDROID_BITMAP_FORMAT_RGB_565:
+            return (type == GL_UNSIGNED_SHORT_5_6_5 && internalformat == GL_RGB);
+        case ANDROID_BITMAP_FORMAT_RGBA_F16:
+            return (type == GL_HALF_FLOAT && internalformat == GL_RGBA16F);
+        case ANDROID_BITMAP_FORMAT_RGBA_1010102:
+            return (type == GL_UNSIGNED_INT_2_10_10_10_REV && internalformat == GL_RGB10_A2);
         default:
             break;
     }
-    return -1;
+    return false;
 }
 
 // The internal format is no longer the same as pixel format, per Table 2 in
@@ -653,6 +576,7 @@ static int getPixelFormatFromInternalFormat(uint32_t internalFormat) {
     switch (internalFormat) {
         // For sized internal format.
         case GL_RGBA16F:
+        case GL_SRGB8_ALPHA8:
             return GL_RGBA;
         // Base internal formats and pixel formats are still the same, see Table 1 in
         // https://www.khronos.org/registry/OpenGL-Refpages/es3.1/html/glTexImage2D.xhtml
@@ -661,142 +585,106 @@ static int getPixelFormatFromInternalFormat(uint32_t internalFormat) {
     }
 }
 
-static int getInternalFormat(SkColorType colorType)
-{
-    switch(colorType) {
-        case kAlpha_8_SkColorType:
+static int getInternalFormat(int32_t bitmapFormat) {
+    switch(bitmapFormat) {
+        case ANDROID_BITMAP_FORMAT_A_8:
             return GL_ALPHA;
-        case kARGB_4444_SkColorType:
+        case ANDROID_BITMAP_FORMAT_RGBA_4444:
             return GL_RGBA;
-        case kN32_SkColorType:
+        case ANDROID_BITMAP_FORMAT_RGBA_8888:
             return GL_RGBA;
-        case kRGB_565_SkColorType:
+        case ANDROID_BITMAP_FORMAT_RGB_565:
             return GL_RGB;
-        case kRGBA_F16_SkColorType:
+        case ANDROID_BITMAP_FORMAT_RGBA_F16:
             return GL_RGBA16F;
+        case ANDROID_BITMAP_FORMAT_RGBA_1010102:
+            return GL_RGB10_A2;
         default:
             return -1;
     }
 }
 
-static int getType(SkColorType colorType)
-{
-    switch(colorType) {
-        case kAlpha_8_SkColorType:
+static int getType(int32_t bitmapFormat) {
+    switch(bitmapFormat) {
+        case ANDROID_BITMAP_FORMAT_A_8:
             return GL_UNSIGNED_BYTE;
-        case kARGB_4444_SkColorType:
+        case ANDROID_BITMAP_FORMAT_RGBA_4444:
             return GL_UNSIGNED_SHORT_4_4_4_4;
-        case kN32_SkColorType:
+        case ANDROID_BITMAP_FORMAT_RGBA_8888:
             return GL_UNSIGNED_BYTE;
-        case kRGB_565_SkColorType:
+        case ANDROID_BITMAP_FORMAT_RGB_565:
             return GL_UNSIGNED_SHORT_5_6_5;
-        case kRGBA_F16_SkColorType:
+        case ANDROID_BITMAP_FORMAT_RGBA_F16:
             return GL_HALF_FLOAT;
+        case ANDROID_BITMAP_FORMAT_RGBA_1010102:
+            return GL_UNSIGNED_INT_2_10_10_10_REV;
         default:
             return -1;
     }
 }
 
-static jint util_getInternalFormat(JNIEnv *env, jclass clazz,
-        jobject jbitmap)
+static jint util_getInternalFormat(JNIEnv *env, jclass clazz, jobject bitmapObj)
 {
-    SkBitmap nativeBitmap;
-    GraphicsJNI::getSkBitmap(env, jbitmap, &nativeBitmap);
-    return getInternalFormat(nativeBitmap.colorType());
+    graphics::Bitmap bitmap(env, bitmapObj);
+    return getInternalFormat(bitmap.getInfo().format);
 }
 
-static jint util_getType(JNIEnv *env, jclass clazz,
-        jobject jbitmap)
+static jint util_getType(JNIEnv *env, jclass clazz, jobject bitmapObj)
 {
-    SkBitmap nativeBitmap;
-    GraphicsJNI::getSkBitmap(env, jbitmap, &nativeBitmap);
-    return getType(nativeBitmap.colorType());
+    graphics::Bitmap bitmap(env, bitmapObj);
+    return getType(bitmap.getInfo().format);
 }
 
-static jint util_texImage2D(JNIEnv *env, jclass clazz,
-        jint target, jint level, jint internalformat,
-        jobject jbitmap, jint type, jint border)
+static jint util_texImage2D(JNIEnv *env, jclass clazz, jint target, jint level,
+        jint internalformat, jobject bitmapObj, jint type, jint border)
 {
-    SkBitmap bitmap;
-    GraphicsJNI::getSkBitmap(env, jbitmap, &bitmap);
-    SkColorType colorType = bitmap.colorType();
-    if (internalformat < 0) {
-        internalformat = getInternalFormat(colorType);
+    graphics::Bitmap bitmap(env, bitmapObj);
+    if (bitmap.isValid() && bitmap.getPixels() != nullptr) {
+        AndroidBitmapInfo bitmapInfo = bitmap.getInfo();
+
+        if (internalformat < 0) {
+            internalformat = getInternalFormat(bitmapInfo.format);
+        }
+        if (type < 0) {
+            type = getType(bitmapInfo.format);
+        }
+
+        if (checkInternalFormat(bitmapInfo.format, internalformat, type)) {
+            glTexImage2D(target, level, internalformat, bitmapInfo.width, bitmapInfo.height, border,
+                         getPixelFormatFromInternalFormat(internalformat), type,
+                         bitmap.getPixels());
+            return 0;
+        }
     }
-    if (type < 0) {
-        type = getType(colorType);
-    }
-    int err = checkInternalFormat(colorType, internalformat, type);
-    if (err)
-        return err;
-    const int w = bitmap.width();
-    const int h = bitmap.height();
-    const void* p = bitmap.getPixels();
-    if (internalformat == GL_PALETTE8_RGBA8_OES) {
-        err = -1;
-    } else {
-        glTexImage2D(target, level, internalformat, w, h, border,
-                     getPixelFormatFromInternalFormat(internalformat), type, p);
-    }
-    return err;
+    return -1;
 }
 
-static jint util_texSubImage2D(JNIEnv *env, jclass clazz,
-        jint target, jint level, jint xoffset, jint yoffset,
-        jobject jbitmap, jint format, jint type)
+static jint util_texSubImage2D(JNIEnv *env, jclass clazz, jint target, jint level,
+        jint xoffset, jint yoffset, jobject bitmapObj, jint format, jint type)
 {
-    SkBitmap bitmap;
-    GraphicsJNI::getSkBitmap(env, jbitmap, &bitmap);
-    SkColorType colorType = bitmap.colorType();
-    int internalFormat = getInternalFormat(colorType);
-    if (format < 0) {
-        format = getPixelFormatFromInternalFormat(internalFormat);
-        if (format == GL_PALETTE8_RGBA8_OES)
-            return -1; // glCompressedTexSubImage2D() not supported
+    graphics::Bitmap bitmap(env, bitmapObj);
+    if (bitmap.isValid() && bitmap.getPixels() != nullptr) {
+        AndroidBitmapInfo bitmapInfo = bitmap.getInfo();
+
+        int internalFormat = getInternalFormat(bitmapInfo.format);
+        if (format < 0) {
+            format = getPixelFormatFromInternalFormat(internalFormat);
+            if (format == GL_PALETTE8_RGBA8_OES)
+                return -1; // glCompressedTexSubImage2D() not supported
+        }
+
+        if (checkInternalFormat(bitmapInfo.format, internalFormat, type)) {
+            glTexSubImage2D(target, level, xoffset, yoffset, bitmapInfo.width, bitmapInfo.height,
+                            format, type, bitmap.getPixels());
+            return 0;
+        }
     }
-    int err = checkInternalFormat(colorType, internalFormat, type);
-    if (err)
-        return err;
-    const int w = bitmap.width();
-    const int h = bitmap.height();
-    const void* p = bitmap.getPixels();
-    glTexSubImage2D(target, level, xoffset, yoffset, w, h, format, type, p);
-    return 0;
+    return -1;
 }
 
 /*
  * ETC1 methods.
  */
-
-static jclass nioAccessClass;
-static jclass bufferClass;
-static jmethodID getBasePointerID;
-static jmethodID getBaseArrayID;
-static jmethodID getBaseArrayOffsetID;
-static jfieldID positionID;
-static jfieldID limitID;
-static jfieldID elementSizeShiftID;
-
-/* Cache method IDs each time the class is loaded. */
-
-static void
-nativeClassInitBuffer(JNIEnv *env)
-{
-    jclass nioAccessClassLocal = FindClassOrDie(env, "java/nio/NIOAccess");
-    nioAccessClass = MakeGlobalRefOrDie(env, nioAccessClassLocal);
-    getBasePointerID = GetStaticMethodIDOrDie(env, nioAccessClass,
-            "getBasePointer", "(Ljava/nio/Buffer;)J");
-    getBaseArrayID = GetStaticMethodIDOrDie(env, nioAccessClass,
-            "getBaseArray", "(Ljava/nio/Buffer;)Ljava/lang/Object;");
-    getBaseArrayOffsetID = GetStaticMethodIDOrDie(env, nioAccessClass,
-            "getBaseArrayOffset", "(Ljava/nio/Buffer;)I");
-
-    jclass bufferClassLocal = FindClassOrDie(env, "java/nio/Buffer");
-    bufferClass = MakeGlobalRefOrDie(env, bufferClassLocal);
-    positionID = GetFieldIDOrDie(env, bufferClass, "position", "I");
-    limitID = GetFieldIDOrDie(env, bufferClass, "limit", "I");
-    elementSizeShiftID = GetFieldIDOrDie(env, bufferClass, "_elementSizeShift", "I");
-}
 
 static void *
 getPointer(JNIEnv *_env, jobject buffer, jint *remaining)
@@ -804,18 +692,12 @@ getPointer(JNIEnv *_env, jobject buffer, jint *remaining)
     jint position;
     jint limit;
     jint elementSizeShift;
-    jlong pointer;
-
-    position = _env->GetIntField(buffer, positionID);
-    limit = _env->GetIntField(buffer, limitID);
-    elementSizeShift = _env->GetIntField(buffer, elementSizeShiftID);
-    *remaining = (limit - position) << elementSizeShift;
-    pointer = _env->CallStaticLongMethod(nioAccessClass,
-            getBasePointerID, buffer);
+    jlong pointer = jniGetNioBufferFields(_env, buffer, &position, &limit, &elementSizeShift);
     if (pointer != 0L) {
-        return reinterpret_cast<void *>(pointer);
+        pointer += position << elementSizeShift;
     }
-    return NULL;
+    *remaining = (limit - position) << elementSizeShift;
+    return reinterpret_cast<void*>(pointer);
 }
 
 class BufferHelper {
@@ -1051,11 +933,6 @@ static jint etc1_getHeight(JNIEnv *env, jclass clazz,
  * JNI registration
  */
 
-static const JNINativeMethod gMatrixMethods[] = {
-    { "multiplyMM", "([FI[FI[FI)V", (void*)util_multiplyMM },
-    { "multiplyMV", "([FI[FI[FI)V", (void*)util_multiplyMV },
-};
-
 static const JNINativeMethod gVisibilityMethods[] = {
     { "computeBoundingSphere", "([FII[FI)V", (void*)util_computeBoundingSphere },
     { "frustumCullSpheres", "([FI[FII[III)I", (void*)util_frustumCullSpheres },
@@ -1088,7 +965,6 @@ typedef struct _ClassRegistrationInfo {
 } ClassRegistrationInfo;
 
 static const ClassRegistrationInfo gClasses[] = {
-    {"android/opengl/Matrix", gMatrixMethods, NELEM(gMatrixMethods)},
     {"android/opengl/Visibility", gVisibilityMethods, NELEM(gVisibilityMethods)},
     {"android/opengl/GLUtils", gUtilsMethods, NELEM(gUtilsMethods)},
     {"android/opengl/ETC1", gEtc1Methods, NELEM(gEtc1Methods)},
@@ -1096,7 +972,6 @@ static const ClassRegistrationInfo gClasses[] = {
 
 int register_android_opengl_classes(JNIEnv* env)
 {
-    nativeClassInitBuffer(env);
     int result = 0;
     for (int i = 0; i < NELEM(gClasses); i++) {
         const ClassRegistrationInfo* cri = &gClasses[i];

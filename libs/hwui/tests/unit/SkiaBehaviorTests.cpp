@@ -16,10 +16,14 @@
 
 #include "tests/common/TestUtils.h"
 
-#include <SkBlurDrawLooper.h>
+#include <SkBitmap.h>
+#include <SkBlendMode.h>
+#include <SkColor.h>
 #include <SkColorMatrixFilter.h>
 #include <SkColorSpace.h>
-#include <SkImagePriv.h>
+#include <SkImageInfo.h>
+#include <SkPaint.h>
+#include <SkPath.h>
 #include <SkPathOps.h>
 #include <SkShader.h>
 #include <gtest/gtest.h>
@@ -35,23 +39,6 @@ SkBitmap createSkBitmap(int width, int height) {
     return bitmap;
 }
 
-/**
- * 1x1 bitmaps must not be optimized into solid color shaders, since HWUI can't
- * compose/render color shaders
- */
-TEST(SkiaBehavior, CreateBitmapShader1x1) {
-    SkBitmap origBitmap = createSkBitmap(1, 1);
-    sk_sp<SkImage> image = SkMakeImageFromRasterBitmap(origBitmap, kNever_SkCopyPixelsMode);
-    sk_sp<SkShader> s =
-            image->makeShader(SkShader::kClamp_TileMode, SkShader::kRepeat_TileMode, nullptr);
-
-    SkBitmap bitmap;
-    SkShader::TileMode xy[2];
-    ASSERT_TRUE(s->isABitmap(&bitmap, nullptr, xy))
-            << "1x1 bitmap shader must query as bitmap shader";
-    EXPECT_EQ(origBitmap.pixelRef(), bitmap.pixelRef());
-}
-
 TEST(SkiaBehavior, genIds) {
     SkBitmap bitmap = createSkBitmap(100, 100);
     uint32_t genId = bitmap.getGenerationID();
@@ -65,25 +52,25 @@ TEST(SkiaBehavior, lightingColorFilter_simplify) {
 
         SkColor observedColor;
         SkBlendMode observedMode;
-        ASSERT_TRUE(filter->asColorMode(&observedColor, &observedMode));
+        ASSERT_TRUE(filter->asAColorMode(&observedColor, &observedMode));
         EXPECT_EQ(0xFF223344, observedColor);
         EXPECT_EQ(SkBlendMode::kModulate, observedMode);
     }
 
     {
         sk_sp<SkColorFilter> failFilter(SkColorMatrixFilter::MakeLightingFilter(0x11223344, 0x1));
-        EXPECT_FALSE(failFilter->asColorMode(nullptr, nullptr));
+        EXPECT_FALSE(failFilter->asAColorMode(nullptr, nullptr));
     }
 }
 
 TEST(SkiaBehavior, porterDuffCreateIsCached) {
     SkPaint paint;
     paint.setBlendMode(SkBlendMode::kOverlay);
-    auto expected = paint.getBlendMode();
+    auto expected = paint.asBlendMode();
     paint.setBlendMode(SkBlendMode::kClear);
-    ASSERT_NE(expected, paint.getBlendMode());
+    ASSERT_NE(expected, paint.asBlendMode());
     paint.setBlendMode(SkBlendMode::kOverlay);
-    ASSERT_EQ(expected, paint.getBlendMode());
+    ASSERT_EQ(expected, paint.asBlendMode());
 }
 
 TEST(SkiaBehavior, pathIntersection) {
@@ -102,15 +89,3 @@ TEST(SkiaBehavior, srgbColorSpaceIsSingleton) {
     ASSERT_EQ(sRGB1.get(), sRGB2.get());
 }
 
-TEST(SkiaBehavior, blurDrawLooper) {
-    sk_sp<SkDrawLooper> looper = SkBlurDrawLooper::Make(SK_ColorRED, 5.0f, 3.0f, 4.0f);
-
-    SkDrawLooper::BlurShadowRec blur;
-    bool success = looper->asABlurShadow(&blur);
-    ASSERT_TRUE(success);
-
-    ASSERT_EQ(SK_ColorRED, blur.fColor);
-    ASSERT_EQ(5.0f, blur.fSigma);
-    ASSERT_EQ(3.0f, blur.fOffset.fX);
-    ASSERT_EQ(4.0f, blur.fOffset.fY);
-}

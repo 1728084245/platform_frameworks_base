@@ -16,20 +16,22 @@
 
 package android.content.pm;
 
-import android.content.Intent;
 import android.content.res.Resources;
 import android.os.FileUtils;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.UserHandle;
-import android.support.test.filters.LargeTest;
+import android.platform.test.annotations.Presubmit;
 import android.test.AndroidTestCase;
 import android.util.AttributeSet;
 import android.util.SparseArray;
 
-import org.xmlpull.v1.XmlPullParser;
+import androidx.test.filters.LargeTest;
+
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
+
 import org.xmlpull.v1.XmlPullParserException;
-import org.xmlpull.v1.XmlSerializer;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -45,6 +47,7 @@ import java.util.Set;
 /**
  * Tests for {@link android.content.pm.RegisteredServicesCache}
  */
+@Presubmit
 @LargeTest
 public class RegisteredServicesCacheTest extends AndroidTestCase {
     private static final int U0 = 0;
@@ -82,9 +85,11 @@ public class RegisteredServicesCacheTest extends AndroidTestCase {
         assertEquals(2, cache.getAllServicesSize(U0));
         assertEquals(2, cache.getPersistentServicesSize(U0));
         assertNotEmptyFileCreated(cache, U0);
+        cache.unregisterReceivers();
         // Make sure all services can be loaded from xml
         cache = new TestServicesCache();
         assertEquals(2, cache.getPersistentServicesSize(U0));
+        cache.unregisterReceivers();
     }
 
     public void testGetAllServicesReplaceUid() {
@@ -107,6 +112,7 @@ public class RegisteredServicesCacheTest extends AndroidTestCase {
         assertTrue("UID must be updated to the new value",
                 uids.contains(SYSTEM_IMAGE_UID));
         assertFalse("UID must be updated to the new value", uids.contains(UID2));
+        cache.unregisterReceivers();
     }
 
     public void testGetAllServicesServiceRemoved() {
@@ -115,6 +121,7 @@ public class RegisteredServicesCacheTest extends AndroidTestCase {
         cache.addServiceForQuerying(U0, r2, newServiceInfo(t2, UID2));
         assertEquals(2, cache.getAllServicesSize(U0));
         assertEquals(2, cache.getPersistentServicesSize(U0));
+        cache.unregisterReceivers();
         // Re-read data from disk and verify services were saved
         cache = new TestServicesCache();
         assertEquals(2, cache.getPersistentServicesSize(U0));
@@ -122,6 +129,7 @@ public class RegisteredServicesCacheTest extends AndroidTestCase {
         cache.addServiceForQuerying(U0, r1, newServiceInfo(t1, UID1));
         assertEquals(1, cache.getAllServicesSize(U0));
         assertEquals(1, cache.getPersistentServicesSize(U0));
+        cache.unregisterReceivers();
     }
 
     public void testGetAllServicesMultiUser() {
@@ -134,12 +142,14 @@ public class RegisteredServicesCacheTest extends AndroidTestCase {
         assertEquals(1, cache.getAllServicesSize(U1));
         assertEquals(1, cache.getPersistentServicesSize(U1));
         assertEquals("No services should be available for user 3", 0, cache.getAllServicesSize(3));
+        cache.unregisterReceivers();
         // Re-read data from disk and verify services were saved
         cache = new TestServicesCache();
         assertEquals(1, cache.getPersistentServicesSize(U0));
         assertEquals(1, cache.getPersistentServicesSize(U1));
         assertNotEmptyFileCreated(cache, U0);
         assertNotEmptyFileCreated(cache, U1);
+        cache.unregisterReceivers();
     }
 
     public void testOnRemove() {
@@ -155,6 +165,7 @@ public class RegisteredServicesCacheTest extends AndroidTestCase {
         cache.clearServicesForQuerying();
         assertEquals(1, cache.getAllServicesSize(U0));
         assertEquals(0, cache.getAllServicesSize(U1));
+        cache.unregisterReceivers();
     }
 
     public void testMigration() {
@@ -183,40 +194,12 @@ public class RegisteredServicesCacheTest extends AndroidTestCase {
         cache.addServiceForQuerying(0, r2, newServiceInfo(t2, 2));
         assertEquals(2, cache.getAllServicesSize(u0));
         assertEquals(0, cache.getAllServicesSize(u1));
+        cache.unregisterReceivers();
         // Re-read data from disk. Verify that services were saved and old file was ignored
         cache = new TestServicesCache();
         assertEquals(2, cache.getPersistentServicesSize(u0));
         assertEquals(0, cache.getPersistentServicesSize(u1));
-    }
-
-    /**
-     * Check that an optimization to skip a call to PackageManager handles an invalidated cache.
-     *
-     * We added an optimization in generateServicesMap to only query PackageManager for packages
-     * that have been changed, because if a package is unchanged, we have already cached the
-     * services info for it, so we can save a query to PackageManager (and save some memory).
-     * However, if invalidateCache was called, we cannot optimize, and must do a full query.
-     * The initial optimization was buggy because it failed to check for an invalidated cache, and
-     * only scanned the changed packages, given in the ACTION_PACKAGE_CHANGED intent (b/122912184).
-     */
-    public void testParseServiceInfoOptimizationHandlesInvalidatedCache() {
-        TestServicesCache cache = new TestServicesCache();
-        cache.addServiceForQuerying(U0, r1, newServiceInfo(t1, UID1));
-        cache.addServiceForQuerying(U0, r2, newServiceInfo(t2, UID2));
-        assertEquals(2, cache.getAllServicesSize(U0));
-
-        // simulate the client of the cache invalidating it
-        cache.invalidateCache(U0);
-
-        // there should be 0 services (userServices.services == null ) at this point, but we don't
-        // call getAllServicesSize since that would force a full scan of packages,
-        // instead we trigger a package change in a package that is in the list of services
-        Intent intent = new Intent(Intent.ACTION_PACKAGE_CHANGED);
-        intent.putExtra(Intent.EXTRA_UID, UID1);
-        cache.handlePackageEvent(intent, U0);
-
-        // check that the optimization does a full query and caches both services
-        assertEquals(2, cache.getAllServicesSize(U0));
+        cache.unregisterReceivers();
     }
 
     private static RegisteredServicesCache.ServiceInfo<TestServiceType> newServiceInfo(
@@ -296,11 +279,6 @@ public class RegisteredServicesCacheTest extends AndroidTestCase {
                 map = new HashMap<>();
                 mServices.put(userId, map);
             }
-            // in actual cases, resolveInfo should always have a serviceInfo, since we specifically
-            // query for intent services
-            resolveInfo.serviceInfo = new android.content.pm.ServiceInfo();
-            resolveInfo.serviceInfo.applicationInfo =
-                new ApplicationInfo(serviceInfo.componentInfo.applicationInfo);
             map.put(resolveInfo, serviceInfo);
         }
 
@@ -339,21 +317,16 @@ public class RegisteredServicesCacheTest extends AndroidTestCase {
         public void onUserRemoved(int userId) {
             super.onUserRemoved(userId);
         }
-
-        @Override
-        public void handlePackageEvent(Intent intent, int userId) {
-            super.handlePackageEvent(intent, userId);
-        }
     }
 
     static class TestSerializer implements XmlSerializerAndParser<TestServiceType> {
 
-        public void writeAsXml(TestServiceType item, XmlSerializer out) throws IOException {
+        public void writeAsXml(TestServiceType item, TypedXmlSerializer out) throws IOException {
             out.attribute(null, "type", item.type);
             out.attribute(null, "value", item.value);
         }
 
-        public TestServiceType createFromXml(XmlPullParser parser)
+        public TestServiceType createFromXml(TypedXmlPullParser parser)
                 throws IOException, XmlPullParserException {
             final String type = parser.getAttributeValue(null, "type");
             final String value = parser.getAttributeValue(null, "value");

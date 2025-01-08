@@ -19,15 +19,37 @@
 
 <set xmlns:android="http://schemas.android.com/apk/res/android"
     android:shareInterpolator="false">
-    <translate
-        android:fromYDelta="-2%"
-        android:toYDelta="0"
-        android:interpolator="@interpolator/fast_out_slow_in"
-        android:duration="425"/>
+
     <alpha
-        android:fromAlpha="0.9"
+        android:fromAlpha="1.0"
         android:toAlpha="1.0"
-        android:interpolator="@interpolator/activity_close_dim"
+        android:fillEnabled="true"
+        android:fillBefore="true"
+        android:fillAfter="true"
+        android:interpolator="@interpolator/linear"
         android:startOffset="0"
-        android:duration="425"/>
+        android:duration="450" />
+
+    <translate
+        android:fromXDelta="-96dp"
+        android:toXDelta="0"
+        android:fillEnabled="true"
+        android:fillBefore="true"
+        android:fillAfter="true"
+        android:interpolator="@interpolator/fast_out_extra_slow_in"
+        android:startOffset="0"
+        android:duration="450" />
+
+    <extend
+        android:fromExtendLeft="0"
+        android:fromExtendTop="0"
+        android:fromExtendRight="96dp"
+        android:fromExtendBottom="0"
+        android:toExtendLeft="0"
+        android:toExtendTop="0"
+        android:toExtendRight="96dp"
+        android:toExtendBottom="0"
+        android:interpolator="@interpolator/fast_out_extra_slow_in"
+        android:startOffset="0"
+        android:duration="450" />
 </set>

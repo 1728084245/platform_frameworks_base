@@ -17,10 +17,11 @@
 #pragma once
 
 #include "RenderNodeDrawable.h"
+#include "SkiaUtils.h"
 
 #include <SkCanvas.h>
 #include <SkDrawable.h>
-#include <utils/FatVector.h>
+#include <ui/FatVector.h>
 
 namespace android {
 namespace uirenderer {
@@ -41,7 +42,7 @@ public:
     explicit StartReorderBarrierDrawable(SkiaDisplayList* data);
 
 protected:
-    virtual SkRect onGetBounds() override { return SkRect::MakeLargest(); }
+    virtual SkRect onGetBounds() override { return SkRectMakeLargest(); }
     virtual void onDraw(SkCanvas* canvas) override;
 
 private:
@@ -65,7 +66,7 @@ public:
     explicit EndReorderBarrierDrawable(StartReorderBarrierDrawable* startBarrier);
 
 protected:
-    virtual SkRect onGetBounds() override { return SkRect::MakeLargest(); }
+    virtual SkRect onGetBounds() override { return SkRectMakeLargest(); }
     virtual void onDraw(SkCanvas* canvas) override;
 
 private:
@@ -73,6 +74,6 @@ private:
     StartReorderBarrierDrawable* mStartBarrier;
 };
 
-};  // namespace skiapipeline
-};  // namespace uirenderer
-};  // namespace android
+}  // namespace skiapipeline
+}  // namespace uirenderer
+}  // namespace android

@@ -16,17 +16,23 @@
 
 package android.telecom;
 
+import android.Manifest;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
+import android.annotation.RequiresPermission;
 import android.annotation.SdkConstant;
+import android.annotation.SystemApi;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
+import android.os.Parcel;
+import android.os.Parcelable;
 import android.os.RemoteException;
 
 import com.android.internal.os.SomeArgs;
@@ -35,6 +41,7 @@ import com.android.internal.telecom.ICallScreeningService;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.Objects;
 
 /**
  * This service can be implemented by the default dialer (see
@@ -63,7 +70,7 @@ import java.lang.annotation.RetentionPolicy;
  *     </li>
  * </ol>
  * <p>
- * <h2>Becoming the {@link CallScreeningService}</h2>
+ * <h2>Becoming the CallScreeningService</h2>
  * Telecom will bind to a single app chosen by the user which implements the
  * {@link CallScreeningService} API when there are new incoming and outgoing calls.
  * <p>
@@ -75,7 +82,7 @@ import java.lang.annotation.RetentionPolicy;
  *
  * public void requestRole() {
  *     RoleManager roleManager = (RoleManager) getSystemService(ROLE_SERVICE);
- *     Intent intent = roleManager.createRequestRoleIntent("android.app.role.CALL_SCREENING_APP");
+ *     Intent intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING);
  *     startActivityForResult(intent, REQUEST_ID);
  * }
  *
@@ -89,7 +96,27 @@ import java.lang.annotation.RetentionPolicy;
  *         }
  *     }
  * }
+ * }
  * </pre>
+ *
+ * <h2>CallScreeningService Lifecycle</h2>
+ *
+ * The framework binds to the {@link CallScreeningService} implemented by the user-chosen app
+ * filling the {@link android.app.role.RoleManager#ROLE_CALL_SCREENING} role when incoming calls are
+ * received (prior to ringing) and when outgoing calls are placed.  The platform calls the
+ * {@link #onScreenCall(Call.Details)} method to provide your service with details about the call.
+ * <p>
+ * For incoming calls, the {@link CallScreeningService} must call
+ * {@link #respondToCall(Call.Details, CallResponse)} within 5 seconds of being bound to indicate to
+ * the platform whether the call should be blocked or not.  Your app must do this even if it is
+ * primarily performing caller ID operations and not screening calls.  It is important to perform
+ * screening operations in a timely matter as the user's device will not begin ringing until the
+ * response is received (or the timeout is hit).  A {@link CallScreeningService} may choose to
+ * perform local database lookups to help determine if a call should be screened or not; care should
+ * be taken to ensure the timeout is not repeatedly hit, causing delays in the incoming call flow.
+ * <p>
+ * If your app provides a caller ID experience, it should launch an activity to show the caller ID
+ * information from {@link #onScreenCall(Call.Details)}.
  */
 public abstract class CallScreeningService extends Service {
     /**
@@ -108,8 +135,17 @@ public abstract class CallScreeningService extends Service {
                     SomeArgs args = (SomeArgs) msg.obj;
                     try {
                         mCallScreeningAdapter = (ICallScreeningAdapter) args.arg1;
-                        onScreenCall(
-                                Call.Details.createFromParcelableCall((ParcelableCall) args.arg2));
+                        Call.Details callDetails = Call.Details
+                                .createFromParcelableCall((ParcelableCall) args.arg2);
+                        onScreenCall(callDetails);
+                        if (callDetails.getCallDirection() == Call.Details.DIRECTION_OUTGOING) {
+                            mCallScreeningAdapter.onScreeningResponse(
+                                    callDetails.getTelecomCallId(),
+                                    new ComponentName(getPackageName(), getClass().getName()),
+                                    null);
+                        }
+                    } catch (RemoteException e) {
+                        Log.w(this, "Exception when screening call: " + e);
                     } finally {
                         args.recycle();
                     }
@@ -131,24 +167,186 @@ public abstract class CallScreeningService extends Service {
 
     private ICallScreeningAdapter mCallScreeningAdapter;
 
-    /*
-     * Information about how to respond to an incoming call.
+    /**
+     * Parcelable version of {@link CallResponse} used to do IPC.
+     * @hide
      */
-    public static class CallResponse {
+    public static class ParcelableCallResponse implements Parcelable {
         private final boolean mShouldDisallowCall;
         private final boolean mShouldRejectCall;
         private final boolean mShouldSilenceCall;
         private final boolean mShouldSkipCallLog;
         private final boolean mShouldSkipNotification;
+        private final boolean mShouldScreenCallViaAudioProcessing;
+
+        private final int mCallComposerAttachmentsToShow;
+
+        private ParcelableCallResponse(
+                boolean shouldDisallowCall,
+                boolean shouldRejectCall,
+                boolean shouldSilenceCall,
+                boolean shouldSkipCallLog,
+                boolean shouldSkipNotification,
+                boolean shouldScreenCallViaAudioProcessing,
+                int callComposerAttachmentsToShow) {
+            mShouldDisallowCall = shouldDisallowCall;
+            mShouldRejectCall = shouldRejectCall;
+            mShouldSilenceCall = shouldSilenceCall;
+            mShouldSkipCallLog = shouldSkipCallLog;
+            mShouldSkipNotification = shouldSkipNotification;
+            mShouldScreenCallViaAudioProcessing = shouldScreenCallViaAudioProcessing;
+            mCallComposerAttachmentsToShow = callComposerAttachmentsToShow;
+        }
+
+        protected ParcelableCallResponse(Parcel in) {
+            mShouldDisallowCall = in.readBoolean();
+            mShouldRejectCall = in.readBoolean();
+            mShouldSilenceCall = in.readBoolean();
+            mShouldSkipCallLog = in.readBoolean();
+            mShouldSkipNotification = in.readBoolean();
+            mShouldScreenCallViaAudioProcessing = in.readBoolean();
+            mCallComposerAttachmentsToShow = in.readInt();
+        }
+
+        public CallResponse toCallResponse() {
+            return new CallResponse.Builder()
+                    .setDisallowCall(mShouldDisallowCall)
+                    .setRejectCall(mShouldRejectCall)
+                    .setSilenceCall(mShouldSilenceCall)
+                    .setSkipCallLog(mShouldSkipCallLog)
+                    .setSkipNotification(mShouldSkipNotification)
+                    .setShouldScreenCallViaAudioProcessing(mShouldScreenCallViaAudioProcessing)
+                    .setCallComposerAttachmentsToShow(mCallComposerAttachmentsToShow)
+                    .build();
+        }
+
+        public boolean shouldDisallowCall() {
+            return mShouldDisallowCall;
+        }
+
+        public boolean shouldRejectCall() {
+            return mShouldRejectCall;
+        }
+
+        public boolean shouldSilenceCall() {
+            return mShouldSilenceCall;
+        }
+
+        public boolean shouldSkipCallLog() {
+            return mShouldSkipCallLog;
+        }
+
+        public boolean shouldSkipNotification() {
+            return mShouldSkipNotification;
+        }
+
+        public boolean shouldScreenCallViaAudioProcessing() {
+            return mShouldScreenCallViaAudioProcessing;
+        }
+
+        public int getCallComposerAttachmentsToShow() {
+            return mCallComposerAttachmentsToShow;
+        }
+
+        public static final Creator<ParcelableCallResponse> CREATOR =
+                new Creator<ParcelableCallResponse>() {
+                    @Override
+                    public ParcelableCallResponse createFromParcel(Parcel in) {
+                        return new ParcelableCallResponse(in);
+                    }
+
+                    @Override
+                    public ParcelableCallResponse[] newArray(int size) {
+                        return new ParcelableCallResponse[size];
+                    }
+                };
+
+        @Override
+        public int describeContents() {
+            return 0;
+        }
+
+        @Override
+        public void writeToParcel(Parcel dest, int flags) {
+            dest.writeBoolean(mShouldDisallowCall);
+            dest.writeBoolean(mShouldRejectCall);
+            dest.writeBoolean(mShouldSilenceCall);
+            dest.writeBoolean(mShouldSkipCallLog);
+            dest.writeBoolean(mShouldSkipNotification);
+            dest.writeBoolean(mShouldScreenCallViaAudioProcessing);
+            dest.writeInt(mCallComposerAttachmentsToShow);
+        }
+    }
+
+    /**
+     * Information about how to respond to an incoming call. Call screening apps can construct an
+     * instance of this class using {@link CallResponse.Builder}.
+     */
+    public static class CallResponse {
+        /**
+         * Bit flag indicating whether to show the picture attachment for call composer.
+         *
+         * Used with {@link Builder#setCallComposerAttachmentsToShow(int)}.
+         */
+        public static final int CALL_COMPOSER_ATTACHMENT_PICTURE = 1;
+
+        /**
+         * Bit flag indicating whether to show the location attachment for call composer.
+         *
+         * Used with {@link Builder#setCallComposerAttachmentsToShow(int)}.
+         */
+        public static final int CALL_COMPOSER_ATTACHMENT_LOCATION = 1 << 1;
+
+        /**
+         * Bit flag indicating whether to show the subject attachment for call composer.
+         *
+         * Used with {@link Builder#setCallComposerAttachmentsToShow(int)}.
+         */
+        public static final int CALL_COMPOSER_ATTACHMENT_SUBJECT = 1 << 2;
+
+        /**
+         * Bit flag indicating whether to show the priority attachment for call composer.
+         *
+         * Used with {@link Builder#setCallComposerAttachmentsToShow(int)}.
+         */
+        public static final int CALL_COMPOSER_ATTACHMENT_PRIORITY = 1 << 3;
+
+        /** @hide */
+        @Retention(RetentionPolicy.SOURCE)
+        @IntDef(prefix = "CALL_COMPOSER_ATTACHMENT_", flag = true,
+                value = {
+                        CALL_COMPOSER_ATTACHMENT_PICTURE,
+                        CALL_COMPOSER_ATTACHMENT_LOCATION,
+                        CALL_COMPOSER_ATTACHMENT_SUBJECT,
+                        CALL_COMPOSER_ATTACHMENT_PRIORITY
+                }
+        )
+        public @interface CallComposerAttachmentType {}
+
+        private static final int NUM_CALL_COMPOSER_ATTACHMENT_TYPES = 4;
+
+        private final boolean mShouldDisallowCall;
+        private final boolean mShouldRejectCall;
+        private final boolean mShouldSilenceCall;
+        private final boolean mShouldSkipCallLog;
+        private final boolean mShouldSkipNotification;
+        private final boolean mShouldScreenCallViaAudioProcessing;
+        private final int mCallComposerAttachmentsToShow;
 
         private CallResponse(
                 boolean shouldDisallowCall,
                 boolean shouldRejectCall,
                 boolean shouldSilenceCall,
                 boolean shouldSkipCallLog,
-                boolean shouldSkipNotification) {
+                boolean shouldSkipNotification,
+                boolean shouldScreenCallViaAudioProcessing,
+                int callComposerAttachmentsToShow) {
             if (!shouldDisallowCall
                     && (shouldRejectCall || shouldSkipCallLog || shouldSkipNotification)) {
+                throw new IllegalStateException("Invalid response state for allowed call.");
+            }
+
+            if (shouldDisallowCall && shouldScreenCallViaAudioProcessing) {
                 throw new IllegalStateException("Invalid response state for allowed call.");
             }
 
@@ -157,6 +355,8 @@ public abstract class CallScreeningService extends Service {
             mShouldSkipCallLog = shouldSkipCallLog;
             mShouldSkipNotification = shouldSkipNotification;
             mShouldSilenceCall = shouldSilenceCall;
+            mShouldScreenCallViaAudioProcessing = shouldScreenCallViaAudioProcessing;
+            mCallComposerAttachmentsToShow = callComposerAttachmentsToShow;
         }
 
         /*
@@ -195,12 +395,66 @@ public abstract class CallScreeningService extends Service {
             return mShouldSkipNotification;
         }
 
+        /**
+         * @return Whether we should enter the {@link Call#STATE_AUDIO_PROCESSING} state to allow
+         * for further screening of the call.
+         * @hide
+         */
+        public boolean getShouldScreenCallViaAudioProcessing() {
+            return mShouldScreenCallViaAudioProcessing;
+        }
+
+        /**
+         * @return A bitmask of call composer attachments that should be shown to the user.
+         */
+        public @CallComposerAttachmentType int getCallComposerAttachmentsToShow() {
+            return mCallComposerAttachmentsToShow;
+        }
+
+        /** @hide */
+        public ParcelableCallResponse toParcelable() {
+            return new ParcelableCallResponse(
+                    mShouldDisallowCall,
+                    mShouldRejectCall,
+                    mShouldSilenceCall,
+                    mShouldSkipCallLog,
+                    mShouldSkipNotification,
+                    mShouldScreenCallViaAudioProcessing,
+                    mCallComposerAttachmentsToShow
+            );
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            CallResponse that = (CallResponse) o;
+            return mShouldDisallowCall == that.mShouldDisallowCall &&
+                    mShouldRejectCall == that.mShouldRejectCall &&
+                    mShouldSilenceCall == that.mShouldSilenceCall &&
+                    mShouldSkipCallLog == that.mShouldSkipCallLog &&
+                    mShouldSkipNotification == that.mShouldSkipNotification &&
+                    mShouldScreenCallViaAudioProcessing
+                            == that.mShouldScreenCallViaAudioProcessing &&
+                    mCallComposerAttachmentsToShow == that.mCallComposerAttachmentsToShow;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(mShouldDisallowCall, mShouldRejectCall, mShouldSilenceCall,
+                    mShouldSkipCallLog, mShouldSkipNotification,
+                    mShouldScreenCallViaAudioProcessing,
+                    mCallComposerAttachmentsToShow);
+        }
+
         public static class Builder {
             private boolean mShouldDisallowCall;
             private boolean mShouldRejectCall;
             private boolean mShouldSilenceCall;
             private boolean mShouldSkipCallLog;
             private boolean mShouldSkipNotification;
+            private boolean mShouldScreenCallViaAudioProcessing;
+            private int mCallComposerAttachmentsToShow = -1;
 
             /**
              * Sets whether the incoming call should be blocked.
@@ -241,6 +495,9 @@ public abstract class CallScreeningService extends Service {
              * Note: Calls will still be logged with type
              * {@link android.provider.CallLog.Calls#BLOCKED_TYPE}, regardless of how this property
              * is set.
+             * <p>
+             * Note: Only the carrier and system call screening apps can use this parameter;
+             * this parameter is ignored otherwise.
              */
             public Builder setSkipCallLog(boolean shouldSkipCallLog) {
                 mShouldSkipCallLog = shouldSkipCallLog;
@@ -256,13 +513,77 @@ public abstract class CallScreeningService extends Service {
                 return this;
             }
 
+            /**
+             * Sets whether to request background audio processing so that the in-call service can
+             * screen the call further. If set to {@code true}, {@link #setDisallowCall} should be
+             * called with {@code false}, and all other parameters in this builder will be ignored.
+             * <p>
+             * This request will only be honored if the {@link CallScreeningService} shares the same
+             * uid as the system dialer app. Otherwise, the call will go through as usual.
+             * <p>
+             * Apps built with SDK version {@link android.os.Build.VERSION_CODES#R} or later which
+             * are using the microphone as part of audio processing should specify the
+             * foreground service type using the attribute
+             * {@link android.R.attr#foregroundServiceType} in the {@link CallScreeningService}
+             * service element of the app's manifest file.
+             * The {@link ServiceInfo#FOREGROUND_SERVICE_TYPE_MICROPHONE} attribute should be
+             * specified.
+             * @see
+             * <a href="https://developer.android.com/preview/privacy/foreground-service-types">
+             *     the Android Developer Site</a> for more information.
+             *
+             * @param shouldScreenCallViaAudioProcessing Whether to request further call screening.
+             * @hide
+             */
+            @SystemApi
+            @RequiresPermission(Manifest.permission.CAPTURE_AUDIO_OUTPUT)
+            public @NonNull Builder setShouldScreenCallViaAudioProcessing(
+                    boolean shouldScreenCallViaAudioProcessing) {
+                mShouldScreenCallViaAudioProcessing = shouldScreenCallViaAudioProcessing;
+                return this;
+            }
+
+            /**
+             * Sets the call composer attachments that should be shown to the user.
+             *
+             * Attachments that are not shown will not be passed to the in-call UI responsible for
+             * displaying the call to the user.
+             *
+             * If this method is not called on a {@link Builder}, all attachments will be shown,
+             * except pictures, which will only be shown to users if the call is from a contact.
+             *
+             * Setting attachments to show will have no effect if the call screening service does
+             * not belong to the same package as the system dialer (as returned by
+             * {@link TelecomManager#getSystemDialerPackage()}).
+             *
+             * @param callComposerAttachmentsToShow A bitmask of call composer attachments to show.
+             */
+            public @NonNull Builder setCallComposerAttachmentsToShow(
+                    @CallComposerAttachmentType int callComposerAttachmentsToShow) {
+                // If the argument is less than zero (meaning unset), no-op since the conversion
+                // to/from the parcelable version may call with that value.
+                if (callComposerAttachmentsToShow < 0) {
+                    return this;
+                }
+
+                if ((callComposerAttachmentsToShow
+                        & (1 << NUM_CALL_COMPOSER_ATTACHMENT_TYPES)) != 0) {
+                    throw new IllegalArgumentException("Attachment types must match the ones"
+                            + " defined in CallResponse");
+                }
+                mCallComposerAttachmentsToShow = callComposerAttachmentsToShow;
+                return this;
+            }
+
             public CallResponse build() {
                 return new CallResponse(
                         mShouldDisallowCall,
                         mShouldRejectCall,
                         mShouldSilenceCall,
                         mShouldSkipCallLog,
-                        mShouldSkipNotification);
+                        mShouldSkipNotification,
+                        mShouldScreenCallViaAudioProcessing,
+                        mCallComposerAttachmentsToShow);
             }
        }
     }
@@ -283,7 +604,7 @@ public abstract class CallScreeningService extends Service {
     }
 
     /**
-     * Called when a new incoming or outgoing call is added which is not in the user's contact list.
+     * Called when a new incoming or outgoing call is added.
      * <p>
      * A {@link CallScreeningService} must indicate whether an incoming call is allowed or not by
      * calling
@@ -291,21 +612,33 @@ public abstract class CallScreeningService extends Service {
      * Your app can tell if a call is an incoming call by checking to see if
      * {@link Call.Details#getCallDirection()} is {@link Call.Details#DIRECTION_INCOMING}.
      * <p>
-     * Note: The {@link Call.Details} instance provided to a call screening service will only have
-     * the following properties set.  The rest of the {@link Call.Details} properties will be set to
-     * their default value or {@code null}.
+     * <em>Note:</em> A {@link CallScreeningService} must respond to a call within 5 seconds.  After
+     * this time, the framework will unbind from the {@link CallScreeningService} and ignore its
+     * response.
+     * <p>
+     * <em>Note:</em> The {@link Call.Details} instance provided to a call screening service will
+     * only have the following properties set.  The rest of the {@link Call.Details} properties will
+     * be set to their default value or {@code null}.
      * <ul>
      *     <li>{@link Call.Details#getCallDirection()}</li>
+     *     <li>{@link Call.Details#getCallerNumberVerificationStatus()}</li>
      *     <li>{@link Call.Details#getConnectTimeMillis()}</li>
      *     <li>{@link Call.Details#getCreationTimeMillis()}</li>
      *     <li>{@link Call.Details#getHandle()}</li>
-     *     <li>{@link Call.Details#getHandlePresentation()}</li>
      * </ul>
      * <p>
      * Only calls where the {@link Call.Details#getHandle() handle} {@link Uri#getScheme() scheme}
      * is {@link PhoneAccount#SCHEME_TEL} are passed for call
      * screening.  Further, only calls which are not in the user's contacts are passed for
-     * screening.  For outgoing calls, no post-dial digits are passed.
+     * screening, unless the {@link CallScreeningService} has been granted
+     * {@link Manifest.permission#READ_CONTACTS} permission by the user.  For outgoing calls, no
+     * post-dial digits are passed.
+     * <p>
+     * Calls with a {@link Call.Details#getHandlePresentation()} of
+     * {@link TelecomManager#PRESENTATION_RESTRICTED}, {@link TelecomManager#PRESENTATION_UNKNOWN},
+     * {@link TelecomManager#PRESENTATION_UNAVAILABLE} or
+     * {@link TelecomManager#PRESENTATION_PAYPHONE} presentation are not provided to the
+     * {@link CallScreeningService}.
      *
      * @param callDetails Information about a new call, see {@link Call.Details}.
      */
@@ -320,6 +653,13 @@ public abstract class CallScreeningService extends Service {
      * <p>
      * Calls to this method are ignored unless the {@link Call.Details#getCallDirection()} is
      * {@link Call.Details#DIRECTION_INCOMING}.
+     * <p>
+     * For incoming calls, a {@link CallScreeningService} MUST call this method within 5 seconds of
+     * {@link #onScreenCall(Call.Details)} being invoked by the platform.
+     * <p>
+     * Calls which are blocked/rejected will be logged to the system call log with a call type of
+     * {@link android.provider.CallLog.Calls#BLOCKED_TYPE} and
+     * {@link android.provider.CallLog.Calls#BLOCK_REASON_CALL_SCREENING_SERVICE} block reason.
      *
      * @param callDetails The call to allow.
      *                    <p>
@@ -331,19 +671,12 @@ public abstract class CallScreeningService extends Service {
     public final void respondToCall(@NonNull Call.Details callDetails,
             @NonNull CallResponse response) {
         try {
-            if (response.getDisallowCall()) {
-                mCallScreeningAdapter.disallowCall(
-                        callDetails.getTelecomCallId(),
-                        response.getRejectCall(),
-                        !response.getSkipCallLog(),
-                        !response.getSkipNotification(),
-                        new ComponentName(getPackageName(), getClass().getName()));
-            } else if (response.getSilenceCall()) {
-                mCallScreeningAdapter.silenceCall(callDetails.getTelecomCallId());
-            } else {
-                mCallScreeningAdapter.allowCall(callDetails.getTelecomCallId());
-            }
+            mCallScreeningAdapter.onScreeningResponse(
+                    callDetails.getTelecomCallId(),
+                    new ComponentName(getPackageName(), getClass().getName()),
+                    response.toParcelable());
         } catch (RemoteException e) {
+            Log.e(this, e, "Got remote exception when returning response");
         }
     }
 }

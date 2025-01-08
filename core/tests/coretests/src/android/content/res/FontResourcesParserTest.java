@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package android.content.res;
 
 import static android.content.res.FontResourcesParser.FamilyResourceEntry;
@@ -25,14 +26,17 @@ import static junit.framework.Assert.assertTrue;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 
-import android.app.Instrumentation;
-import android.support.test.InstrumentationRegistry;
-import android.support.test.filters.SmallTest;
-import android.support.test.runner.AndroidJUnit4;
+import android.platform.test.annotations.Presubmit;
+import android.platform.test.ravenwood.RavenwoodRule;
+
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
+import androidx.test.platform.app.InstrumentationRegistry;
 
 import com.android.frameworks.coretests.R;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.xmlpull.v1.XmlPullParserException;
@@ -43,17 +47,19 @@ import java.util.List;
 /**
  * Tests for {@link FontResourcesParser}.
  */
+@Presubmit
 @SmallTest
 @RunWith(AndroidJUnit4.class)
 public class FontResourcesParserTest {
 
-    private Instrumentation mInstrumentation;
+    @Rule
+    public final RavenwoodRule mRavenwood = new RavenwoodRule.Builder().build();
+
     private Resources mResources;
 
     @Before
     public void setup() {
-        mInstrumentation = InstrumentationRegistry.getInstrumentation();
-        mResources = mInstrumentation.getContext().getResources();
+        mResources = InstrumentationRegistry.getInstrumentation().getContext().getResources();
     }
 
     @Test
@@ -103,6 +109,7 @@ public class FontResourcesParserTest {
         assertEquals("com.example.test.fontprovider.authority", providerEntry.getAuthority());
         assertEquals("com.example.test.fontprovider.package", providerEntry.getPackage());
         assertEquals("MyRequestedFont", providerEntry.getQuery());
+        assertEquals("my-request-font", providerEntry.getSystemFontFamilyName());
     }
 
     @Test

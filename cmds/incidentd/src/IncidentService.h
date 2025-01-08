@@ -20,13 +20,16 @@
 
 #include "Reporter.h"
 
+#include "Broadcaster.h"
+#include "Throttler.h"
+#include "WorkDirectory.h"
+
 #include <android/os/BnIncidentManager.h>
 #include <utils/Looper.h>
 
-#include <deque>
+#include <vector>
 #include <mutex>
 
-#include "Throttler.h"
 
 namespace android {
 namespace os {
@@ -37,61 +40,81 @@ using namespace android::base;
 using namespace android::binder;
 using namespace android::os;
 
-// ================================================================================
-class ReportRequestQueue : public virtual RefBase {
-public:
-    ReportRequestQueue();
-    virtual ~ReportRequestQueue();
-
-    void addRequest(const sp<ReportRequest>& request);
-    sp<ReportRequest> getNextRequest();
-
-private:
-    mutex mLock;
-    deque<sp<ReportRequest> > mQueue;
-};
+class BringYourOwnSection;
 
 // ================================================================================
 class ReportHandler : public MessageHandler {
 public:
-    ReportHandler(const sp<Looper>& handlerLooper, const sp<ReportRequestQueue>& queue,
-                  const sp<Throttler>& throttler);
+    ReportHandler(const sp<WorkDirectory>& workDirectory,
+                  const sp<Broadcaster>& broadcaster,
+                  const sp<Looper>& handlerLooper,
+                  const sp<Throttler>& throttler,
+                  const vector<BringYourOwnSection*>& registeredSections);
     virtual ~ReportHandler();
 
     virtual void handleMessage(const Message& message);
 
     /**
-     * Adds a ReportRequest to the queue.
+     * Schedule a report for the "main" report, where it will be delivered to
+     * the uploaders and/or dropbox.
      */
-    void scheduleRunReport(const sp<ReportRequest>& request);
+    void schedulePersistedReport(const IncidentReportArgs& args);
+
+    /**
+     * Adds a ReportRequest to the queue for one that has a listener an and fd
+     */
+    void scheduleStreamingReport(const IncidentReportArgs& args,
+                                    const sp<IIncidentReportStatusListener>& listener,
+                                    int streamFd);
 
     /**
      * Resets mBacklogDelay to the default and schedules sending
      * the messages to dropbox.
      */
-    void scheduleSendBacklogToDropbox();
+    void scheduleSendBacklog();
 
 private:
     mutex mLock;
-    nsecs_t mBacklogDelay;
+
+    sp<WorkDirectory> mWorkDirectory;
+    sp<Broadcaster> mBroadcaster;
+
     sp<Looper> mHandlerLooper;
-    sp<ReportRequestQueue> mQueue;
+    nsecs_t mBacklogDelay;
     sp<Throttler> mThrottler;
+
+    const vector<BringYourOwnSection*>& mRegisteredSections;
+
+    sp<ReportBatch> mBatch;
 
     /**
      * Runs all of the reports that have been queued.
      */
-    void run_report();
+    void take_report();
 
     /**
-     * Schedules a dropbox task mBacklogDelay nanoseconds from now.
+     * Schedules permission controller approve the reports.
      */
-    void schedule_send_backlog_to_dropbox_locked();
+    void schedule_send_approvals_locked();
 
     /**
-     * Sends the backlog to the dropbox service.
+     * Sends the approvals to the PermissionController
      */
-    void send_backlog_to_dropbox();
+    void send_approvals();
+
+    /**
+     * Schedules the broadcasts that reports are complete mBacklogDelay nanoseconds from now.
+     * The delay is because typically when an incident report is taken, the system is not
+     * really in a happy state.  So we wait a bit before sending the report to let things
+     * quiet down if they can.  The urgency is in taking the report, not sharing the report.
+     * However, we don
+     */
+    void schedule_send_broadcasts_locked();
+
+    /**
+     * Sends the broadcasts to the dropbox service.
+     */
+    void send_broadcasts();
 };
 
 // ================================================================================
@@ -104,9 +127,28 @@ public:
 
     virtual Status reportIncidentToStream(const IncidentReportArgs& args,
                                           const sp<IIncidentReportStatusListener>& listener,
-                                          const unique_fd& stream);
+                                          unique_fd stream);
+
+    virtual Status reportIncidentToDumpstate(unique_fd stream,
+            const sp<IIncidentReportStatusListener>& listener);
+
+    virtual Status registerSection(int id, const String16& name,
+            const sp<IIncidentDumpCallback>& callback);
+
+    virtual Status unregisterSection(int id);
 
     virtual Status systemRunning();
+
+    virtual Status getIncidentReportList(const String16& pkg, const String16& cls,
+            vector<String16>* result);
+
+    virtual Status getIncidentReport(const String16& pkg, const String16& cls,
+            const String16& id, IncidentManager::IncidentReport* result);
+
+    virtual Status deleteIncidentReports(const String16& pkg, const String16& cls,
+            const String16& id);
+
+    virtual Status deleteAllIncidentReports(const String16& pkg);
 
     // Implement commands for debugging purpose.
     virtual status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply,
@@ -114,9 +156,11 @@ public:
     virtual status_t command(FILE* in, FILE* out, FILE* err, Vector<String8>& args);
 
 private:
-    sp<ReportRequestQueue> mQueue;
+    sp<WorkDirectory> mWorkDirectory;
+    sp<Broadcaster> mBroadcaster;
     sp<ReportHandler> mHandler;
     sp<Throttler> mThrottler;
+    vector<BringYourOwnSection*> mRegisteredSections;
 
     /**
      * Commands print out help.

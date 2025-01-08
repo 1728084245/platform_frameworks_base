@@ -17,20 +17,19 @@
 #ifndef _ANDROID_GRAPHICS_SURFACETEXTURE_H
 #define _ANDROID_GRAPHICS_SURFACETEXTURE_H
 
-#include <android/native_window.h>
+#include <utils/StrongPointer.h>
 
 #include "jni.h"
 
 namespace android {
 
-class GLConsumer;
 class IGraphicBufferProducer;
+class SurfaceTexture;
 
-extern sp<ANativeWindow> android_SurfaceTexture_getNativeWindow(JNIEnv* env, jobject thiz);
 extern bool android_SurfaceTexture_isInstanceOf(JNIEnv* env, jobject thiz);
 
-/* Gets the underlying GLConsumer from a SurfaceTexture Java object. */
-extern sp<GLConsumer> SurfaceTexture_getSurfaceTexture(JNIEnv* env, jobject thiz);
+/* Gets the underlying C++ SurfaceTexture object from a SurfaceTexture Java object. */
+extern sp<SurfaceTexture> SurfaceTexture_getSurfaceTexture(JNIEnv* env, jobject thiz);
 
 /* gets the producer end of the SurfaceTexture */
 extern sp<IGraphicBufferProducer> SurfaceTexture_getProducer(JNIEnv* env, jobject thiz);

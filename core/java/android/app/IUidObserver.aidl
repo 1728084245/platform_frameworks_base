@@ -24,7 +24,7 @@ oneway interface IUidObserver {
     // below block of transactions.
 
     // Since these transactions are also called from native code, these must be kept in sync with
-    // the ones in frameworks/native/include/binder/IActivityManager.h
+    // the ones in frameworks/native/include_activitymanager/binder/IActivityManager.h
     // =============== Beginning of transactions used on native side as well ======================
 
     /**
@@ -43,8 +43,6 @@ oneway interface IUidObserver {
      */
     void onUidIdle(int uid, boolean disabled);
 
-    // =============== End of transactions used on native side as well ============================
-
     /**
      * General report of a state change of an uid.
      *
@@ -52,8 +50,19 @@ oneway interface IUidObserver {
      * @param procState The updated process state for the uid.
      * @param procStateSeq The sequence no. associated with process state change of the uid,
      *                     see UidRecord.procStateSeq for details.
+     * @param capability the updated process capability for the uid.
      */
-    void onUidStateChanged(int uid, int procState, long procStateSeq);
+    void onUidStateChanged(int uid, int procState, long procStateSeq, int capability);
+
+    /**
+     * Report a proc oom adj change associated with a uid.
+     *
+     * @param uid The uid for which the state change is being reported.
+     * @param adj The minimum OOM adj among all processes with this uid.
+     */
+    void onUidProcAdjChanged(int uid, int adj);
+
+    // =============== End of transactions used on native side as well ============================
 
     /**
      * Report when the cached state of a uid has changed.

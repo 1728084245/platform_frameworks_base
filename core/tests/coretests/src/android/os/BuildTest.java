@@ -16,19 +16,36 @@
 
 package android.os;
 
-import android.os.Build;
-import android.test.suitebuilder.annotation.SmallTest;
-import android.util.Log;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+
+import android.platform.test.flag.junit.SetFlagsRule;
+import android.platform.test.ravenwood.RavenwoodRule;
+
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
+
 import junit.framework.Assert;
-import junit.framework.TestCase;
+
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.runner.RunWith;
 
 /**
  * Provides test cases for android.os.Build and, in turn, many of the
  * system properties set by the build system.
  */
-public class BuildTest extends TestCase {
-
+@RunWith(AndroidJUnit4.class)
+public class BuildTest {
     private static final String TAG = "BuildTest";
+
+    @Rule
+    public final RavenwoodRule mRavenwood = new RavenwoodRule();
+
+    @Rule
+    public final SetFlagsRule mSetFlagsRule = new SetFlagsRule(
+                SetFlagsRule.DefaultInitValueType.NULL_DEFAULT);
 
     /**
      * Asserts that a String is non-null and non-empty.  If it is not,
@@ -51,6 +68,7 @@ public class BuildTest extends TestCase {
     /**
      * Asserts that all android.os.Build fields are non-empty and/or in a valid range.
      */
+    @Test
     @SmallTest
     public void testBuildFields() throws Exception {
         assertNotEmpty("ID", Build.ID);
@@ -61,7 +79,7 @@ public class BuildTest extends TestCase {
         assertNotEmpty("BRAND", Build.BRAND);
         assertNotEmpty("MODEL", Build.MODEL);
         assertNotEmpty("VERSION.INCREMENTAL", Build.VERSION.INCREMENTAL);
-        assertNotEmpty("VERSION.RELEASE", Build.VERSION.RELEASE);
+        assertNotEmpty("VERSION.RELEASE", Build.VERSION.RELEASE_OR_CODENAME);
         assertNotEmpty("TYPE", Build.TYPE);
         Assert.assertNotNull("TAGS", Build.TAGS); // TAGS is allowed to be empty.
         assertNotEmpty("FINGERPRINT", Build.FINGERPRINT);
@@ -72,5 +90,17 @@ public class BuildTest extends TestCase {
         // TODO: if any of the android.os.Build fields have additional constraints
         // (e.g., must be a C identifier, must be a valid filename, must not contain any spaces)
         // add tests for them.
+    }
+
+    @Test
+    public void testFlagEnabled() throws Exception {
+        mSetFlagsRule.enableFlags(Flags.FLAG_ANDROID_OS_BUILD_VANILLA_ICE_CREAM);
+        assertTrue(Flags.androidOsBuildVanillaIceCream());
+    }
+
+    @Test
+    public void testFlagDisabled() throws Exception {
+        mSetFlagsRule.disableFlags(Flags.FLAG_ANDROID_OS_BUILD_VANILLA_ICE_CREAM);
+        assertFalse(Flags.androidOsBuildVanillaIceCream());
     }
 }

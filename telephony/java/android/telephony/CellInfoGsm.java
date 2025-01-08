@@ -17,10 +17,12 @@
 package android.telephony;
 
 import android.annotation.NonNull;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
-import android.telephony.Rlog;
+
+import com.android.telephony.Rlog;
 
 /**
  * A {@link CellInfo} representing a GSM cell that provides identity and measurement info.
@@ -34,7 +36,7 @@ public final class CellInfoGsm extends CellInfo implements Parcelable {
     private CellSignalStrengthGsm mCellSignalStrengthGsm;
 
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public CellInfoGsm() {
         super();
         mCellIdentityGsm = new CellIdentityGsm();
@@ -49,27 +51,11 @@ public final class CellInfoGsm extends CellInfo implements Parcelable {
     }
 
     /** @hide */
-    public CellInfoGsm(android.hardware.radio.V1_0.CellInfo ci) {
-        super(ci);
-        final android.hardware.radio.V1_0.CellInfoGsm cig = ci.gsm.get(0);
-        mCellIdentityGsm = new CellIdentityGsm(cig.cellIdentityGsm);
-        mCellSignalStrengthGsm = new CellSignalStrengthGsm(cig.signalStrengthGsm);
-    }
-
-    /** @hide */
-    public CellInfoGsm(android.hardware.radio.V1_2.CellInfo ci) {
-        super(ci);
-        final android.hardware.radio.V1_2.CellInfoGsm cig = ci.gsm.get(0);
-        mCellIdentityGsm = new CellIdentityGsm(cig.cellIdentityGsm);
-        mCellSignalStrengthGsm = new CellSignalStrengthGsm(cig.signalStrengthGsm);
-    }
-
-    /** @hide */
-    public CellInfoGsm(android.hardware.radio.V1_4.CellInfo ci, long timeStamp) {
-        super(ci, timeStamp);
-        final android.hardware.radio.V1_2.CellInfoGsm cig = ci.info.gsm();
-        mCellIdentityGsm = new CellIdentityGsm(cig.cellIdentityGsm);
-        mCellSignalStrengthGsm = new CellSignalStrengthGsm(cig.signalStrengthGsm);
+    public CellInfoGsm(int cellConnectionStatus, boolean registered, long timeStamp,
+            CellIdentityGsm cellIdentityGsm, CellSignalStrengthGsm cellSignalStrengthGsm) {
+        super(cellConnectionStatus, registered, timeStamp);
+        mCellIdentityGsm = cellIdentityGsm;
+        mCellSignalStrengthGsm = cellSignalStrengthGsm;
     }
 
     /**
@@ -166,7 +152,7 @@ public final class CellInfoGsm extends CellInfo implements Parcelable {
     }
 
     /** Implement the Parcelable interface */
-    public static final Creator<CellInfoGsm> CREATOR = new Creator<CellInfoGsm>() {
+    public static final @android.annotation.NonNull Creator<CellInfoGsm> CREATOR = new Creator<CellInfoGsm>() {
         @Override
         public CellInfoGsm createFromParcel(Parcel in) {
             in.readInt(); // Skip past token, we know what it is

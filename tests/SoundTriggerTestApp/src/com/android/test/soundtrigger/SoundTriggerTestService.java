@@ -23,6 +23,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.hardware.soundtrigger.SoundTrigger.RecognitionEvent;
 import android.hardware.soundtrigger.SoundTrigger.GenericSoundModel;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
@@ -31,6 +32,7 @@ import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.media.MediaPlayer;
 import android.media.soundtrigger.SoundTriggerDetector;
+import android.media.soundtrigger.SoundTriggerManager;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.IBinder;
@@ -46,6 +48,7 @@ import java.util.Properties;
 import java.util.Random;
 import java.util.UUID;
 
+
 public class SoundTriggerTestService extends Service {
     private static final String TAG = "SoundTriggerTestSrv";
     private static final String INTENT_ACTION = "com.android.intent.action.MANAGE_SOUND_TRIGGER";
@@ -56,6 +59,8 @@ public class SoundTriggerTestService extends Service {
     private SoundTriggerUtil mSoundTriggerUtil;
     private Random mRandom;
     private UserActivity mUserActivity;
+
+    private static int captureCount;
 
     public interface UserActivity {
         void addModel(UUID modelUuid, String state);
@@ -87,7 +92,7 @@ public class SoundTriggerTestService extends Service {
         super.onCreate();
         IntentFilter filter = new IntentFilter();
         filter.addAction(INTENT_ACTION);
-        registerReceiver(mBroadcastReceiver, filter);
+        registerReceiver(mBroadcastReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
 
         // Make sure the data directory exists, and we're the owner of it.
         try {
@@ -131,6 +136,8 @@ public class SoundTriggerTestService extends Service {
                         } else if (command.equals("set_capture_timeout")) {
                             setCaptureAudioTimeout(getModelUuidFromIntent(intent),
                                     intent.getIntExtra("timeout", 5000));
+                        } else if (command.equals("get_model_state")) {
+                            getModelState(getModelUuidFromIntent(intent));
                         } else {
                             Log.e(TAG, "Unknown command '" + command + "'");
                         }
@@ -232,8 +239,8 @@ public class SoundTriggerTestService extends Service {
         public AudioTrack captureAudioTrack;
     }
 
-    private GenericSoundModel createNewSoundModel(ModelInfo modelInfo) {
-        return new GenericSoundModel(modelInfo.modelUuid, modelInfo.vendorUuid,
+    private SoundTriggerManager.Model createNewSoundModel(ModelInfo modelInfo) {
+        return SoundTriggerManager.Model.create(modelInfo.modelUuid, modelInfo.vendorUuid,
                 modelInfo.modelData);
     }
 
@@ -246,14 +253,16 @@ public class SoundTriggerTestService extends Service {
 
         postMessage("Loading model: " + modelInfo.name);
 
-        GenericSoundModel soundModel = createNewSoundModel(modelInfo);
+        SoundTriggerManager.Model soundModel = createNewSoundModel(modelInfo);
 
         boolean status = mSoundTriggerUtil.addOrUpdateSoundModel(soundModel);
         if (status) {
-            postToast("Successfully loaded " + modelInfo.name + ", UUID=" + soundModel.uuid);
+            postToast("Successfully loaded " + modelInfo.name + ", UUID="
+                    + soundModel.getModelUuid());
             setModelState(modelInfo, "Loaded");
         } else {
-            postErrorToast("Failed to load " + modelInfo.name + ", UUID=" + soundModel.uuid + "!");
+            postErrorToast("Failed to load " + modelInfo.name + ", UUID="
+                    + soundModel.getModelUuid() + "!");
             setModelState(modelInfo, "Failed to load");
         }
     }
@@ -267,7 +276,7 @@ public class SoundTriggerTestService extends Service {
 
         postMessage("Unloading model: " + modelInfo.name);
 
-        GenericSoundModel soundModel = mSoundTriggerUtil.getSoundModel(modelUuid);
+        SoundTriggerManager.Model soundModel = mSoundTriggerUtil.getSoundModel(modelUuid);
         if (soundModel == null) {
             postErrorToast("Sound model not found for " + modelInfo.name + "!");
             return;
@@ -275,11 +284,12 @@ public class SoundTriggerTestService extends Service {
         modelInfo.detector = null;
         boolean status = mSoundTriggerUtil.deleteSoundModel(modelUuid);
         if (status) {
-            postToast("Successfully unloaded " + modelInfo.name + ", UUID=" + soundModel.uuid);
+            postToast("Successfully unloaded " + modelInfo.name + ", UUID="
+                    + soundModel.getModelUuid());
             setModelState(modelInfo, "Unloaded");
         } else {
             postErrorToast("Failed to unload " +
-                    modelInfo.name + ", UUID=" + soundModel.uuid + "!");
+                    modelInfo.name + ", UUID=" + soundModel.getModelUuid() + "!");
             setModelState(modelInfo, "Failed to unload");
         }
     }
@@ -291,15 +301,16 @@ public class SoundTriggerTestService extends Service {
             return;
         }
         postMessage("Reloading model: " + modelInfo.name);
-        GenericSoundModel soundModel = mSoundTriggerUtil.getSoundModel(modelUuid);
+        SoundTriggerManager.Model soundModel = mSoundTriggerUtil.getSoundModel(modelUuid);
         if (soundModel == null) {
             postErrorToast("Sound model not found for " + modelInfo.name + "!");
             return;
         }
-        GenericSoundModel updated = createNewSoundModel(modelInfo);
+        SoundTriggerManager.Model updated = createNewSoundModel(modelInfo);
         boolean status = mSoundTriggerUtil.addOrUpdateSoundModel(updated);
         if (status) {
-            postToast("Successfully reloaded " + modelInfo.name + ", UUID=" + modelInfo.modelUuid);
+            postToast("Successfully reloaded " + modelInfo.name + ", UUID="
+                    + modelInfo.modelUuid);
             setModelState(modelInfo, "Reloaded");
         } else {
             postErrorToast("Failed to reload "
@@ -321,7 +332,8 @@ public class SoundTriggerTestService extends Service {
                     modelUuid, new DetectorCallback(modelInfo));
         }
 
-        postMessage("Starting recognition for " + modelInfo.name + ", UUID=" + modelInfo.modelUuid);
+        postMessage("Starting recognition for " + modelInfo.name + ", UUID="
+                + modelInfo.modelUuid);
         if (modelInfo.detector.startRecognition(modelInfo.captureAudio ?
                 SoundTriggerDetector.RECOGNITION_FLAG_CAPTURE_TRIGGER_AUDIO :
                 SoundTriggerDetector.RECOGNITION_FLAG_ALLOW_MULTIPLE_TRIGGERS)) {
@@ -427,6 +439,17 @@ public class SoundTriggerTestService extends Service {
         return modelInfo != null && modelInfo.captureAudioTrack != null;
     }
 
+    public synchronized void getModelState(UUID modelUuid) {
+        ModelInfo modelInfo = mModelInfoMap.get(modelUuid);
+        if (modelInfo == null) {
+            postError("Could not find model for: " + modelUuid.toString());
+            return;
+        }
+        int status = mSoundTriggerUtil.getModelState(modelUuid);
+        postMessage("GetModelState for: " + modelInfo.name + " returns: "
+            + status);
+    }
+
     private void loadModelsInDataDir() {
         // Load all the models in the data dir.
         boolean loadedModel = false;
@@ -446,7 +469,7 @@ public class SoundTriggerTestService extends Service {
             }
         }
 
-        // Create a few dummy models if we didn't load anything.
+        // Create a few placeholder models if we didn't load anything.
         if (!loadedModel) {
             Properties dummyModelProperties = new Properties();
             for (String name : new String[]{"1", "2", "3"}) {
@@ -495,7 +518,8 @@ public class SoundTriggerTestService extends Service {
 
             if (properties.containsKey("dataFile")) {
                 File modelDataFile = new File(
-                        getFilesDir().getPath() + "/" + properties.getProperty("dataFile"));
+                        getFilesDir().getPath() + "/"
+                                + properties.getProperty("dataFile"));
                 modelInfo.modelData = new byte[(int) modelDataFile.length()];
                 FileInputStream input = new FileInputStream(modelDataFile);
                 input.read(modelInfo.modelData, 0, modelInfo.modelData.length);
@@ -521,18 +545,29 @@ public class SoundTriggerTestService extends Service {
         }
     }
 
+
     private class CaptureAudioRecorder implements Runnable {
         private final ModelInfo mModelInfo;
+
+        // EventPayload and RecognitionEvent are equivalant.  Only one will be non-null.
         private final SoundTriggerDetector.EventPayload mEvent;
+        private final RecognitionEvent mRecognitionEvent;
 
         public CaptureAudioRecorder(ModelInfo modelInfo, SoundTriggerDetector.EventPayload event) {
             mModelInfo = modelInfo;
             mEvent = event;
+            mRecognitionEvent = null;
+        }
+
+        public CaptureAudioRecorder(ModelInfo modelInfo, RecognitionEvent event) {
+            mModelInfo = modelInfo;
+            mEvent = null;
+            mRecognitionEvent = event;
         }
 
         @Override
         public void run() {
-            AudioFormat format = mEvent.getCaptureAudioFormat();
+            AudioFormat format = getAudioFormat();
             if (format == null) {
                 postErrorToast("No audio format in recognition event.");
                 return;
@@ -594,20 +629,25 @@ public class SoundTriggerTestService extends Service {
                 }
 
                 audioRecord = new AudioRecord(attributes, format, bytesRequired,
-                        mEvent.getCaptureSession());
+                        getCaptureSession());
 
                 byte[] buffer = new byte[bytesRequired];
 
                 // Create a file so we can save the output data there for analysis later.
                 FileOutputStream fos  = null;
                 try {
-                    fos = new FileOutputStream( new File(
-                            getFilesDir() + File.separator + mModelInfo.name.replace(' ', '_') +
-                                    "_capture_" + format.getChannelCount() + "ch_" +
-                                    format.getSampleRate() + "hz_" + encoding + ".pcm"));
+                    File file = new File(
+                        getFilesDir() + File.separator
+                        + mModelInfo.name.replace(' ', '_')
+                        + "_capture_" + format.getChannelCount() + "ch_"
+                        + format.getSampleRate() + "hz_" + encoding
+                        + "_" + (++captureCount) + ".pcm");
+                    Log.i(TAG, "Writing audio to: " + file);
+                    fos = new FileOutputStream(file);
                 } catch (IOException e) {
                     Log.e(TAG, "Failed to open output for saving PCM data", e);
-                    postErrorToast("Failed to open output for saving PCM data: " + e.getMessage());
+                    postErrorToast("Failed to open output for saving PCM data: "
+                            + e.getMessage());
                 }
 
                 // Inform the user we're recording.
@@ -627,6 +667,10 @@ public class SoundTriggerTestService extends Service {
                     bytesRequired -= bytesRead;
                 }
                 audioRecord.stop();
+                if (fos != null) {
+                  fos.flush();
+                  fos.close();
+                }
             } catch (Exception e) {
                 Log.e(TAG, "Error recording trigger audio", e);
                 postErrorToast("Error recording trigger audio: " + e.getMessage());
@@ -642,6 +686,26 @@ public class SoundTriggerTestService extends Service {
                 }
                 setModelState(mModelInfo, "Recording finished");
             }
+        }
+
+        private AudioFormat getAudioFormat() {
+            if (mEvent != null) {
+                return mEvent.getCaptureAudioFormat();
+            }
+            if (mRecognitionEvent != null) {
+                return mRecognitionEvent.captureFormat;
+            }
+            return null;
+        }
+
+        private int getCaptureSession() {
+            if (mEvent != null) {
+                return mEvent.getCaptureSession();
+            }
+            if (mRecognitionEvent != null) {
+                return mRecognitionEvent.captureSession;
+            }
+            return 0;
         }
     }
 
@@ -690,7 +754,8 @@ public class SoundTriggerTestService extends Service {
         AudioFormat format =  event.getCaptureAudioFormat();
         result = result + "AudioFormat: " + ((format == null) ? "null" : format.toString());
         byte[] triggerAudio = event.getTriggerAudio();
-        result = result + ", TriggerAudio: " + (triggerAudio == null ? "null" : triggerAudio.length);
+        result = result + ", TriggerAudio: "
+                + (triggerAudio == null ? "null" : triggerAudio.length);
         byte[] data = event.getData();
         result = result + ", Data: " + (data == null ? "null" : data.length);
         if (data != null) {

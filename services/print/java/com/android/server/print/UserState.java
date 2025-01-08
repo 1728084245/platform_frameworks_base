@@ -30,6 +30,8 @@ import static com.android.internal.util.function.pooled.PooledLambda.obtainMessa
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.UserIdInt;
+import android.app.ActivityOptions;
 import android.app.PendingIntent;
 import android.content.ComponentName;
 import android.content.Context;
@@ -62,7 +64,6 @@ import android.print.PrinterInfo;
 import android.printservice.PrintServiceInfo;
 import android.printservice.recommendation.IRecommendationsChangeListener;
 import android.printservice.recommendation.RecommendationInfo;
-import android.provider.DocumentsContract;
 import android.provider.Settings;
 import android.service.print.CachedPrintJobProto;
 import android.service.print.InstalledPrintServiceProto;
@@ -132,7 +133,7 @@ final class UserState implements PrintSpoolerCallbacks, PrintServiceCallbacks,
 
     private final Context mContext;
 
-    private final int mUserId;
+    private final @UserIdInt int mUserId;
 
     private final RemotePrintSpooler mSpooler;
 
@@ -243,12 +244,15 @@ final class UserState implements PrintSpoolerCallbacks, PrintServiceCallbacks,
             intent.setData(Uri.fromParts("printjob", printJob.getId().flattenToString(), null));
             intent.putExtra(PrintManager.EXTRA_PRINT_DOCUMENT_ADAPTER, adapter.asBinder());
             intent.putExtra(PrintManager.EXTRA_PRINT_JOB, printJob);
-            intent.putExtra(DocumentsContract.EXTRA_PACKAGE_NAME, packageName);
+            intent.putExtra(Intent.EXTRA_PACKAGE_NAME, packageName);
 
+            ActivityOptions activityOptions = ActivityOptions.makeBasic()
+                    .setPendingIntentCreatorBackgroundActivityStartMode(
+                            ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_DENIED);
             IntentSender intentSender = PendingIntent.getActivityAsUser(
                     mContext, 0, intent, PendingIntent.FLAG_ONE_SHOT
-                    | PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE,
-                    null, new UserHandle(mUserId)) .getIntentSender();
+                            | PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE,
+                    activityOptions.toBundle(), new UserHandle(mUserId)).getIntentSender();
 
             Bundle result = new Bundle();
             result.putParcelable(PrintManager.EXTRA_PRINT_JOB, printJob);
@@ -434,6 +438,15 @@ final class UserState implements PrintSpoolerCallbacks, PrintServiceCallbacks,
 
                 onConfigurationChangedLocked();
             }
+        }
+    }
+
+    public boolean isPrintServiceEnabled(@NonNull ComponentName serviceName) {
+        synchronized (mLock) {
+            if (mDisabledServices.contains(serviceName)) {
+                return false;
+            }
+            return true;
         }
     }
 
@@ -650,7 +663,7 @@ final class UserState implements PrintSpoolerCallbacks, PrintServiceCallbacks,
 
                 mPrintServiceRecommendationsService =
                         new RemotePrintServiceRecommendationService(mContext,
-                                UserHandle.getUserHandleForUid(mUserId), this);
+                                UserHandle.of(mUserId), this);
             }
             mPrintServiceRecommendationsChangeListenerRecords.add(
                     new ListenerRecord<IRecommendationsChangeListener>(listener) {

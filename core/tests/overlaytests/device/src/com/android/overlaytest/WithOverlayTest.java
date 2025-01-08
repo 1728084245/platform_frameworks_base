@@ -16,7 +16,9 @@
 
 package com.android.overlaytest;
 
-import android.support.test.filters.MediumTest;
+import android.content.om.OverlayIdentifier;
+
+import androidx.test.filters.MediumTest;
 
 import org.junit.BeforeClass;
 import org.junit.runner.RunWith;
@@ -30,8 +32,9 @@ public class WithOverlayTest extends OverlayBaseTest {
     }
 
     @BeforeClass
-    public static void enableOverlay() throws Exception {
-        disableOverlayPackages(APP_OVERLAY_TWO_PKG);
-        enableOverlayPackages(APP_OVERLAY_ONE_PKG, FRAMEWORK_OVERLAY_PKG);
+    public static void enableOverlays() throws Exception {
+        LocalOverlayManager.toggleOverlaysAndWait(
+                new OverlayIdentifier[]{FRAMEWORK_OVERLAY_PKG, APP_OVERLAY_ONE_PKG},
+                new OverlayIdentifier[]{APP_OVERLAY_TWO_PKG});
     }
 }

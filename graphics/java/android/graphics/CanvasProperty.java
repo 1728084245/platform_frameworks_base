@@ -16,7 +16,9 @@
 
 package android.graphics;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
+
 import com.android.internal.util.VirtualRefBasePtr;
 
 /**
@@ -27,12 +29,12 @@ public final class CanvasProperty<T> {
 
     private VirtualRefBasePtr mProperty;
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public static CanvasProperty<Float> createFloat(float initialValue) {
         return new CanvasProperty<Float>(nCreateFloat(initialValue));
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public static CanvasProperty<Paint> createPaint(Paint initialValue) {
         return new CanvasProperty<Paint>(nCreatePaint(initialValue.getNativeInstance()));
     }

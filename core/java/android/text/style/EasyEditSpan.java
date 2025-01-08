@@ -17,8 +17,9 @@
 package android.text.style;
 
 import android.annotation.NonNull;
-import android.annotation.UnsupportedAppUsage;
 import android.app.PendingIntent;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 import android.os.Parcel;
 import android.text.ParcelableSpan;
 import android.text.TextUtils;
@@ -40,7 +41,6 @@ public class EasyEditSpan implements ParcelableSpan {
      *
      * @see #TEXT_DELETED
      * @see #TEXT_MODIFIED
-     * @see #getPendingIntent()
      */
     public static final String EXTRA_TEXT_CHANGED_TYPE =
             "android.text.style.EXTRA_TEXT_CHANGED_TYPE";
@@ -82,7 +82,7 @@ public class EasyEditSpan implements ParcelableSpan {
      * Constructor called from {@link TextUtils} to restore the span.
      */
     public EasyEditSpan(@NonNull Parcel source) {
-        mPendingIntent = source.readParcelable(null);
+        mPendingIntent = source.readParcelable(null, android.app.PendingIntent.class);
         mDeleteEnabled = (source.readByte() == 1);
     }
 
@@ -117,7 +117,7 @@ public class EasyEditSpan implements ParcelableSpan {
      *
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public boolean isDeleteEnabled() {
         return mDeleteEnabled;
     }
@@ -127,7 +127,7 @@ public class EasyEditSpan implements ParcelableSpan {
      *
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void setDeleteEnabled(boolean value) {
         mDeleteEnabled = value;
     }
@@ -137,7 +137,7 @@ public class EasyEditSpan implements ParcelableSpan {
      *
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public PendingIntent getPendingIntent() {
         return mPendingIntent;
     }

@@ -17,7 +17,7 @@
 #define LOG_TAG "BackupHelperDispatcher_native"
 #include <utils/Log.h>
 
-#include <nativehelper/JNIHelp.h>
+#include <nativehelper/JNIPlatformHelp.h>
 #include <android_runtime/AndroidRuntime.h>
 
 #include <sys/types.h>
@@ -118,7 +118,7 @@ readHeader_native(JNIEnv* env, jobject clazz, jobject headerObj, jobject fdObj)
     }
 
     env->SetIntField(headerObj, s_chunkSizeField, flattenedHeader.dataSize);
-    env->SetObjectField(headerObj, s_keyPrefixField, env->NewStringUTF(keyPrefix.string()));
+    env->SetObjectField(headerObj, s_keyPrefixField, env->NewStringUTF(keyPrefix.c_str()));
 
     return (jint) 0;
 }

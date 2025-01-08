@@ -23,8 +23,7 @@
 #include <vector>
 
 #include "android-base/macros.h"
-
-#include "Diagnostics.h"
+#include "androidfw/IDiagnostics.h"
 #include "xml/XmlDom.h"
 
 namespace aapt {
@@ -37,19 +36,21 @@ enum class XmlActionExecutorPolicy {
   // The actions defined must match and run. If an element is found that does not match an action,
   // an error occurs.
   // Note: namespaced elements are always ignored.
-  kWhitelist,
+  kAllowList,
 
   // The actions defined should match and run. if an element is found that does not match an
   // action, a warning is printed.
   // Note: namespaced elements are always ignored.
-  kWhitelistWarning,
+  kAllowListWarning,
 };
 
 // Contains the actions to perform at this XML node. This is a recursive data structure that
 // holds XmlNodeActions for child XML nodes.
 class XmlNodeAction {
  public:
-  using ActionFuncWithDiag = std::function<bool(Element*, SourcePathDiagnostics*)>;
+  using ActionFuncWithPolicyAndDiag =
+      std::function<bool(Element*, XmlActionExecutorPolicy, android::SourcePathDiagnostics*)>;
+  using ActionFuncWithDiag = std::function<bool(Element*, android::SourcePathDiagnostics*)>;
   using ActionFunc = std::function<bool(Element*)>;
 
   // Find or create a child XmlNodeAction that will be performed for the child element with the
@@ -61,15 +62,16 @@ class XmlNodeAction {
   // Add an action to be performed at this XmlNodeAction.
   void Action(ActionFunc f);
   void Action(ActionFuncWithDiag);
+  void Action(ActionFuncWithPolicyAndDiag);
 
  private:
   friend class XmlActionExecutor;
 
   bool Execute(XmlActionExecutorPolicy policy, std::vector<::android::StringPiece>* bread_crumb,
-               SourcePathDiagnostics* diag, Element* el) const;
+               android::SourcePathDiagnostics* diag, Element* el) const;
 
   std::map<std::string, XmlNodeAction> map_;
-  std::vector<ActionFuncWithDiag> actions_;
+  std::vector<ActionFuncWithPolicyAndDiag> actions_;
 };
 
 // Allows the definition of actions to execute at specific XML elements defined by their hierarchy.
@@ -85,7 +87,7 @@ class XmlActionExecutor {
 
   // Execute the defined actions for this XmlResource.
   // Returns true if all actions return true, otherwise returns false.
-  bool Execute(XmlActionExecutorPolicy policy, IDiagnostics* diag, XmlResource* doc) const;
+  bool Execute(XmlActionExecutorPolicy policy, android::IDiagnostics* diag, XmlResource* doc) const;
 
  private:
   std::map<std::string, XmlNodeAction> map_;

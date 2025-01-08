@@ -16,8 +16,9 @@
 
 package com.android.systemui.doze;
 
-import androidx.annotation.VisibleForTesting;
 import android.view.Display;
+
+import androidx.annotation.VisibleForTesting;
 
 import com.android.systemui.statusbar.phone.DozeParameters;
 
@@ -45,7 +46,8 @@ public class DozeSuspendScreenStatePreventingAdapter extends DozeMachine.Service
      */
     public static DozeMachine.Service wrapIfNeeded(DozeMachine.Service inner,
             DozeParameters params) {
-        return isNeeded(params) ? new DozeSuspendScreenStatePreventingAdapter(inner) : inner;
+        return isNeeded(params) ? new DozeSuspendScreenStatePreventingAdapter(inner)
+                : inner;
     }
 
     private static boolean isNeeded(DozeParameters params) {

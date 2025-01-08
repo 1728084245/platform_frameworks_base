@@ -18,7 +18,8 @@ package android.graphics;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 
 /**
  * A color filter that transforms colors through a 4x5 color matrix. This filter
@@ -80,12 +81,12 @@ public class ColorMatrixColorFilter extends ColorFilter {
      */
     @UnsupportedAppUsage
     public void setColorMatrix(@Nullable ColorMatrix matrix) {
-        discardNativeInstance();
         if (matrix == null) {
             mMatrix.reset();
         } else {
             mMatrix.set(matrix);
         }
+        nativeSetColorMatrix(getNativeInstance(), mMatrix.getArray());
     }
 
     /**
@@ -107,10 +108,9 @@ public class ColorMatrixColorFilter extends ColorFilter {
      *
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void setColorMatrixArray(@Nullable float[] array) {
         // called '...Array' so that passing null isn't ambiguous
-        discardNativeInstance();
         if (array == null) {
             mMatrix.reset();
         } else {
@@ -119,6 +119,7 @@ public class ColorMatrixColorFilter extends ColorFilter {
             }
             mMatrix.set(array);
         }
+        nativeSetColorMatrix(getNativeInstance(), mMatrix.getArray());
     }
 
     @Override
@@ -127,4 +128,6 @@ public class ColorMatrixColorFilter extends ColorFilter {
     }
 
     private static native long nativeColorMatrixFilter(float[] array);
+
+    private static native void nativeSetColorMatrix(long colorMatrixColorFilter, float[] array);
 }

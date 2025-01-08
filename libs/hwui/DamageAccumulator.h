@@ -21,13 +21,14 @@
 
 #include <SkMatrix.h>
 #include <SkRect.h>
+#include <effects/StretchEffect.h>
 
 #include "utils/Macros.h"
 
 // Smaller than INT_MIN/INT_MAX because we offset these values
 // and thus don't want to be adding offsets to INT_MAX, that's bad
 #define DIRTY_MIN (-0x7ffffff - 1)
-#define DIRTY_MAX (0x7ffffff)
+#define DIRTY_MAX (0x8000000)
 
 namespace android {
 namespace uirenderer {
@@ -58,9 +59,35 @@ public:
     // Returns the current dirty area, *NOT* transformed by pushed transforms
     void peekAtDirty(SkRect* dest) const;
 
-    ANDROID_API void computeCurrentTransform(Matrix4* outMatrix) const;
+    void computeCurrentTransform(Matrix4* outMatrix) const;
+
+    SkRect computeClipAndTransform(const SkRect& bounds, Matrix4* outMatrix) const;
 
     void finish(SkRect* totalDirty);
+
+    struct StretchResult {
+        /**
+         * Stretch parameters configured on the stretch container
+         */
+        const StretchEffect* stretchEffect;
+
+        /**
+         * Bounds of the stretching container
+         */
+        const SkRect parentBounds;
+
+        /**
+         * Width of the stretch container
+         */
+        const float width;
+
+        /**
+         * Height of the stretch container
+         */
+        const float height;
+    };
+
+    [[nodiscard]] StretchResult findNearestStretchEffect() const;
 
 private:
     void pushCommon();

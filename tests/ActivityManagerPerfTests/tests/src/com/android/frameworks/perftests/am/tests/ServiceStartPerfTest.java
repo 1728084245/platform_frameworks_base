@@ -19,19 +19,36 @@ package com.android.frameworks.perftests.am.tests;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
-import android.support.test.filters.LargeTest;
-import android.support.test.runner.AndroidJUnit4;
+
+import androidx.test.filters.LargeTest;
+import androidx.test.runner.AndroidJUnit4;
 
 import com.android.frameworks.perftests.am.util.Constants;
 import com.android.frameworks.perftests.am.util.TargetPackageUtils;
+import com.android.frameworks.perftests.am.util.Utils;
 
+import org.junit.After;
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 @RunWith(AndroidJUnit4.class)
 @LargeTest
 public class ServiceStartPerfTest extends BasePerfTest {
+    private static final String STUB_PACKAGE_NAME =
+            "com.android.frameworks.perftests.amteststestapp";
+
+    @Before
+    public void setUp() {
+        super.setUp();
+        Utils.runShellCommand("cmd deviceidle whitelist +" + STUB_PACKAGE_NAME);
+    }
+
+    @After
+    public void tearDown() {
+        Utils.runShellCommand("cmd deviceidle whitelist -" + STUB_PACKAGE_NAME);
+    }
 
     /**
      * Tries to start the service with the given intent, throwing a RuntimeException with the

@@ -16,78 +16,125 @@
 
 package com.android.systemui.shared.recents;
 
+import android.graphics.Rect;
+import android.graphics.Region;
+import android.os.Bundle;
 import android.view.MotionEvent;
 import com.android.systemui.shared.recents.ISystemUiProxy;
 
+// Next ID: 34
 oneway interface IOverviewProxy {
-    void onBind(in ISystemUiProxy sysUiProxy);
 
-    /**
-     * Called once immediately prior to the first onMotionEvent() call, providing a hint to the
-     * target the initial source of the subsequent motion events.
-     *
-     * @param downHitTarget is one of the {@link NavigationBarCompat.HitTarget}s
-     */
-    void onPreMotionEvent(int downHitTarget);
+    void onActiveNavBarRegionChanges(in Region activeRegion) = 11;
 
-    /**
-     * Proxies motion events from the nav bar in SystemUI to the OverviewProxyService. The sender
-     * guarantees the following order of events:
-     *
-     * Normal gesture: DOWN, (MOVE/POINTER_DOWN/POINTER_UP)*, UP
-     * Quick scrub: DOWN, (MOVE/POINTER_DOWN/POINTER_UP)*, SCRUB_START, SCRUB_PROGRESS*, SCRUB_END
-     *
-     * Once quick scrub is sent, then no further motion events will be provided.
-     */
-    void onMotionEvent(in MotionEvent event);
-
-    /**
-     * Sent when the user starts to actively scrub the nav bar to switch tasks. Once this event is
-     * sent the caller will stop sending any motion events and will no longer preemptively cancel
-     * any recents animations started as a part of the motion event handling.
-     */
-    void onQuickScrubStart();
-
-    /**
-     * Sent when the user stops actively scrubbing the nav bar to switch tasks.
-     */
-    void onQuickScrubEnd();
-
-    /**
-     * Sent for each movement over the nav bar while the user is scrubbing it to switch tasks.
-     */
-    void onQuickScrubProgress(float progress);
+    void onInitialize(in Bundle params) = 12;
 
     /**
      * Sent when overview button is pressed to toggle show/hide of overview.
      */
-    void onOverviewToggle();
+    void onOverviewToggle() = 6;
 
     /**
      * Sent when overview is to be shown.
      */
-    void onOverviewShown(boolean triggeredFromAltTab);
+    void onOverviewShown(boolean triggeredFromAltTab) = 7;
 
     /**
      * Sent when overview is to be hidden.
      */
-    void onOverviewHidden(boolean triggeredFromAltTab, boolean triggeredFromHomeKey);
+    void onOverviewHidden(boolean triggeredFromAltTab, boolean triggeredFromHomeKey) = 8;
 
     /**
-     * Sent when a user swipes up over the navigation bar to launch overview. Swipe up is determined
-     * by passing the touch slop in the direction towards launcher from navigation bar. During and
-     * after this event is sent the caller will continue to send motion events. The motion
-     * {@param event} passed after the touch slop was exceeded will also be passed after by
-     * {@link onMotionEvent}. Since motion events will be sent, motion up or cancel can still be
-     * sent to cancel overview regardless the current state of launcher (eg. if overview is already
-     * visible, this event will still be sent if user swipes up). When this signal is sent,
-     * navigation bar will not handle any gestures such as quick scrub and the home button will
-     * cancel (long) press.
+     * Sent when device assistant changes its default assistant whether it is available or not.
+     * @param longPressHomeEnabled if 3-button nav assistant can be invoked or not
      */
-    void onQuickStep(in MotionEvent event);
+    void onAssistantAvailable(boolean available, boolean longPressHomeEnabled) = 13;
 
     /**
-     * Sent when there was an action on one of the onboarding tips view.
+     * Sent when the assistant changes how visible it is to the user.
      */
-    void onTip(int actionType, int viewType);
+    void onAssistantVisibilityChanged(float visibility) = 14;
+
+    /**
+     * Sent when the assistant has been invoked with the given type (defined in AssistManager) and
+     * should be shown. This method should be used if SystemUiProxy#setAssistantOverridesRequested
+     * was previously called including this invocation type.
+     */
+    void onAssistantOverrideInvoked(int invocationType) = 28;
+
+    /**
+     * Sent when some system ui state changes.
+     */
+    void onSystemUiStateChanged(long stateFlags) = 16;
+
+    /**
+     * Sent when suggested rotation button could be shown
+     */
+    void onRotationProposal(int rotation, boolean isValid) = 18;
+
+    /**
+     * Sent when disable flags change
+     */
+    void disable(int displayId, int state1, int state2, boolean animate) = 19;
+
+    /**
+     * Sent when behavior changes. See WindowInsetsController#@Behavior
+     */
+    void onSystemBarAttributesChanged(int displayId, int behavior) = 20;
+
+    /**
+     * Sent when {@link TaskbarDelegate#onTransitionModeUpdated} is called.
+     */
+    void onTransitionModeUpdated(int barMode, boolean checkBarModes) = 21;
+
+    /**
+     * Sent when the desired dark intensity of the nav buttons has changed
+     */
+    void onNavButtonsDarkIntensityChanged(float darkIntensity) = 22;
+
+    /**
+     * Sent when when navigation bar luma sampling is enabled or disabled.
+     */
+    void onNavigationBarLumaSamplingEnabled(int displayId, boolean enable) = 23;
+
+    /**
+     * Sent when split keyboard shortcut is triggered to enter stage split.
+     */
+    void enterStageSplitFromRunningApp(boolean leftOrTop) = 25;
+
+    /**
+     * Sent when the task bar stash state is toggled.
+     */
+    void onTaskbarToggled() = 27;
+
+    /**
+     * Sent when the wallpaper visibility is updated.
+     */
+    void updateWallpaperVisibility(int displayId, boolean visible) = 29;
+
+    /**
+     * Sent when {@link TaskbarDelegate#checkNavBarModes} is called.
+     */
+    void checkNavBarModes() = 30;
+
+    /**
+     * Sent when {@link TaskbarDelegate#finishBarAnimations} is called.
+     */
+    void finishBarAnimations() = 31;
+
+    /**
+     * Sent when {@link TaskbarDelegate#touchAutoDim} is called. {@param reset} is true, when auto
+     * dim is reset after a timeout.
+     */
+    void touchAutoDim(boolean reset) = 32;
+
+    /**
+     * Sent when {@link TaskbarDelegate#transitionTo} is called.
+     */
+    void transitionTo(int barMode, boolean animate) = 33;
+
+    /**
+     * Sent when {@link TaskbarDelegate#appTransitionPending} is called.
+     */
+    void appTransitionPending(boolean pending) = 34;
 }

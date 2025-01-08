@@ -23,8 +23,8 @@ import android.annotation.SystemApi;
 import android.net.Uri;
 import android.os.Parcel;
 import android.os.Parcelable;
-import android.telecom.Log;
-import android.telephony.Rlog;
+
+import com.android.telephony.Rlog;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -49,8 +49,7 @@ public final class ImsExternalCallState implements Parcelable {
     public static final int CALL_STATE_TERMINATED = 2;
 
     /**@hide*/
-    @IntDef(flag = true,
-            value = {
+    @IntDef(value = {
                     CALL_STATE_CONFIRMED,
                     CALL_STATE_TERMINATED
             },
@@ -59,8 +58,7 @@ public final class ImsExternalCallState implements Parcelable {
     public @interface ExternalCallState {}
 
     /**@hide*/
-    @IntDef(flag = true,
-            value = {
+    @IntDef(value = {
                     ImsCallProfile.CALL_TYPE_VOICE,
                     ImsCallProfile.CALL_TYPE_VT_TX,
                     ImsCallProfile.CALL_TYPE_VT_RX,
@@ -143,8 +141,8 @@ public final class ImsExternalCallState implements Parcelable {
     public ImsExternalCallState(Parcel in) {
         mCallId = in.readInt();
         ClassLoader classLoader = ImsExternalCallState.class.getClassLoader();
-        mAddress = in.readParcelable(classLoader);
-        mLocalAddress = in.readParcelable(classLoader);
+        mAddress = in.readParcelable(classLoader, android.net.Uri.class);
+        mLocalAddress = in.readParcelable(classLoader, android.net.Uri.class);
         mIsPullable = (in.readInt() != 0);
         mCallState = in.readInt();
         mCallType = in.readInt();
@@ -169,7 +167,7 @@ public final class ImsExternalCallState implements Parcelable {
         Rlog.d(TAG, "ImsExternalCallState writeToParcel = " + out.toString());
     }
 
-    public static final Parcelable.Creator<ImsExternalCallState> CREATOR =
+    public static final @android.annotation.NonNull Parcelable.Creator<ImsExternalCallState> CREATOR =
             new Parcelable.Creator<ImsExternalCallState>() {
         @Override
         public ImsExternalCallState createFromParcel(Parcel in) {
@@ -213,11 +211,12 @@ public final class ImsExternalCallState implements Parcelable {
         return mIsHeld;
     }
 
+    @NonNull
     @Override
     public String toString() {
         return "ImsExternalCallState { mCallId = " + mCallId +
-                ", mAddress = " + Log.pii(mAddress) +
-                ", mLocalAddress = " + Log.pii(mLocalAddress) +
+                ", mAddress = " + Rlog.pii(TAG, mAddress) +
+                ", mLocalAddress = " + Rlog.pii(TAG, mLocalAddress) +
                 ", mIsPullable = " + mIsPullable +
                 ", mCallState = " + mCallState +
                 ", mCallType = " + mCallType +

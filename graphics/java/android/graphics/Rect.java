@@ -17,13 +17,18 @@
 package android.graphics;
 
 import android.annotation.CheckResult;
+import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.TestApi;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Parcel;
 import android.os.Parcelable;
-
-import android.annotation.UnsupportedAppUsage;
 import android.text.TextUtils;
+import android.util.proto.ProtoInputStream;
 import android.util.proto.ProtoOutputStream;
+import android.util.proto.WireTypeMismatchException;
+
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -40,6 +45,7 @@ import java.util.regex.Pattern;
  * into the column and row described by its left and top coordinates, but not
  * those of its bottom and right.
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public final class Rect implements Parcelable {
     public int left;
     public int top;
@@ -90,7 +96,21 @@ public final class Rect implements Parcelable {
      * @param r The rectangle whose coordinates are copied into the new
      *          rectangle.
      */
-    public Rect(Rect r) {
+    public Rect(@Nullable Rect r) {
+        if (r == null) {
+            left = top = right = bottom = 0;
+        } else {
+            left = r.left;
+            top = r.top;
+            right = r.right;
+            bottom = r.bottom;
+        }
+    }
+
+    /**
+     * @hide
+     */
+    public Rect(@Nullable Insets r) {
         if (r == null) {
             left = top = right = bottom = 0;
         } else {
@@ -141,15 +161,17 @@ public final class Rect implements Parcelable {
     /**
      * Return a string representation of the rectangle in a compact form.
      */
+    @NonNull
     public String toShortString() {
         return toShortString(new StringBuilder(32));
     }
-    
+
     /**
      * Return a string representation of the rectangle in a compact form.
      * @hide
      */
-    public String toShortString(StringBuilder sb) {
+    @NonNull
+    public String toShortString(@NonNull StringBuilder sb) {
         sb.setLength(0);
         sb.append('['); sb.append(left); sb.append(',');
         sb.append(top); sb.append("]["); sb.append(right);
@@ -162,9 +184,10 @@ public final class Rect implements Parcelable {
      *
      * <p>You can later recover the Rect from this string through
      * {@link #unflattenFromString(String)}.
-     * 
+     *
      * @return Returns a new String of the form "left top right bottom"
      */
+    @NonNull
     public String flattenToString() {
         StringBuilder sb = new StringBuilder(32);
         // WARNING: Do not change the format of this string, it must be
@@ -183,7 +206,8 @@ public final class Rect implements Parcelable {
      * Returns a Rect from a string of the form returned by {@link #flattenToString},
      * or null if the string is not of that form.
      */
-    public static Rect unflattenFromString(String str) {
+    @Nullable
+    public static Rect unflattenFromString(@Nullable String str) {
         if (TextUtils.isEmpty(str)) {
             return null;
         }
@@ -203,7 +227,7 @@ public final class Rect implements Parcelable {
      * @hide
      */
     @UnsupportedAppUsage
-    public void printShortString(PrintWriter pw) {
+    public void printShortString(@NonNull PrintWriter pw) {
         pw.print('['); pw.print(left); pw.print(',');
         pw.print(top); pw.print("]["); pw.print(right);
         pw.print(','); pw.print(bottom); pw.print(']');
@@ -217,7 +241,7 @@ public final class Rect implements Parcelable {
      * @param fieldId           Field Id of the Rect as defined in the parent message
      * @hide
      */
-    public void writeToProto(ProtoOutputStream protoOutputStream, long fieldId) {
+    public void dumpDebug(@NonNull ProtoOutputStream protoOutputStream, long fieldId) {
         final long token = protoOutputStream.start(fieldId);
         protoOutputStream.write(RectProto.LEFT, left);
         protoOutputStream.write(RectProto.TOP, top);
@@ -227,10 +251,52 @@ public final class Rect implements Parcelable {
     }
 
     /**
+     * Read from a protocol buffer input stream.
+     * Protocol buffer message definition at {@link android.graphics.RectProto}
+     *
+     * @param proto     Stream to read the Rect object from.
+     * @param fieldId   Field Id of the Rect as defined in the parent message
+     * @hide
+     */
+    public void readFromProto(@NonNull ProtoInputStream proto, long fieldId) throws IOException,
+            WireTypeMismatchException {
+        final long token = proto.start(fieldId);
+        try {
+            while (proto.nextField() != ProtoInputStream.NO_MORE_FIELDS) {
+                switch (proto.getFieldNumber()) {
+                    case (int) RectProto.LEFT:
+                        left = proto.readInt(RectProto.LEFT);
+                        break;
+                    case (int) RectProto.TOP:
+                        top = proto.readInt(RectProto.TOP);
+                        break;
+                    case (int) RectProto.RIGHT:
+                        right = proto.readInt(RectProto.RIGHT);
+                        break;
+                    case (int) RectProto.BOTTOM:
+                        bottom = proto.readInt(RectProto.BOTTOM);
+                        break;
+                }
+            }
+        } finally {
+            // Let caller handle any exceptions
+            proto.end(token);
+        }
+    }
+
+    /**
      * Returns true if the rectangle is empty (left >= right or top >= bottom)
      */
     public final boolean isEmpty() {
         return left >= right || top >= bottom;
+    }
+
+    /**
+     * @return {@code true} if the rectangle is valid (left <= right and top <= bottom).
+     * @hide
+     */
+    public boolean isValid() {
+        return left <= right && top <= bottom;
     }
 
     /**
@@ -248,7 +314,7 @@ public final class Rect implements Parcelable {
     public final int height() {
         return bottom - top;
     }
-    
+
     /**
      * @return the horizontal center of the rectangle. If the computed value
      *         is fractional, this method returns the largest integer that is
@@ -257,7 +323,7 @@ public final class Rect implements Parcelable {
     public final int centerX() {
         return (left + right) >> 1;
     }
-    
+
     /**
      * @return the vertical center of the rectangle. If the computed value
      *         is fractional, this method returns the largest integer that is
@@ -266,14 +332,14 @@ public final class Rect implements Parcelable {
     public final int centerY() {
         return (top + bottom) >> 1;
     }
-    
+
     /**
      * @return the exact horizontal center of the rectangle as a float.
      */
     public final float exactCenterX() {
         return (left + right) * 0.5f;
     }
-    
+
     /**
      * @return the exact vertical center of the rectangle as a float.
      */
@@ -311,7 +377,7 @@ public final class Rect implements Parcelable {
      * @param src The rectangle whose coordinates are copied into this
      *           rectangle.
      */
-    public void set(Rect src) {
+    public void set(@NonNull Rect src) {
         this.left = src.left;
         this.top = src.top;
         this.right = src.right;
@@ -368,7 +434,19 @@ public final class Rect implements Parcelable {
      * @hide
      * @param insets The rectangle specifying the insets on all side.
      */
-    public void inset(Rect insets) {
+    public void inset(@NonNull Rect insets) {
+        left += insets.left;
+        top += insets.top;
+        right -= insets.right;
+        bottom -= insets.bottom;
+    }
+
+    /**
+     * Insets the rectangle on all sides specified by the dimensions of {@code insets}.
+     *
+     * @param insets The insets to inset the rect by.
+     */
+    public void inset(@NonNull Insets insets) {
         left += insets.left;
         top += insets.top;
         right -= insets.right;
@@ -377,7 +455,7 @@ public final class Rect implements Parcelable {
 
     /**
      * Insets the rectangle on all sides specified by the insets.
-     * @hide
+     *
      * @param left The amount to add from the rectangle's left
      * @param top The amount to add from the rectangle's top
      * @param right The amount to subtract from the rectangle's right
@@ -415,7 +493,7 @@ public final class Rect implements Parcelable {
      * @param top The top of the rectangle being tested for containment
      * @param right The right side of the rectangle being tested for containment
      * @param bottom The bottom of the rectangle being tested for containment
-     * @return true iff the the 4 specified sides of a rectangle are inside or
+     * @return true iff the 4 specified sides of a rectangle are inside or
      *              equal to this rectangle
      */
     public boolean contains(int left, int top, int right, int bottom) {
@@ -434,7 +512,7 @@ public final class Rect implements Parcelable {
      * @return true iff the specified rectangle r is inside or equal to this
      *              rectangle
      */
-    public boolean contains(Rect r) {
+    public boolean contains(@NonNull Rect r) {
                // check for empty first
         return this.left < this.right && this.top < this.bottom
                // now check for containment
@@ -470,7 +548,7 @@ public final class Rect implements Parcelable {
         }
         return false;
     }
-    
+
     /**
      * If the specified rectangle intersects this rectangle, return true and set
      * this rectangle to that intersection, otherwise return false and do not
@@ -483,7 +561,7 @@ public final class Rect implements Parcelable {
      *              return false and do not change this rectangle.
      */
     @CheckResult
-    public boolean intersect(Rect r) {
+    public boolean intersect(@NonNull Rect r) {
         return intersect(r.left, r.top, r.right, r.bottom);
     }
 
@@ -493,7 +571,7 @@ public final class Rect implements Parcelable {
      * @see #inset(int, int, int, int) but without checking if the rects overlap.
      * @hide
      */
-    public void intersectUnchecked(Rect other) {
+    public void intersectUnchecked(@NonNull Rect other) {
         left = Math.max(left, other.left);
         top = Math.max(top, other.top);
         right = Math.min(right, other.right);
@@ -513,7 +591,7 @@ public final class Rect implements Parcelable {
      *              false and do not change this rectangle.
      */
     @CheckResult
-    public boolean setIntersect(Rect a, Rect b) {
+    public boolean setIntersect(@NonNull Rect a, @NonNull Rect b) {
         if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) {
             left = Math.max(a.left, b.left);
             top = Math.max(a.top, b.top);
@@ -552,7 +630,7 @@ public final class Rect implements Parcelable {
      * @return true iff the two specified rectangles intersect. In no event are
      *              either of the rectangles modified.
      */
-    public static boolean intersects(Rect a, Rect b) {
+    public static boolean intersects(@NonNull Rect a, @NonNull Rect b) {
         return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
     }
 
@@ -589,10 +667,10 @@ public final class Rect implements Parcelable {
      *
      * @param r The rectangle being unioned with this rectangle
      */
-    public void union(Rect r) {
+    public void union(@NonNull Rect r) {
         union(r.left, r.top, r.right, r.bottom);
     }
-    
+
     /**
      * Update this Rect to enclose itself and the [x,y] coordinate. There is no
      * check to see that this rectangle is non-empty.
@@ -634,8 +712,43 @@ public final class Rect implements Parcelable {
     }
 
     /**
+     * Splits this Rect into small rects of the same width.
+     * @hide
+     */
+    @TestApi
+    public void splitVertically(@NonNull Rect ...splits) {
+        final int count = splits.length;
+        final int splitWidth = width() / count;
+        for (int i = 0; i < count; i++) {
+            final Rect split = splits[i];
+            split.left = left + (splitWidth * i);
+            split.top = top;
+            split.right = split.left + splitWidth;
+            split.bottom = bottom;
+        }
+    }
+
+    /**
+     * Splits this Rect into small rects of the same height.
+     * @hide
+     */
+    @TestApi
+    public void splitHorizontally(@NonNull Rect ...outSplits) {
+        final int count = outSplits.length;
+        final int splitHeight = height() / count;
+        for (int i = 0; i < count; i++) {
+            final Rect split = outSplits[i];
+            split.left = left;
+            split.top = top + (splitHeight * i);
+            split.right = right;
+            split.bottom = split.top + splitHeight;
+        }
+    }
+
+    /**
      * Parcelable interface methods
      */
+    @Override
     public int describeContents() {
         return 0;
     }
@@ -645,6 +758,7 @@ public final class Rect implements Parcelable {
      * a parcel, use readFromParcel()
      * @param out The parcel to write the rectangle's coordinates into
      */
+    @Override
     public void writeToParcel(Parcel out, int flags) {
         out.writeInt(left);
         out.writeInt(top);
@@ -652,10 +766,11 @@ public final class Rect implements Parcelable {
         out.writeInt(bottom);
     }
 
-    public static final Parcelable.Creator<Rect> CREATOR = new Parcelable.Creator<Rect>() {
+    public static final @android.annotation.NonNull Parcelable.Creator<Rect> CREATOR = new Parcelable.Creator<Rect>() {
         /**
          * Return a new rectangle from the data in the specified parcel.
          */
+        @Override
         public Rect createFromParcel(Parcel in) {
             Rect r = new Rect();
             r.readFromParcel(in);
@@ -665,6 +780,7 @@ public final class Rect implements Parcelable {
         /**
          * Return an array of rectangles of the specified size.
          */
+        @Override
         public Rect[] newArray(int size) {
             return new Rect[size];
         }
@@ -676,7 +792,7 @@ public final class Rect implements Parcelable {
      *
      * @param in The parcel to read the rectangle's coordinates from
      */
-    public void readFromParcel(Parcel in) {
+    public void readFromParcel(@NonNull Parcel in) {
         left = in.readInt();
         top = in.readInt();
         right = in.readInt();

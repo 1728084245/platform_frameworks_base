@@ -16,7 +16,7 @@
 
 package android.renderscript;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 
 
 /**
@@ -27,6 +27,7 @@ import android.annotation.UnsupportedAppUsage;
  * without writing any GLSL code.
  *
  **/
+@Deprecated
 public class ProgramVertexFixedFunction extends ProgramVertex {
 
     ProgramVertexFixedFunction(long id, RenderScript rs) {

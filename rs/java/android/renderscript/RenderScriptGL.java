@@ -16,7 +16,7 @@
 
 package android.renderscript;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.graphics.SurfaceTexture;
 import android.view.Surface;
@@ -37,6 +37,7 @@ import android.view.SurfaceHolder;
  * <a href="{@docRoot}guide/topics/renderscript/index.html">RenderScript</a> developer guide.</p>
  * </div>
  **/
+@Deprecated
 public class RenderScriptGL extends RenderScript {
     int mWidth;
     int mHeight;

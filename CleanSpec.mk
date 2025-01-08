@@ -248,8 +248,21 @@ $(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/framework/com.android.mediad
 $(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/framework/com.android.location.provider.jar)
 $(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/framework/com.android.future.usb.accessory.jar)
 $(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/framework/com.android.media.remotedisplay.jar)
-$(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/media/audio)
 $(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/priv-app/SystemUI)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/media/audio)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/priv-app/DynamicAndroidInstallationService)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/priv-app/DefaultContainerService)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/app/CaptivePortalLogin)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/framework/ext.jar)
+$(call add-clean-step, rm -rf $(OUT_DIR)/target/common/obj/JAVA_LIBRARIES/framework_intermediates/src/telephony/java/com/google/android/mms)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/framework/*-service.jar)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/framework/service-statsd.jar)
+$(call add-clean-step, rm -rf $(SOONG_OUT_DIR)/.intermediates/frameworks/base/libincremental_aidl-cpp-source/)
+$(call add-clean-step, rm -rf $(SOONG_OUT_DIR)/.intermediates/frameworks/base/libincremental_manager_aidl-cpp-source/)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/priv-app/InProcessTethering)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/app/OsuLogin)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/system_other/system/app/OsuLogin)
+$(call add-clean-step, rm -rf $(OUT_DIR)/host/linux-x86/testcases/ravenwood-runtime)
 # ******************************************************************
 # NEWER CLEAN STEPS MUST BE AT THE END OF THE LIST ABOVE THIS BANNER
 # ******************************************************************

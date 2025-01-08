@@ -16,10 +16,12 @@
 
 package android.os;
 
-import android.annotation.UnsupportedAppUsage;
-import android.os.MessageProto;
+import android.annotation.Nullable;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.util.TimeUtils;
 import android.util.proto.ProtoOutputStream;
+
+import com.android.internal.annotations.VisibleForTesting;
 
 /**
  *
@@ -32,12 +34,16 @@ import android.util.proto.ProtoOutputStream;
  * {@link Handler#obtainMessage Handler.obtainMessage()} methods, which will pull
  * them from a pool of recycled objects.</p>
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public final class Message implements Parcelable {
     /**
      * User-defined message code so that the recipient can identify
      * what this message is about. Each {@link Handler} has its own name-space
      * for message codes, so you do not need to worry about yours conflicting
      * with other handlers.
+     *
+     * If not specified, this value is 0.
+     * Use values other than 0 to indicate custom message codes.
      */
     public int what;
 
@@ -75,11 +81,25 @@ public final class Message implements Parcelable {
     public Messenger replyTo;
 
     /**
+     * Indicates that the uid is not set;
+     *
+     * @hide Only for use within the system server.
+     */
+    public static final int UID_NONE = -1;
+
+    /**
      * Optional field indicating the uid that sent the message.  This is
      * only valid for messages posted by a {@link Messenger}; otherwise,
      * it will be -1.
      */
-    public int sendingUid = -1;
+    public int sendingUid = UID_NONE;
+
+    /**
+     * Optional field indicating the uid that caused this message to be enqueued.
+     *
+     * @hide Only for use within the system server.
+     */
+    public int workSourceUid = UID_NONE;
 
     /** If set message is in use.
      * This flag is set when the message is enqueued and remains set while it
@@ -100,8 +120,18 @@ public final class Message implements Parcelable {
     @UnsupportedAppUsage
     /*package*/ int flags;
 
+    /**
+     * The targeted delivery time of this message. The time-base is
+     * {@link SystemClock#uptimeMillis}.
+     * @hide Only for use within the tests.
+     */
     @UnsupportedAppUsage
-    /*package*/ long when;
+    @VisibleForTesting(visibility = VisibleForTesting.Visibility.PACKAGE)
+    public long when;
+
+    /** @hide */
+    @SuppressWarnings("unused")
+    public long mInsertSeq;
 
     /*package*/ Bundle data;
 
@@ -157,6 +187,7 @@ public final class Message implements Parcelable {
         m.obj = orig.obj;
         m.replyTo = orig.replyTo;
         m.sendingUid = orig.sendingUid;
+        m.workSourceUid = orig.workSourceUid;
         if (orig.data != null) {
             m.data = new Bundle(orig.data);
         }
@@ -308,7 +339,8 @@ public final class Message implements Parcelable {
         arg2 = 0;
         obj = null;
         replyTo = null;
-        sendingUid = -1;
+        sendingUid = UID_NONE;
+        workSourceUid = UID_NONE;
         when = 0;
         target = null;
         callback = null;
@@ -336,6 +368,7 @@ public final class Message implements Parcelable {
         this.obj = o.obj;
         this.replyTo = o.replyTo;
         this.sendingUid = o.sendingUid;
+        this.workSourceUid = o.workSourceUid;
 
         if (o.data != null) {
             this.data = (Bundle) o.data.clone();
@@ -412,6 +445,7 @@ public final class Message implements Parcelable {
      * @see #getData()
      * @see #setData(Bundle)
      */
+    @Nullable
     public Bundle peekData() {
         return data;
     }
@@ -550,7 +584,7 @@ public final class Message implements Parcelable {
         return b.toString();
     }
 
-    void writeToProto(ProtoOutputStream proto, long fieldId) {
+    void dumpDebug(ProtoOutputStream proto, long fieldId) {
         final long messageToken = proto.start(fieldId);
         proto.write(MessageProto.WHEN, when);
 
@@ -581,7 +615,7 @@ public final class Message implements Parcelable {
         proto.end(messageToken);
     }
 
-    public static final Parcelable.Creator<Message> CREATOR
+    public static final @android.annotation.NonNull Parcelable.Creator<Message> CREATOR
             = new Parcelable.Creator<Message>() {
         public Message createFromParcel(Parcel source) {
             Message msg = Message.obtain();
@@ -622,6 +656,7 @@ public final class Message implements Parcelable {
         dest.writeBundle(data);
         Messenger.writeMessengerOrNullToParcel(replyTo, dest);
         dest.writeInt(sendingUid);
+        dest.writeInt(workSourceUid);
     }
 
     private void readFromParcel(Parcel source) {
@@ -629,11 +664,12 @@ public final class Message implements Parcelable {
         arg1 = source.readInt();
         arg2 = source.readInt();
         if (source.readInt() != 0) {
-            obj = source.readParcelable(getClass().getClassLoader());
+            obj = source.readParcelable(getClass().getClassLoader(), java.lang.Object.class);
         }
         when = source.readLong();
         data = source.readBundle();
         replyTo = Messenger.readMessengerOrNullFromParcel(source);
         sendingUid = source.readInt();
+        workSourceUid = source.readInt();
     }
 }

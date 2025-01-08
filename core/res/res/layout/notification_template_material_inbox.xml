@@ -39,7 +39,6 @@
             android:layout_gravity="top"
             android:paddingStart="@dimen/notification_content_margin_start"
             android:paddingEnd="@dimen/notification_content_margin_end"
-            android:minHeight="@dimen/notification_min_content_height"
             android:layout_weight="1"
             android:clipToPadding="false"
             android:orientation="vertical"
@@ -53,7 +52,7 @@
                 android:layout_marginTop="@dimen/notification_progress_margin_top"
                 android:layout_marginBottom="2dp"/>
             <TextView android:id="@+id/inbox_text0"
-                style="@style/Widget.Material.Notification.Text"
+                style="@style/Widget.DeviceDefault.Notification.Text"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:singleLine="true"
@@ -62,7 +61,7 @@
                 android:layout_weight="1"
                 />
             <TextView android:id="@+id/inbox_text1"
-                style="@style/Widget.Material.Notification.Text"
+                style="@style/Widget.DeviceDefault.Notification.Text"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:singleLine="true"
@@ -71,7 +70,7 @@
                 android:layout_weight="1"
                 />
             <TextView android:id="@+id/inbox_text2"
-                style="@style/Widget.Material.Notification.Text"
+                style="@style/Widget.DeviceDefault.Notification.Text"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:singleLine="true"
@@ -80,7 +79,7 @@
                 android:layout_weight="1"
                 />
             <TextView android:id="@+id/inbox_text3"
-                style="@style/Widget.Material.Notification.Text"
+                style="@style/Widget.DeviceDefault.Notification.Text"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:singleLine="true"
@@ -89,7 +88,7 @@
                 android:layout_weight="1"
                 />
             <TextView android:id="@+id/inbox_text4"
-                style="@style/Widget.Material.Notification.Text"
+                style="@style/Widget.DeviceDefault.Notification.Text"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:singleLine="true"
@@ -98,7 +97,7 @@
                 android:layout_weight="1"
                 />
             <TextView android:id="@+id/inbox_text5"
-                style="@style/Widget.Material.Notification.Text"
+                style="@style/Widget.DeviceDefault.Notification.Text"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:singleLine="true"
@@ -107,7 +106,7 @@
                 android:layout_weight="1"
                 />
             <TextView android:id="@+id/inbox_text6"
-                style="@style/Widget.Material.Notification.Text"
+                style="@style/Widget.DeviceDefault.Notification.Text"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:singleLine="true"

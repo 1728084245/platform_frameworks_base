@@ -16,13 +16,13 @@
 
 package com.android.vpndialogs;
 
-import android.content.Context;
+import static android.view.WindowManager.LayoutParams.SYSTEM_FLAG_HIDE_NON_SYSTEM_OVERLAY_WINDOWS;
+
 import android.content.DialogInterface;
-import android.net.IConnectivityManager;
+import android.net.VpnManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
-import android.os.ServiceManager;
 import android.os.SystemClock;
 import android.os.UserHandle;
 import android.util.Log;
@@ -41,7 +41,7 @@ public class ManageDialog extends AlertActivity implements
 
     private VpnConfig mConfig;
 
-    private IConnectivityManager mService;
+    private VpnManager mVm;
 
     private TextView mDuration;
     private TextView mDataTransmitted;
@@ -55,11 +55,9 @@ public class ManageDialog extends AlertActivity implements
         super.onCreate(savedInstanceState);
 
         try {
+            mVm = getSystemService(VpnManager.class);
 
-            mService = IConnectivityManager.Stub.asInterface(
-                    ServiceManager.getService(Context.CONNECTIVITY_SERVICE));
-
-            mConfig = mService.getVpnConfig(UserHandle.myUserId());
+            mConfig = mVm.getVpnConfig(UserHandle.myUserId());
 
             // mConfig can be null if we are a restricted user, in that case don't show this dialog
             if (mConfig == null) {
@@ -91,6 +89,7 @@ public class ManageDialog extends AlertActivity implements
             mAlertParams.mNegativeButtonListener = this;
             mAlertParams.mView = view;
             setupAlert();
+            getWindow().addPrivateFlags(SYSTEM_FLAG_HIDE_NON_SYSTEM_OVERLAY_WINDOWS);
 
             if (mHandler == null) {
                 mHandler = new Handler(this);
@@ -118,9 +117,9 @@ public class ManageDialog extends AlertActivity implements
             } else if (which == DialogInterface.BUTTON_NEUTRAL) {
                 final int myUserId = UserHandle.myUserId();
                 if (mConfig.legacy) {
-                    mService.prepareVpn(VpnConfig.LEGACY_VPN, VpnConfig.LEGACY_VPN, myUserId);
+                    mVm.prepareVpn(VpnConfig.LEGACY_VPN, VpnConfig.LEGACY_VPN, myUserId);
                 } else {
-                    mService.prepareVpn(mConfig.user, VpnConfig.LEGACY_VPN, myUserId);
+                    mVm.prepareVpn(mConfig.user, VpnConfig.LEGACY_VPN, myUserId);
                 }
             }
         } catch (Exception e) {

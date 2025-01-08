@@ -19,7 +19,7 @@ package android.widget;
 import android.annotation.IdRes;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.TypedArray;
@@ -49,6 +49,7 @@ import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction;
 import android.view.accessibility.AccessibilityNodeInfo.CollectionInfo;
 import android.view.accessibility.AccessibilityNodeInfo.CollectionItemInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
+import android.view.inspector.InspectableProperty;
 import android.widget.RemoteViews.RemoteView;
 
 import com.android.internal.R;
@@ -72,7 +73,7 @@ import java.util.function.Predicate;
 /**
  * <p>Displays a vertically-scrollable collection of views, where each view is positioned
  * immediatelybelow the previous view in the list.  For a more modern, flexible, and performant
- * approach to displaying lists, use {@link android.support.v7.widget.RecyclerView}.</p>
+ * approach to displaying lists, use {@link androidx.recyclerview.widget.RecyclerView}.</p>
  *
  * <p>To display a list, you can include a list view in your layout XML file:</p>
  *
@@ -115,13 +116,7 @@ import java.util.function.Predicate;
  * <p class="note">ListView attempts to reuse view objects in order to improve performance and
  * avoid a lag in response to user scrolls.  To take advantage of this feature, check if the
  * {@code convertView} provided to {@code getView(...)} is null before creating or inflating a new
- * view object.  See
- * <a href="{@docRoot}training/improving-layouts/smooth-scrolling.html">
- * Making ListView Scrolling Smooth</a> for more ways to ensure a smooth user experience.</p>
- *
- * <p>For a more complete example of creating a custom adapter, see the
- * <a href="{@docRoot}samples/CustomChoiceList/index.html">
- *     Custom Choice List</a> sample app.</p>
+ * view object.</p>
  *
  * <p>To specify an action when a user clicks or taps on a single list item, see
  * <a href="{@docRoot}guide/topics/ui/declaring-layout.html#HandlingUserSelections">
@@ -235,6 +230,8 @@ public class ListView extends AbsListView {
 
         final TypedArray a = context.obtainStyledAttributes(
                 attrs, R.styleable.ListView, defStyleAttr, defStyleRes);
+        saveAttributeDataForStyleable(context, R.styleable.ListView,
+                attrs, a, defStyleAttr, defStyleRes);
 
         final CharSequence[] entries = a.getTextArray(R.styleable.ListView_entries);
         if (entries != null) {
@@ -779,7 +776,7 @@ public class ListView extends AbsListView {
      * @return The view that is currently selected, if it happens to be in the
      *         range that we draw.
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
     private View fillDown(int pos, int nextTop) {
         View selectedView = null;
 
@@ -814,7 +811,7 @@ public class ListView extends AbsListView {
      *
      * @return The view that is currently selected
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
     private View fillUp(int pos, int nextBottom) {
         View selectedView = null;
 
@@ -1487,7 +1484,7 @@ public class ListView extends AbsListView {
      * @return The selected view, or null if the selected view is outside the
      *         visible area.
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
     private View fillSpecific(int position, int top) {
         boolean tempIsSelected = position == mSelectedPosition;
         View temp = makeAndAddView(position, top, true, mListPadding.left, tempIsSelected);
@@ -1980,7 +1977,7 @@ public class ListView extends AbsListView {
     }
 
     @Override
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     boolean trackMotionScroll(int deltaY, int incrementalDeltaY) {
         final boolean result = super.trackMotionScroll(deltaY, incrementalDeltaY);
         removeUnusedFixedViews(mHeaderViewInfos);
@@ -3256,6 +3253,9 @@ public class ListView extends AbsListView {
      */
     @UnsupportedAppUsage
     private void scrollListItemsBy(int amount) {
+        int oldX = mScrollX;
+        int oldY = mScrollY;
+
         offsetChildrenTopAndBottom(amount);
 
         final int listBottom = getHeight() - mListPadding.bottom;
@@ -3328,6 +3328,7 @@ public class ListView extends AbsListView {
         recycleBin.fullyDetachScrapViews();
         removeUnusedFixedViews(mHeaderViewInfos);
         removeUnusedFixedViews(mFooterViewInfos);
+        onScrollChanged(mScrollX, mScrollY, oldX, oldY);
     }
 
     private View addViewAbove(View theView, int position) {
@@ -3635,8 +3636,9 @@ public class ListView extends AbsListView {
      * Returns the drawable that will be drawn between each item in the list.
      *
      * @return the current drawable drawn between list elements
-     * @attr ref R.styleable#ListView_divider
+     * @attr ref android.R.styleable#ListView_divider
      */
+    @InspectableProperty
     @Nullable
     public Drawable getDivider() {
         return mDivider;
@@ -3649,7 +3651,7 @@ public class ListView extends AbsListView {
      * height, you should also call {@link #setDividerHeight(int)}.
      *
      * @param divider the drawable to use
-     * @attr ref R.styleable#ListView_divider
+     * @attr ref android.R.styleable#ListView_divider
      */
     public void setDivider(@Nullable Drawable divider) {
         if (divider != null) {
@@ -3666,6 +3668,7 @@ public class ListView extends AbsListView {
     /**
      * @return Returns the height of the divider that will be drawn between each item in the list.
      */
+    @InspectableProperty
     public int getDividerHeight() {
         return mDividerHeight;
     }
@@ -3701,6 +3704,7 @@ public class ListView extends AbsListView {
      *
      * @see #setHeaderDividersEnabled(boolean)
      */
+    @InspectableProperty(name = "headerDividersEnabled")
     public boolean areHeaderDividersEnabled() {
         return mHeaderDividersEnabled;
     }
@@ -3724,6 +3728,7 @@ public class ListView extends AbsListView {
      *
      * @see #setFooterDividersEnabled(boolean)
      */
+    @InspectableProperty(name = "footerDividersEnabled")
     public boolean areFooterDividersEnabled() {
         return mFooterDividersEnabled;
     }
@@ -4021,7 +4026,7 @@ public class ListView extends AbsListView {
     }
 
     @Override
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     int getHeightForPosition(int position) {
         final int height = super.getHeightForPosition(position);
         if (shouldAdjustHeightForDivider(position)) {
@@ -4102,7 +4107,7 @@ public class ListView extends AbsListView {
         final int rowsCount = getCount();
         final int selectionMode = getSelectionModeForAccessibility();
         final CollectionInfo collectionInfo = CollectionInfo.obtain(
-                rowsCount, 1, false, selectionMode);
+                -1, -1, false, selectionMode);
         info.setCollectionInfo(collectionInfo);
 
         if (rowsCount > 0) {

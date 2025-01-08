@@ -16,6 +16,7 @@
 */
 
 // #define LOG_NDEBUG 0
+#include <memory>
 #define LOG_TAG "CameraMetadata-JNI"
 #include <utils/Errors.h>
 #include <utils/Log.h>
@@ -89,13 +90,13 @@ status_t CameraMetadata_getNativeMetadata(JNIEnv* env, jobject thiz,
         ALOGE("%s: Invalid output metadata object.", __FUNCTION__);
         return BAD_VALUE;
     }
-    CameraMetadata* nativePtr = reinterpret_cast<CameraMetadata*>(env->GetLongField(thiz,
-            fields.metadata_ptr));
+    auto nativePtr = reinterpret_cast<std::shared_ptr<CameraMetadata> *>(
+            env->GetLongField(thiz, fields.metadata_ptr));
     if (nativePtr == NULL) {
         ALOGE("%s: Invalid native pointer in java metadata object.", __FUNCTION__);
         return BAD_VALUE;
     }
-    *metadata = *nativePtr;
+    *metadata = *(nativePtr->get());
     return OK;
 }
 
@@ -162,71 +163,70 @@ struct Helpers {
 
 extern "C" {
 
-static jobject CameraMetadata_getAllVendorKeys(JNIEnv* env, jobject thiz, jclass keyType);
-static jint CameraMetadata_getTagFromKey(JNIEnv *env, jobject thiz, jstring keyName, jlong vendorId);
-static jint CameraMetadata_getTagFromKeyLocal(JNIEnv *env, jobject thiz, jstring keyName);
-static jint CameraMetadata_getTypeFromTag(JNIEnv *env, jobject thiz, jint tag, jlong vendorId);
-static jint CameraMetadata_getTypeFromTagLocal(JNIEnv *env, jobject thiz, jint tag);
-static jint CameraMetadata_setupGlobalVendorTagDescriptor(JNIEnv *env, jobject thiz);
+static void CameraMetadata_setVendorId(JNIEnv* env, jclass thiz, jlong ptr,
+        jlong vendorId);
+static jobject CameraMetadata_getAllVendorKeys(JNIEnv* env, jclass thiz, jlong ptr,
+        jclass keyType);
+static jint CameraMetadata_getTagFromKey(JNIEnv *env, jclass thiz, jstring keyName,
+        jlong vendorId);
+static jint CameraMetadata_getTagFromKeyLocal(JNIEnv *env, jclass thiz, jlong ptr,
+        jstring keyName);
+static jint CameraMetadata_getTypeFromTag(JNIEnv *env, jclass thiz, jint tag, jlong vendorId);
+static jint CameraMetadata_getTypeFromTagLocal(JNIEnv *env, jclass thiz, jlong ptr, jint tag);
+static jint CameraMetadata_setupGlobalVendorTagDescriptor(JNIEnv *env, jclass thiz);
+
+static std::shared_ptr<CameraMetadata>* CameraMetadata_getSharedPtr(jlong metadataLongPtr) {
+    return reinterpret_cast<std::shared_ptr<CameraMetadata>* >(metadataLongPtr);
+}
 
 // Less safe access to native pointer. Does NOT throw any Java exceptions if NULL.
-static CameraMetadata* CameraMetadata_getPointerNoThrow(JNIEnv *env, jobject thiz) {
-
-    if (thiz == NULL) {
-        return NULL;
+static CameraMetadata* CameraMetadata_getPointerNoThrow(jlong ptr) {
+    auto metadata = CameraMetadata_getSharedPtr(ptr);
+    if (metadata == nullptr) {
+        return nullptr;
     }
-
-    return reinterpret_cast<CameraMetadata*>(env->GetLongField(thiz, fields.metadata_ptr));
+    return metadata->get();
 }
 
 // Safe access to native pointer from object. Throws if not possible to access.
-static CameraMetadata* CameraMetadata_getPointerThrow(JNIEnv *env, jobject thiz,
+static CameraMetadata* CameraMetadata_getPointerThrow(JNIEnv *env, jlong ptr,
                                                  const char* argName = "this") {
-
-    if (thiz == NULL) {
-        ALOGV("%s: Throwing java.lang.NullPointerException for null reference",
-              __FUNCTION__);
-        jniThrowNullPointerException(env, argName);
-        return NULL;
-    }
-
-    CameraMetadata* metadata = CameraMetadata_getPointerNoThrow(env, thiz);
-    if (metadata == NULL) {
+    CameraMetadata* metadata = CameraMetadata_getPointerNoThrow(ptr);
+    if (metadata == nullptr) {
         ALOGV("%s: Throwing java.lang.IllegalStateException for closed object",
               __FUNCTION__);
         jniThrowException(env, "java/lang/IllegalStateException",
                             "Metadata object was already closed");
-        return NULL;
+        return nullptr;
     }
 
     return metadata;
 }
 
-static jlong CameraMetadata_allocate(JNIEnv *env, jobject thiz) {
+static jlong CameraMetadata_allocate(JNIEnv *env, jclass thiz) {
     ALOGV("%s", __FUNCTION__);
 
-    return reinterpret_cast<jlong>(new CameraMetadata());
+    return reinterpret_cast<jlong>(new std::shared_ptr<CameraMetadata>(new CameraMetadata()));
 }
 
-static jlong CameraMetadata_allocateCopy(JNIEnv *env, jobject thiz,
-        jobject other) {
+static jlong CameraMetadata_allocateCopy(JNIEnv *env, jclass thiz, jlong other) {
     ALOGV("%s", __FUNCTION__);
 
     CameraMetadata* otherMetadata =
-            CameraMetadata_getPointerThrow(env, other, "other");
-
+            CameraMetadata_getPointerThrow(env, other);
     // In case of exception, return
     if (otherMetadata == NULL) return NULL;
 
-    // Clone native metadata and return new pointer
-    return reinterpret_cast<jlong>(new CameraMetadata(*otherMetadata));
+    // Clone native metadata and return new pointer.
+    auto clonedMetadata = new CameraMetadata(*otherMetadata);
+    return reinterpret_cast<jlong>(new std::shared_ptr<CameraMetadata>(clonedMetadata));
 }
 
 
-static jboolean CameraMetadata_isEmpty(JNIEnv *env, jobject thiz) {
+static jboolean CameraMetadata_isEmpty(JNIEnv *env, jclass thiz, jlong ptr) {
     ALOGV("%s", __FUNCTION__);
 
-    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, thiz);
+    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, ptr);
 
     if (metadata == NULL) {
         ALOGW("%s: Returning early due to exception being thrown",
@@ -242,51 +242,101 @@ static jboolean CameraMetadata_isEmpty(JNIEnv *env, jobject thiz) {
     return empty;
 }
 
-static jint CameraMetadata_getEntryCount(JNIEnv *env, jobject thiz) {
+static jint CameraMetadata_getEntryCount(JNIEnv *env, jclass thiz, jlong ptr) {
     ALOGV("%s", __FUNCTION__);
 
-    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, thiz);
+    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, ptr);
 
     if (metadata == NULL) return 0; // actually throws java exc.
 
     return metadata->entryCount();
 }
 
-// idempotent. calling more than once has no effect.
-static void CameraMetadata_close(JNIEnv *env, jobject thiz) {
+static void CameraMetadata_update(JNIEnv *env, jclass thiz, jlong dst, jlong src) {
     ALOGV("%s", __FUNCTION__);
 
-    CameraMetadata* metadata = CameraMetadata_getPointerNoThrow(env, thiz);
+    CameraMetadata* metadataDst = CameraMetadata_getPointerThrow(env, dst);
+    CameraMetadata* metadataSrc = CameraMetadata_getPointerThrow(env, src);
 
-    if (metadata != NULL) {
-        delete metadata;
-        env->SetLongField(thiz, fields.metadata_ptr, 0);
+    if (((metadataDst == NULL) || (metadataDst->isEmpty())) ||
+            ((metadataSrc == NULL) || metadataSrc->isEmpty())) {
+        return;
     }
 
-    LOG_ALWAYS_FATAL_IF(CameraMetadata_getPointerNoThrow(env, thiz) != NULL,
-                        "Expected the native ptr to be 0 after #close");
+    auto metaBuffer = metadataSrc->getAndLock();
+    camera_metadata_ro_entry_t entry;
+    auto entryCount = get_camera_metadata_entry_count(metaBuffer);
+    for (size_t i = 0; i < entryCount; i++) {
+        auto stat = get_camera_metadata_ro_entry(metaBuffer, i, &entry);
+        if (stat != NO_ERROR) {
+            ALOGE("%s: Failed to retrieve source metadata!", __func__);
+            metadataSrc->unlock(metaBuffer);
+            return;
+        }
+        switch (entry.type) {
+            case TYPE_BYTE:
+                metadataDst->update(entry.tag, entry.data.u8, entry.count);
+                break;
+            case TYPE_INT32:
+                metadataDst->update(entry.tag, entry.data.i32, entry.count);
+                break;
+            case TYPE_FLOAT:
+                metadataDst->update(entry.tag, entry.data.f, entry.count);
+                break;
+            case TYPE_INT64:
+                metadataDst->update(entry.tag, entry.data.i64, entry.count);
+                break;
+            case TYPE_DOUBLE:
+                metadataDst->update(entry.tag, entry.data.d, entry.count);
+                break;
+            case TYPE_RATIONAL:
+                metadataDst->update(entry.tag, entry.data.r, entry.count);
+                break;
+            default:
+                ALOGE("%s: Unsupported tag type: %d!", __func__, entry.type);
+        }
+    }
+    metadataSrc->unlock(metaBuffer);
 }
 
-static void CameraMetadata_swap(JNIEnv *env, jobject thiz, jobject other) {
+static jlong CameraMetadata_getBufferSize(JNIEnv *env, jclass thiz, jlong ptr) {
     ALOGV("%s", __FUNCTION__);
 
-    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, thiz);
+    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, ptr);
 
-    // order is important: we can't call another JNI method
-    // if there is an exception pending
+    if (metadata == NULL) return 0;
+
+    return metadata->bufferSize();
+}
+
+// idempotent. calling more than once has no effect.
+static void CameraMetadata_close(JNIEnv *env, jclass thiz, jlong ptr) {
+    ALOGV("%s", __FUNCTION__);
+
+    auto metadata = CameraMetadata_getSharedPtr(ptr);
+    if (metadata != nullptr) {
+        delete metadata;
+    }
+}
+
+static void CameraMetadata_swap(JNIEnv *env, jclass thiz, jlong ptr, jlong other) {
+    ALOGV("%s", __FUNCTION__);
+
+    auto metadata = CameraMetadata_getSharedPtr(ptr);
+    auto otherMetadata = CameraMetadata_getSharedPtr(other);
+
     if (metadata == NULL) return;
-
-    CameraMetadata* otherMetadata = CameraMetadata_getPointerThrow(env, other, "other");
-
     if (otherMetadata == NULL) return;
 
+    // Need to swap shared pointers, not CameraMetadata, since the latter may be in use
+    // by an NDK client, and we don't want to swap their data out from under them.
     metadata->swap(*otherMetadata);
 }
 
-static jbyteArray CameraMetadata_readValues(JNIEnv *env, jobject thiz, jint tag) {
+static jbyteArray CameraMetadata_readValues(JNIEnv *env, jclass thiz, jint tag, jlong ptr) {
     ALOGV("%s (tag = %d)", __FUNCTION__, tag);
 
-    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, thiz);
+    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, ptr);
     if (metadata == NULL) return NULL;
 
     const camera_metadata_t *metaBuffer = metadata->getAndLock();
@@ -322,10 +372,11 @@ static jbyteArray CameraMetadata_readValues(JNIEnv *env, jobject thiz, jint tag)
     return byteArray;
 }
 
-static void CameraMetadata_writeValues(JNIEnv *env, jobject thiz, jint tag, jbyteArray src) {
+static void CameraMetadata_writeValues(JNIEnv *env, jclass thiz, jint tag, jbyteArray src,
+        jlong ptr) {
     ALOGV("%s (tag = %d)", __FUNCTION__, tag);
 
-    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, thiz);
+    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, ptr);
     if (metadata == NULL) return;
 
     const camera_metadata_t *metaBuffer = metadata->getAndLock();
@@ -395,9 +446,9 @@ static void* CameraMetadata_writeMetadataThread(void* arg) {
     return NULL;
 }
 
-static void CameraMetadata_dump(JNIEnv *env, jobject thiz) {
+static void CameraMetadata_dump(JNIEnv *env, jclass thiz, jlong ptr) {
     ALOGV("%s", __FUNCTION__);
-    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, thiz);
+    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, ptr);
     if (metadata == NULL) {
         return;
     }
@@ -463,7 +514,7 @@ static void CameraMetadata_dump(JNIEnv *env, jobject thiz) {
         ssize_t res;
         while ((res = TEMP_FAILURE_RETRY(read(readFd, &out[0], /*count*/1))) > 0) {
             if (out[0] == '\n') {
-                ALOGD("%s", logLine.string());
+                ALOGD("%s", logLine.c_str());
                 logLine.clear();
             } else {
                 logLine.append(out);
@@ -475,8 +526,8 @@ static void CameraMetadata_dump(JNIEnv *env, jobject thiz) {
                     "Failed to read from fd (errno = %#x, message = '%s')",
                     errno, strerror(errno));
             //return;
-        } else if (!logLine.isEmpty()) {
-            ALOGD("%s", logLine.string());
+        } else if (!logLine.empty()) {
+            ALOGD("%s", logLine.c_str());
         }
 
         close(readFd);
@@ -491,9 +542,9 @@ static void CameraMetadata_dump(JNIEnv *env, jobject thiz) {
     }
 }
 
-static void CameraMetadata_readFromParcel(JNIEnv *env, jobject thiz, jobject parcel) {
+static void CameraMetadata_readFromParcel(JNIEnv *env, jclass thiz, jobject parcel, jlong ptr) {
     ALOGV("%s", __FUNCTION__);
-    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, thiz);
+    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, ptr);
     if (metadata == NULL) {
         return;
     }
@@ -510,11 +561,20 @@ static void CameraMetadata_readFromParcel(JNIEnv *env, jobject thiz, jobject par
                              "Failed to read from parcel (error code %d)", err);
         return;
     }
+
+    // Update vendor descriptor cache if necessary
+    auto vendorId = metadata->getVendorId();
+    if ((vendorId != CAMERA_METADATA_INVALID_VENDOR_ID) &&
+            !VendorTagDescriptorCache::isVendorCachePresent(vendorId)) {
+        ALOGW("%s: Tag vendor id missing or cache not initialized, trying to update!",
+                __FUNCTION__);
+        CameraMetadata_setupGlobalVendorTagDescriptor(env, thiz);
+    }
 }
 
-static void CameraMetadata_writeToParcel(JNIEnv *env, jobject thiz, jobject parcel) {
+static void CameraMetadata_writeToParcel(JNIEnv *env, jclass thiz, jobject parcel, jlong ptr) {
     ALOGV("%s", __FUNCTION__);
-    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, thiz);
+    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, ptr);
     if (metadata == NULL) {
         return;
     }
@@ -539,6 +599,9 @@ static void CameraMetadata_writeToParcel(JNIEnv *env, jobject thiz, jobject parc
 
 static const JNINativeMethod gCameraMetadataMethods[] = {
 // static methods
+  { "nativeSetVendorId",
+    "(JJ)V",
+    (void *)CameraMetadata_setVendorId },
   { "nativeGetTagFromKey",
     "(Ljava/lang/String;J)I",
     (void *)CameraMetadata_getTagFromKey },
@@ -553,44 +616,50 @@ static const JNINativeMethod gCameraMetadataMethods[] = {
     "()J",
     (void*)CameraMetadata_allocate },
   { "nativeAllocateCopy",
-    "(L" CAMERA_METADATA_CLASS_NAME ";)J",
+    "(J)J",
     (void *)CameraMetadata_allocateCopy },
+  { "nativeUpdate",
+    "(JJ)V",
+    (void*)CameraMetadata_update },
   { "nativeIsEmpty",
-    "()Z",
+    "(J)Z",
     (void*)CameraMetadata_isEmpty },
   { "nativeGetEntryCount",
-    "()I",
+    "(J)I",
     (void*)CameraMetadata_getEntryCount },
+  { "nativeGetBufferSize",
+    "(J)J",
+    (void*)CameraMetadata_getBufferSize },
   { "nativeClose",
-    "()V",
+    "(J)V",
     (void*)CameraMetadata_close },
   { "nativeSwap",
-    "(L" CAMERA_METADATA_CLASS_NAME ";)V",
+    "(JJ)V",
     (void *)CameraMetadata_swap },
   { "nativeGetTagFromKeyLocal",
-    "(Ljava/lang/String;)I",
+    "(JLjava/lang/String;)I",
     (void *)CameraMetadata_getTagFromKeyLocal },
   { "nativeGetTypeFromTagLocal",
-    "(I)I",
+    "(JI)I",
     (void *)CameraMetadata_getTypeFromTagLocal },
   { "nativeReadValues",
-    "(I)[B",
+    "(IJ)[B",
     (void *)CameraMetadata_readValues },
   { "nativeWriteValues",
-    "(I[B)V",
+    "(I[BJ)V",
     (void *)CameraMetadata_writeValues },
   { "nativeDump",
-    "()V",
+    "(J)V",
     (void *)CameraMetadata_dump },
   { "nativeGetAllVendorKeys",
-    "(Ljava/lang/Class;)Ljava/util/ArrayList;",
+    "(JLjava/lang/Class;)Ljava/util/ArrayList;",
     (void *)CameraMetadata_getAllVendorKeys},
 // Parcelable interface
   { "nativeReadFromParcel",
-    "(Landroid/os/Parcel;)V",
+    "(Landroid/os/Parcel;J)V",
     (void *)CameraMetadata_readFromParcel },
   { "nativeWriteToParcel",
-    "(Landroid/os/Parcel;)V",
+    "(Landroid/os/Parcel;J)V",
     (void *)CameraMetadata_writeToParcel },
 };
 
@@ -647,13 +716,11 @@ int register_android_hardware_camera2_CameraMetadata(JNIEnv *env)
 
 extern "C" {
 
-static jint CameraMetadata_getTypeFromTagLocal(JNIEnv *env, jobject thiz, jint tag) {
-    CameraMetadata* metadata = CameraMetadata_getPointerNoThrow(env, thiz);
+static jint CameraMetadata_getTypeFromTagLocal(JNIEnv *env, jclass thiz, jlong ptr, jint tag) {
+    CameraMetadata* metadata = CameraMetadata_getPointerNoThrow(ptr);
     metadata_vendor_id_t vendorId = CAMERA_METADATA_INVALID_VENDOR_ID;
     if (metadata) {
-        const camera_metadata_t *metaBuffer = metadata->getAndLock();
-        vendorId = get_camera_metadata_vendor_id(metaBuffer);
-        metadata->unlock(metaBuffer);
+        vendorId = metadata->getVendorId();
     }
 
     int tagType = get_local_camera_metadata_tag_type_vendor_id(tag, vendorId);
@@ -666,7 +733,8 @@ static jint CameraMetadata_getTypeFromTagLocal(JNIEnv *env, jobject thiz, jint t
     return tagType;
 }
 
-static jint CameraMetadata_getTagFromKeyLocal(JNIEnv *env, jobject thiz, jstring keyName) {
+static jint CameraMetadata_getTagFromKeyLocal(JNIEnv *env, jclass thiz, jlong ptr,
+        jstring keyName) {
     ScopedUtfChars keyScoped(env, keyName);
     const char *key = keyScoped.c_str();
     if (key == NULL) {
@@ -677,13 +745,11 @@ static jint CameraMetadata_getTagFromKeyLocal(JNIEnv *env, jobject thiz, jstring
 
     uint32_t tag = 0;
     sp<VendorTagDescriptor> vTags;
-    CameraMetadata* metadata = CameraMetadata_getPointerNoThrow(env, thiz);
+    CameraMetadata* metadata = CameraMetadata_getPointerNoThrow(ptr);
     if (metadata) {
         sp<VendorTagDescriptorCache> cache = VendorTagDescriptorCache::getGlobalVendorTagCache();
         if (cache.get()) {
-            const camera_metadata_t *metaBuffer = metadata->getAndLock();
-            metadata_vendor_id_t vendorId = get_camera_metadata_vendor_id(metaBuffer);
-            metadata->unlock(metaBuffer);
+            auto vendorId = metadata->getVendorId();
             cache->getVendorTagDescriptor(vendorId, &vTags);
         }
     }
@@ -696,7 +762,8 @@ static jint CameraMetadata_getTagFromKeyLocal(JNIEnv *env, jobject thiz, jstring
     return tag;
 }
 
-static jobject CameraMetadata_getAllVendorKeys(JNIEnv* env, jobject thiz, jclass keyType) {
+static jobject CameraMetadata_getAllVendorKeys(JNIEnv* env, jclass thiz, jlong ptr,
+        jclass keyType) {
     metadata_vendor_id_t vendorId = CAMERA_METADATA_INVALID_VENDOR_ID;
     // Get all vendor tags
     sp<VendorTagDescriptor> vTags = VendorTagDescriptor::getGlobalVendorTagDescriptor();
@@ -707,13 +774,11 @@ static jobject CameraMetadata_getAllVendorKeys(JNIEnv* env, jobject thiz, jclass
             return nullptr;
         }
 
-        CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, thiz);
+        CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, ptr);
         if (metadata == NULL) return NULL;
 
-        const camera_metadata_t *metaBuffer = metadata->getAndLock();
-        vendorId = get_camera_metadata_vendor_id(metaBuffer);
+        vendorId = metadata->getVendorId();
         cache->getVendorTagDescriptor(vendorId, &vTags);
-        metadata->unlock(metaBuffer);
         if (vTags.get() == nullptr) {
             return nullptr;
         }
@@ -811,7 +876,28 @@ static jobject CameraMetadata_getAllVendorKeys(JNIEnv* env, jobject thiz, jclass
     return arrayList;
 }
 
-static jint CameraMetadata_getTagFromKey(JNIEnv *env, jobject thiz, jstring keyName,
+static void CameraMetadata_setVendorId(JNIEnv *env, jclass thiz, jlong ptr,
+        jlong vendorId) {
+    ALOGV("%s", __FUNCTION__);
+
+    CameraMetadata* metadata = CameraMetadata_getPointerThrow(env, ptr);
+
+    if (metadata == NULL) {
+        ALOGW("%s: Returning early due to exception being thrown",
+               __FUNCTION__);
+        return;
+    }
+    if (metadata->isEmpty()) {
+        std::unique_ptr<CameraMetadata> emptyBuffer = std::make_unique<CameraMetadata>(10);
+        metadata->swap(*emptyBuffer);
+    }
+
+    camera_metadata_t *meta = const_cast<camera_metadata_t *>(metadata->getAndLock());
+    set_camera_metadata_vendor_id(meta, vendorId);
+    metadata->unlock(meta);
+}
+
+static jint CameraMetadata_getTagFromKey(JNIEnv *env, jclass thiz, jstring keyName,
         jlong vendorId) {
     ScopedUtfChars keyScoped(env, keyName);
     const char *key = keyScoped.c_str();
@@ -839,7 +925,7 @@ static jint CameraMetadata_getTagFromKey(JNIEnv *env, jobject thiz, jstring keyN
     return tag;
 }
 
-static jint CameraMetadata_getTypeFromTag(JNIEnv *env, jobject thiz, jint tag, jlong vendorId) {
+static jint CameraMetadata_getTypeFromTag(JNIEnv *env, jclass thiz, jint tag, jlong vendorId) {
     int tagType = get_local_camera_metadata_tag_type_vendor_id(tag, vendorId);
     if (tagType == -1) {
         jniThrowExceptionFmt(env, "java/lang/IllegalArgumentException",
@@ -850,7 +936,7 @@ static jint CameraMetadata_getTypeFromTag(JNIEnv *env, jobject thiz, jint tag, j
     return tagType;
 }
 
-static jint CameraMetadata_setupGlobalVendorTagDescriptor(JNIEnv *env, jobject thiz) {
+static jint CameraMetadata_setupGlobalVendorTagDescriptor(JNIEnv *env, jclass thiz) {
     const String16 NAME("media.camera");
     sp<hardware::ICameraService> cameraService;
     status_t err = getService(NAME, /*out*/&cameraService);
@@ -870,8 +956,8 @@ static jint CameraMetadata_setupGlobalVendorTagDescriptor(JNIEnv *env, jobject t
         return OK;
     } else if (!res.isOk()) {
         VendorTagDescriptor::clearGlobalVendorTagDescriptor();
-        ALOGE("%s: Failed to setup vendor tag descriptors: %s",
-                __FUNCTION__, res.toString8().string());
+        ALOGE("%s: Failed to setup vendor tag descriptors: %s", __FUNCTION__,
+              res.toString8().c_str());
         return res.serviceSpecificErrorCode();
     }
     if (0 < desc->getTagCount()) {
@@ -885,8 +971,8 @@ static jint CameraMetadata_setupGlobalVendorTagDescriptor(JNIEnv *env, jobject t
             return OK;
         } else if (!res.isOk()) {
             VendorTagDescriptorCache::clearGlobalVendorTagCache();
-            ALOGE("%s: Failed to setup vendor tag cache: %s",
-                    __FUNCTION__, res.toString8().string());
+            ALOGE("%s: Failed to setup vendor tag cache: %s", __FUNCTION__,
+                  res.toString8().c_str());
             return res.serviceSpecificErrorCode();
         }
 

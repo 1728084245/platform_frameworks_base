@@ -8,6 +8,7 @@ import android.app.UiAutomation;
 import android.app.UiAutomationConnection;
 import android.content.Intent;
 import android.os.HandlerThread;
+import android.os.Looper;
 import android.os.RemoteException;
 
 /**
@@ -26,6 +27,10 @@ public class UiAutomationShellWrapper {
             throw new IllegalStateException("Already connected!");
         }
         mHandlerThread.start();
+        // The AccessibilityInteractionClient used by UiAutomation expects the main looper to
+        // be prepared. In most contexts this is normally done automatically, but must be called
+        // explicitly here because this is a shell tool.
+        Looper.prepareMainLooper();
         mUiAutomation = new UiAutomation(mHandlerThread.getLooper(),
                 new UiAutomationConnection());
         mUiAutomation.connect();
@@ -49,7 +54,7 @@ public class UiAutomationShellWrapper {
         }
         try {
             if (isSet) {
-                am.setActivityController(new DummyActivityController(), true);
+                am.setActivityController(new NoOpActivityController(), true);
             } else {
                 am.setActivityController(null, true);
             }
@@ -80,9 +85,9 @@ public class UiAutomationShellWrapper {
     }
 
     /**
-     * Dummy, no interference, activity controller.
+     * No-op, no interference, activity controller.
      */
-    private class DummyActivityController extends IActivityController.Stub {
+    private class NoOpActivityController extends IActivityController.Stub {
         @Override
         public boolean activityStarting(Intent intent, String pkg) throws RemoteException {
             /* do nothing and let activity proceed normally */

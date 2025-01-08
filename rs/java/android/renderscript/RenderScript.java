@@ -16,7 +16,7 @@
 
 package android.renderscript;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.res.AssetManager;
 import android.graphics.Bitmap;
@@ -44,7 +44,12 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * <p>For more information about creating an application that uses RenderScript, read the
  * <a href="{@docRoot}guide/topics/renderscript/index.html">RenderScript</a> developer guide.</p>
  * </div>
+ *
+ * @deprecated Renderscript has been deprecated in API level 31. Please refer to the <a
+ * href="https://developer.android.com/guide/topics/renderscript/migration-guide">migration
+ * guide</a> for the proposed alternatives.
  **/
+@Deprecated
 public class RenderScript {
     static final long TRACE_TAG = Trace.TRACE_TAG_RS;
 
@@ -447,32 +452,27 @@ public class RenderScript {
         validate();
         return rsnAllocationCreateTyped(mContext, type, mip, usage, pointer);
     }
-    native long rsnAllocationCreateFromBitmap(long con, long type, int mip, Bitmap bmp, int usage);
+
+    native long rsnAllocationCreateFromBitmap(long con, long type, int mip, Bitmap bmp,
+                int usage);
     synchronized long nAllocationCreateFromBitmap(long type, int mip, Bitmap bmp, int usage) {
         validate();
         return rsnAllocationCreateFromBitmap(mContext, type, mip, bmp, usage);
     }
 
-    native long rsnAllocationCreateBitmapBackedAllocation(long con, long type, int mip, Bitmap bmp, int usage);
-    synchronized long nAllocationCreateBitmapBackedAllocation(long type, int mip, Bitmap bmp, int usage) {
+    native long rsnAllocationCreateBitmapBackedAllocation(long con, long type, int mip, Bitmap bmp,
+                int usage);
+    synchronized long nAllocationCreateBitmapBackedAllocation(long type, int mip, Bitmap bmp,
+                int usage) {
         validate();
         return rsnAllocationCreateBitmapBackedAllocation(mContext, type, mip, bmp, usage);
     }
 
-    native long rsnAllocationCubeCreateFromBitmap(long con, long type, int mip, Bitmap bmp, int usage);
+    native long rsnAllocationCubeCreateFromBitmap(long con, long type, int mip, Bitmap bmp,
+                int usage);
     synchronized long nAllocationCubeCreateFromBitmap(long type, int mip, Bitmap bmp, int usage) {
         validate();
         return rsnAllocationCubeCreateFromBitmap(mContext, type, mip, bmp, usage);
-    }
-    native long  rsnAllocationCreateBitmapRef(long con, long type, Bitmap bmp);
-    synchronized long nAllocationCreateBitmapRef(long type, Bitmap bmp) {
-        validate();
-        return rsnAllocationCreateBitmapRef(mContext, type, bmp);
-    }
-    native long  rsnAllocationCreateFromAssetStream(long con, int mips, int assetStream, int usage);
-    synchronized long nAllocationCreateFromAssetStream(int mips, int assetStream, int usage) {
-        validate();
-        return rsnAllocationCreateFromAssetStream(mContext, mips, assetStream, usage);
     }
 
     native void  rsnAllocationCopyToBitmap(long con, long alloc, Bitmap bmp);
@@ -487,8 +487,10 @@ public class RenderScript {
         rsnAllocationSyncAll(mContext, alloc, src);
     }
 
-    native ByteBuffer rsnAllocationGetByteBuffer(long con, long alloc, long[] stride, int xBytesSize, int dimY, int dimZ);
-    synchronized ByteBuffer nAllocationGetByteBuffer(long alloc, long[] stride, int xBytesSize, int dimY, int dimZ) {
+    native ByteBuffer rsnAllocationGetByteBuffer(long con, long alloc, long[] stride,
+                int xBytesSize, int dimY, int dimZ);
+    synchronized ByteBuffer nAllocationGetByteBuffer(long alloc, long[] stride, int xBytesSize,
+                int dimY, int dimZ) {
         validate();
         return rsnAllocationGetByteBuffer(mContext, alloc, stride, xBytesSize, dimY, dimZ);
     }
@@ -1366,13 +1368,6 @@ public class RenderScript {
             mApplicationContext = ctx.getApplicationContext();
         }
         mRWLock = new ReentrantReadWriteLock();
-        try {
-            registerNativeAllocation.invoke(sRuntime, 4 * 1024 * 1024); // 4MB for GC sake
-        } catch (Exception e) {
-            Log.e(RenderScript.LOG_TAG, "Couldn't invoke registerNativeAllocation:" + e);
-            throw new RSRuntimeException("Couldn't invoke registerNativeAllocation:" + e);
-        }
-
     }
 
     /**

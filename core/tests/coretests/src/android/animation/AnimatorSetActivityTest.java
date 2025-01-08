@@ -1,24 +1,56 @@
+/*
+ * Copyright (C) 2015 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package android.animation;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+
+import android.util.Property;
+import android.view.View;
+
+import androidx.annotation.NonNull;
+import androidx.test.annotation.UiThreadTest;
+import androidx.test.filters.SmallTest;
+import androidx.test.rule.ActivityTestRule;
 
 import com.android.frameworks.coretests.R;
 
-import android.test.ActivityInstrumentationTestCase2;
-import android.test.UiThreadTest;
-import android.test.suitebuilder.annotation.SmallTest;
-import android.view.View;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Rule;
+import org.junit.Test;
 
 import java.util.ArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
-public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<AnimatorSetActivity> {
+@SmallTest
+public class AnimatorSetActivityTest {
+
+    @Rule
+    public final ActivityTestRule<AnimatorSetActivity> mActivityRule =
+            new ActivityTestRule<>(AnimatorSetActivity.class);
 
     private static final long POLL_INTERVAL = 100; // ms
     private AnimatorSetActivity mActivity;
     private ObjectAnimator a1,a2,a3;
     private ValueAnimator a4,a5;
-
-    public AnimatorSetActivityTest() {
-        super(AnimatorSetActivity.class);
-    }
 
     static class MyListener implements Animator.AnimatorListener {
         boolean startIsCalled = false;
@@ -46,10 +78,9 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         }
     }
 
-    @Override
+    @Before
     public void setUp() throws Exception {
-        super.setUp();
-        mActivity = getActivity();
+        mActivity = mActivityRule.getActivity();
 
         View square1 = mActivity.findViewById(R.id.square1);
         View square2 = mActivity.findViewById(R.id.square2);
@@ -61,7 +92,7 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         a5 = ValueAnimator.ofFloat(10f, 5f).setDuration(850);
     }
 
-    @Override
+    @After
     public void tearDown() throws Exception {
         mActivity = null;
         a1 = null;
@@ -69,10 +100,9 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         a3 = null;
         a4 = null;
         a5 = null;
-        super.tearDown();
     }
 
-    @SmallTest
+    @Test
     public void testGetChildAnimations() {
         AnimatorSet s1 = new AnimatorSet();
         s1.playTogether(a1, a2, a3);
@@ -112,7 +142,7 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         }
     }
 
-    @SmallTest
+    @Test
     public void testTotalDuration() {
         ArrayList<Animator> list = getAnimatorList();
 
@@ -175,7 +205,7 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
 
     }
 
-    @SmallTest
+    @Test
     public void testGetDuration() {
         AnimatorSet s = new AnimatorSet();
         assertTrue(s.getDuration() < 0);
@@ -188,8 +218,8 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
 
     }
 
-    @SmallTest
     @UiThreadTest
+    @Test
     public void testSetDuration() {
         AnimatorSet s = getSequentialSet();
         assertTrue(s.getDuration() < 0);
@@ -207,7 +237,7 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         assertEquals(duration, a5.getDuration());
     }
 
-    @SmallTest
+    @Test
     public void testAddListener() throws InterruptedException {
         // Verify that the listener is added to the list of listeners in the AnimatorSet
         // and that newly added listener gets callback for lifecycle events of the animator
@@ -224,13 +254,10 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         assertFalse(listener.endIsCalled);
 
         try {
-            runTestOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    s.start();
-                    assertTrue(listener.startIsCalled);
-                    assertFalse(listener.endIsCalled);
-                }
+            mActivityRule.runOnUiThread(() -> {
+                s.start();
+                assertTrue(listener.startIsCalled);
+                assertFalse(listener.endIsCalled);
             });
         } catch (Throwable throwable) {
             throwable.printStackTrace();
@@ -241,18 +268,13 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         assertTrue(listener.endIsCalled);
     }
 
-    @SmallTest
+    @Test
     public void testRemoveListener() throws Throwable {
         final AnimatorSet s = new AnimatorSet();
         s.playTogether(a1, a2, a3, a4);
         MyListener listener = new MyListener();
         s.addListener(listener);
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                s.start();
-            }
-        });
+        mActivityRule.runOnUiThread(s::start);
 
         Thread.sleep(s.getTotalDuration() + 100);
         assertTrue(listener.startIsCalled);
@@ -265,18 +287,13 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         listener.startIsCalled = false;
         listener.endIsCalled = false;
 
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                s.start();
-            }
-        });
+        mActivityRule.runOnUiThread(s::start);
         Thread.sleep(s.getTotalDuration() + 100);
         assertFalse(listener.startIsCalled);
         assertFalse(listener.endIsCalled);
     }
 
-    @SmallTest
+    @Test
     public void testEnd() throws Throwable {
         // End animator set
         final AnimatorSet s = new AnimatorSet();
@@ -284,37 +301,30 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         final MyListener listener = new MyListener();
         s.addListener(listener);
         assertFalse(listener.endIsCalled);
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                s.start();
-                assertTrue(s.isStarted());
-                assertTrue(listener.startIsCalled);
-                assertFalse(listener.endIsCalled);
-            }
+        mActivityRule.runOnUiThread(() -> {
+            s.start();
+            assertTrue(s.isStarted());
+            assertTrue(listener.startIsCalled);
+            assertFalse(listener.endIsCalled);
         });
 
         Thread.sleep(a2.getTotalDuration());
 
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                s.end();
-                assertTrue(listener.startIsCalled);
-                assertTrue(listener.endIsCalled);
-                assertFalse(s.isRunning());
-                assertFalse(s.isStarted());
+        mActivityRule.runOnUiThread(() -> {
+            s.end();
+            assertTrue(listener.startIsCalled);
+            assertTrue(listener.endIsCalled);
+            assertFalse(s.isRunning());
+            assertFalse(s.isStarted());
 
-                assertFalse(a1.isStarted());
-                assertFalse(a2.isStarted());
-                assertFalse(a3.isStarted());
-                assertFalse(a4.isStarted());
-            }
+            assertFalse(a1.isStarted());
+            assertFalse(a2.isStarted());
+            assertFalse(a3.isStarted());
+            assertFalse(a4.isStarted());
         });
-
     }
 
-    @SmallTest
+    @Test
     public void testStart() throws Throwable {
         final AnimatorSet s = new AnimatorSet();
         ArrayList<Animator> animators = getAnimatorList();
@@ -338,12 +348,9 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
             assertFalse(l.endIsCalled);
         }
 
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                s.start();
-                assertTrue(l.startIsCalled);
-            }
+        mActivityRule.runOnUiThread(() -> {
+            s.start();
+            assertTrue(l.startIsCalled);
         });
 
         long timeout = s.getTotalDuration() * 2;
@@ -366,7 +373,7 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         }
     }
 
-    @SmallTest
+    @Test
     public void testCancel() throws Throwable {
         // Check whether cancel would trigger onAnimationCanceled and cancel all the unfinished
         // animations
@@ -394,42 +401,33 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
             assertFalse(l.endIsCalled);
         }
 
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                s.start();
-            }
-        });
+        mActivityRule.runOnUiThread(s::start);
 
         Thread.sleep(a1.getTotalDuration());
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                assertTrue(s.isStarted());
-                ArrayList<Integer> runningAnimIds = new ArrayList<Integer>();
-                for (int i = 0; i < animators.size(); i++) {
-                    if (animators.get(i).isStarted()) {
-                        runningAnimIds.add(i);
-                    }
-                }
-                s.cancel();
-                assertTrue(l.startIsCalled);
-                assertTrue(l.cancelIsCalled);
-                assertTrue(l.endIsCalled);
-
-                for (int i = 0; i < listeners.size(); i++) {
-                    assertTrue(listeners.get(i).startIsCalled);
-                    if (runningAnimIds.contains(i)) {
-                        assertTrue(listeners.get(i).cancelIsCalled);
-                    }
-                    assertTrue(listeners.get(i).endIsCalled);
+        mActivityRule.runOnUiThread(() -> {
+            assertTrue(s.isStarted());
+            ArrayList<Integer> runningAnimIds = new ArrayList<>();
+            for (int i = 0; i < animators.size(); i++) {
+                if (animators.get(i).isStarted()) {
+                    runningAnimIds.add(i);
                 }
             }
-        });
+            s.cancel();
+            assertTrue(l.startIsCalled);
+            assertTrue(l.cancelIsCalled);
+            assertTrue(l.endIsCalled);
 
+            for (int i = 0; i < listeners.size(); i++) {
+                assertTrue(listeners.get(i).startIsCalled);
+                if (runningAnimIds.contains(i)) {
+                    assertTrue(listeners.get(i).cancelIsCalled);
+                }
+                assertTrue(listeners.get(i).endIsCalled);
+            }
+        });
     }
 
-    @SmallTest
+    @Test
     public void testIsRunning() throws Throwable {
         final AnimatorSet s = new AnimatorSet();
         final long startDelay = 500;
@@ -438,51 +436,42 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         s.setStartDelay(startDelay);
         MyListener listener = new MyListener();
         s.addListener(listener);
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                s.start();
-            }
-        });
+        mActivityRule.runOnUiThread(s::start);
 
         while (!listener.endIsCalled) {
-            boolean passedStartDelay = a1.isStarted() || a2.isStarted() || a3.isStarted() ||
-                    a4.isStarted() || a5.isStarted();
-            assertEquals(passedStartDelay, s.isRunning());
+            mActivityRule.runOnUiThread(() -> {
+                boolean passedStartDelay = a1.isStarted() || a2.isStarted() || a3.isStarted()
+                        || a4.isStarted() || a5.isStarted();
+                assertEquals(passedStartDelay, s.isRunning());
+            });
             Thread.sleep(50);
         }
         assertFalse(s.isRunning());
     }
 
-    @SmallTest
+    @Test
     public void testPauseAndResume() throws Throwable {
         final AnimatorSet set = getSequentialSet();
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                // Calling pause before start should have no effect, per documentation
-                set.pause();
-                set.start();
-                assertFalse(set.isPaused());
-            }
+        mActivityRule.runOnUiThread(() -> {
+            // Calling pause before start should have no effect, per documentation
+            set.pause();
+            set.start();
+            assertFalse(set.isPaused());
         });
 
         while (!a2.isStarted()) {
             Thread.sleep(50);
         }
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                assertFalse(set.isPaused());
-                set.pause();
-                assertTrue(set.isPaused());
-                set.resume();
-                assertFalse(set.isPaused());
-            }
+        mActivityRule.runOnUiThread(() -> {
+            assertFalse(set.isPaused());
+            set.pause();
+            assertTrue(set.isPaused());
+            set.resume();
+            assertFalse(set.isPaused());
         });
     }
 
-    @SmallTest
+    @Test
     public void testClone() throws Throwable {
         // Set up an AnimatorSet and two clones, add one listener to each. When the clones animate,
         // listeners of both the clone and the animator being cloned should receive animation
@@ -518,14 +507,11 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
 
         // Start the animation, and make the first clone during its run and the second clone once
         // it ends.
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                assertFalse(l1.startIsCalled);
-                assertFalse(l1.endIsCalled);
+        mActivityRule.runOnUiThread(() -> {
+            assertFalse(l1.startIsCalled);
+            assertFalse(l1.endIsCalled);
 
-                s1.start();
-            }
+            s1.start();
         });
 
         // Make the first clone, during the animation's run.
@@ -535,20 +521,12 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         s2.addListener(l2);
 
         Thread.sleep(POLL_INTERVAL);
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                s1.end();
-            }
-        });
+        mActivityRule.runOnUiThread(s1::end);
 
         Thread.sleep(POLL_INTERVAL);
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                assertTrue(l1.startIsCalled);
-                assertTrue(l1.endIsCalled);
-            }
+        mActivityRule.runOnUiThread(() -> {
+            assertTrue(l1.startIsCalled);
+            assertTrue(l1.endIsCalled);
         });
         Thread.sleep(POLL_INTERVAL);
 
@@ -557,59 +535,147 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         final MyListener l3 = new MyListener();
         s3.addListener(l3);
 
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                // Checking the fields before animations start.
-                assertFalse(l2.startIsCalled);
-                assertFalse(l2.cancelIsCalled);
-                assertFalse(l2.endIsCalled);
-                assertFalse(l3.startIsCalled);
-                assertFalse(l3.cancelIsCalled);
-                assertFalse(l3.endIsCalled);
+        mActivityRule.runOnUiThread(() -> {
+            // Checking the fields before animations start.
+            assertFalse(l2.startIsCalled);
+            assertFalse(l2.cancelIsCalled);
+            assertFalse(l2.endIsCalled);
+            assertFalse(l3.startIsCalled);
+            assertFalse(l3.cancelIsCalled);
+            assertFalse(l3.endIsCalled);
 
-                s2.start();
-                s3.start();
-            }
+            s2.start();
+            s3.start();
         });
 
         Thread.sleep(POLL_INTERVAL);
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                // Make sure the listeners receive the callbacks
-                // At this time only onAnimationStart() should be called.
-                assertTrue(l2.startIsCalled);
-                assertTrue(l3.startIsCalled);
-                assertFalse(l2.endIsCalled);
-                assertFalse(l3.endIsCalled);
-                assertFalse(l2.cancelIsCalled);
-                assertFalse(l3.cancelIsCalled);
+        mActivityRule.runOnUiThread(() -> {
+            // Make sure the listeners receive the callbacks
+            // At this time only onAnimationStart() should be called.
+            assertTrue(l2.startIsCalled);
+            assertTrue(l3.startIsCalled);
+            assertFalse(l2.endIsCalled);
+            assertFalse(l3.endIsCalled);
+            assertFalse(l2.cancelIsCalled);
+            assertFalse(l3.cancelIsCalled);
 
-                s2.end();
-                s3.cancel();
-            }
+            s2.end();
+            s3.cancel();
         });
         Thread.sleep(POLL_INTERVAL);
-        runTestOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                // Check that the new listeners for the new animations gets called for the events.
-                assertTrue(l2.startIsCalled);
-                assertFalse(l2.cancelIsCalled);
-                assertTrue(l2.endIsCalled);
-                assertTrue(l3.startIsCalled);
-                assertTrue(l3.cancelIsCalled);
-                assertTrue(l3.endIsCalled);
+        mActivityRule.runOnUiThread(() -> {
+            // Check that the new listeners for the new animations gets called for the events.
+            assertTrue(l2.startIsCalled);
+            assertFalse(l2.cancelIsCalled);
+            assertTrue(l2.endIsCalled);
+            assertTrue(l3.startIsCalled);
+            assertTrue(l3.cancelIsCalled);
+            assertTrue(l3.endIsCalled);
 
-                // Check that the listener on the animation that was being clone receive the
-                // animation lifecycle events for the clones.
-                assertTrue(onlyContains(startedAnimators, s1, s2, s3));
-                assertTrue(onlyContains(canceledAnimators, s3));
-                assertTrue(onlyContains(endedAnimators, s1, s2, s3));
+            // Check that the listener on the animation that was being clone receive the
+            // animation lifecycle events for the clones.
+            assertTrue(onlyContains(startedAnimators, s1, s2, s3));
+            assertTrue(onlyContains(canceledAnimators, s3));
+            assertTrue(onlyContains(endedAnimators, s1, s2, s3));
+        });
+    }
+
+    @Test
+    public void testInitializeWithoutReadingValues() throws Throwable {
+        // Some consumers crash while reading values before the animator starts
+        Property<int[], Integer> property = new Property<>(Integer.class, "firstValue") {
+            @Override
+            public Integer get(int[] target) {
+                throw new IllegalStateException("Shouldn't be called");
+            }
+
+            @Override
+            public void set(int[] target, Integer value) {
+                target[0] = value;
+            }
+        };
+
+        int[] target1 = new int[1];
+        int[] target2 = new int[1];
+        int[] target3 = new int[1];
+        ObjectAnimator animator1 = ObjectAnimator.ofInt(target1, property, 0, 100);
+        ObjectAnimator animator2 = ObjectAnimator.ofInt(target2, property, 0, 100);
+        ObjectAnimator animator3 = ObjectAnimator.ofInt(target3, property, 0, 100);
+        AnimatorSet set = new AnimatorSet();
+        set.playSequentially(animator1, animator2, animator3);
+
+        mActivityRule.runOnUiThread(() -> {
+            set.setCurrentPlayTime(900);
+            assertEquals(100, target1[0]);
+            assertEquals(100, target2[0]);
+            assertEquals(100, target3[0]);
+            set.setCurrentPlayTime(0);
+            assertEquals(0, target1[0]);
+            assertEquals(0, target2[0]);
+            assertEquals(0, target3[0]);
+        });
+    }
+
+    @Test
+    public void initAfterStartNotification() throws Throwable {
+        Property<int[], Integer> property = new Property<>(Integer.class, "firstValue") {
+            @Override
+            public Integer get(int[] target) {
+                throw new IllegalStateException("Shouldn't be called");
+            }
+
+            @Override
+            public void set(int[] target, Integer value) {
+                target[0] = value;
+            }
+        };
+        int[] target = new int[1];
+        ObjectAnimator animator1 = ObjectAnimator.ofInt(target, property, 0, 100);
+        ObjectAnimator animator2 = ObjectAnimator.ofInt(target, property, 0, 100);
+        ObjectAnimator animator3 = ObjectAnimator.ofInt(target, property, 0, 100);
+        animator1.setDuration(10);
+        animator2.setDuration(10);
+        animator3.setDuration(10);
+        AnimatorSet set = new AnimatorSet();
+        set.playSequentially(animator1, animator2, animator3);
+        final int[] values = new int[4];
+        animator2.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationStart(@NonNull Animator animation, boolean isReverse) {
+                values[0] = target[0];
+                animator2.setIntValues(target[0], target[0] + 100);
+            }
+
+            @Override
+            public void onAnimationEnd(@NonNull Animator animation, boolean isReverse) {
+                values[1] = target[0];
             }
         });
+        animator3.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationStart(@NonNull Animator animation, boolean isReverse) {
+                values[2] = target[0];
+                animator3.setIntValues(target[0], target[0] + 100);
+            }
 
+            @Override
+            public void onAnimationEnd(@NonNull Animator animation, boolean isReverse) {
+                values[3] = target[0];
+            }
+        });
+        final CountDownLatch latch = new CountDownLatch(1);
+        set.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(@NonNull Animator animation, boolean isReverse) {
+                latch.countDown();
+            }
+        });
+        mActivityRule.runOnUiThread(() -> set.start());
+        assertTrue(latch.await(1, TimeUnit.SECONDS));
+        assertEquals(100, values[0]);
+        assertEquals(200, values[1]);
+        assertEquals(200, values[2]);
+        assertEquals(300, values[3]);
     }
 
     /**
@@ -646,5 +712,4 @@ public class AnimatorSetActivityTest extends ActivityInstrumentationTestCase2<An
         list.add(a5);
         return list;
     }
-
 }

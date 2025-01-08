@@ -18,20 +18,17 @@
 #include "utils/Log.h"
 
 #include "jni.h"
-#include <nativehelper/JNIHelp.h>
+#include <nativehelper/JNIPlatformHelp.h>
 #include "android_runtime/AndroidRuntime.h"
 #include "android_runtime/Log.h"
 
 #include <stdio.h>
-#include <asm/byteorder.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 
 #include <usbhost/usbhost.h>
-
-#define MAX_DESCRIPTORS_LENGTH 4096
 
 namespace android
 {
@@ -134,6 +131,7 @@ static jobject android_server_UsbHostManager_openDevice(JNIEnv *env, jobject /* 
 
     jobject fileDescriptor = jniCreateFileDescriptor(env, newFD);
     if (fileDescriptor == NULL) {
+        close(newFD);
         return NULL;
     }
     return env->NewObject(gParcelFileDescriptorOffsets.mClass,

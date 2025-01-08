@@ -102,20 +102,78 @@
 
 
     <!-- Bluetooth settings -->
+    <!-- Titles for Bluetooth HCI Snoop Logging -->
+    <string-array name="bt_hci_snoop_log_entries">
+        <item>Disabled</item>
+        <item>Enabled Filtered</item>
+        <item>Enabled</item>
+    </string-array>
+
+    <!-- Values for Bluetooth HCI Snoop Logging -->
+    <string-array name="bt_hci_snoop_log_values" translatable="false">
+        <item>disabled</item>
+        <item>filtered</item>
+        <item>full</item>
+    </string-array>
+
+    <!-- Titles for Bluetooth HCI Snoop Filtered Logging -->
+    <string-array name="bt_hci_snoop_log_filters_entries">
+        <item>Leave only ACL headers</item>
+        <item>Filter A2DP media packets</item>
+        <item>Filter RFCOMM channel</item>
+    </string-array>
+
+        <!-- Values for Bluetooth HCI Snoop Filtered Logging -->
+    <string-array name="bt_hci_snoop_log_filters_values" translatable="false">
+        <item>headers</item>
+        <item>profiles.a2dp</item>
+        <item>profiles.rfcomm</item>
+    </string-array>
+
+        <!-- Titles for Bluetooth HCI Snoop Filtered Logging -->
+    <string-array name="bt_hci_snoop_log_profile_filter_entries">
+        <item>Disable</item>
+        <item>Fill with string of characters</item>
+        <item>Leave only header</item>
+        <item>Fully remove</item>
+    </string-array>
+
+        <!-- Values for Bluetooth HCI Snoop Filtered Logging -->
+    <string-array name="bt_hci_snoop_log_profile_filter_values" translatable="false">
+        <item>disabled</item>
+        <item>magic</item>
+        <item>header</item>
+        <item>fullfilter</item>
+    </string-array>
+
     <!-- Titles for Bluetooth AVRCP Versions -->
     <string-array name="bluetooth_avrcp_versions">
-        <item>AVRCP 1.4 (Default)</item>
+        <item>AVRCP 1.5 (Default)</item>
         <item>AVRCP 1.3</item>
-        <item>AVRCP 1.5</item>
+        <item>AVRCP 1.4</item>
         <item>AVRCP 1.6</item>
     </string-array>
 
     <!-- Values for Bluetooth AVRCP Versions -->
     <string-array name="bluetooth_avrcp_version_values">
-        <item>avrcp14</item>
-        <item>avrcp13</item>
         <item>avrcp15</item>
+        <item>avrcp13</item>
+        <item>avrcp14</item>
         <item>avrcp16</item>
+    </string-array>
+
+    <!-- Titles for Bluetooth MAP Versions -->
+    <string-array name="bluetooth_map_versions">
+        <item>MAP 1.2 (Default)</item>
+        <item>MAP 1.3</item>
+        <item>MAP 1.4</item>
+    </string-array>
+
+    <!-- Values for Bluetooth MAP Versions -->
+    <string-array name="bluetooth_map_version_values">
+        <item>map12</item>
+        <item>map13</item>
+        <item>map14</item>
     </string-array>
 
     <!-- Titles for Bluetooth Audio Codec selection preference. [CHAR LIMIT=50] -->
@@ -126,20 +184,8 @@
         <item><xliff:g id="qualcomm">Qualcomm®</xliff:g> <xliff:g id="aptx">aptX™</xliff:g> audio</item>
         <item><xliff:g id="qualcomm">Qualcomm®</xliff:g> <xliff:g id="aptx_hd">aptX™ HD</xliff:g> audio</item>
         <item>LDAC</item>
-        <item>Enable Optional Codecs</item>
-        <item>Disable Optional Codecs</item>
-    </string-array>
-
-    <!-- Values for Bluetooth Audio Codec selection preference. -->
-    <string-array name="bluetooth_a2dp_codec_values" translatable="false" >
-        <item>1000000</item>
-        <item>0</item>
-        <item>1</item>
-        <item>2</item>
-        <item>3</item>
-        <item>4</item>
-        <item>5</item>
-        <item>6</item>
+        <item>LC3</item>
+        <item>Opus</item>
     </string-array>
 
     <!-- Summaries for Bluetooth Audio Codec selection preference. [CHAR LIMIT=50]-->
@@ -150,8 +196,8 @@
         <item><xliff:g id="qualcomm">Qualcomm®</xliff:g> <xliff:g id="aptx">aptX™</xliff:g> audio</item>
         <item><xliff:g id="qualcomm">Qualcomm®</xliff:g> <xliff:g id="aptx_hd">aptX™ HD</xliff:g> audio</item>
         <item>LDAC</item>
-        <item>Enable Optional Codecs</item>
-        <item>Disable Optional Codecs</item>
+        <item>LC3</item>
+        <item>Opus</item>
     </string-array>
 
     <!-- Titles for Bluetooth Audio Codec Sample Rate selection preference. [CHAR LIMIT=50] -->
@@ -161,15 +207,6 @@
         <item>48.0 kHz</item>
         <item>88.2 kHz</item>
         <item>96.0 kHz</item>
-    </string-array>
-
-    <!-- Values for Bluetooth Audio Codec Sample Rate selection preference. -->
-    <string-array name="bluetooth_a2dp_codec_sample_rate_values" translatable="false" >
-        <item>0</item>
-        <item>1</item>
-        <item>2</item>
-        <item>4</item>
-        <item>8</item>
     </string-array>
 
     <!-- Summaries for Bluetooth Audio Codec Sample Rate selection preference. [CHAR LIMIT=50]-->
@@ -189,14 +226,6 @@
         <item>32 bits/sample</item>
     </string-array>
 
-    <!-- Values for Bluetooth Audio Codec Bits Per Sample selection preference. -->
-    <string-array name="bluetooth_a2dp_codec_bits_per_sample_values" translatable="false" >
-        <item>0</item>
-        <item>1</item>
-        <item>2</item>
-        <item>4</item>
-    </string-array>
-
     <!-- Summaries for Bluetooth Audio Codec Bits Per Sample selection preference. [CHAR LIMIT=50]-->
     <string-array name="bluetooth_a2dp_codec_bits_per_sample_summaries" >
         <item>Use System Selection (Default)</item>
@@ -212,13 +241,6 @@
         <item>Stereo</item>
     </string-array>
 
-    <!-- Values for Bluetooth Audio Codec Channel Mode selection preference. -->
-    <string-array name="bluetooth_a2dp_codec_channel_mode_values" translatable="false" >
-        <item>0</item>
-        <item>1</item>
-        <item>2</item>
-    </string-array>
-
     <!-- Summaries for Bluetooth Audio Codec Channel Mode selection preference. [CHAR LIMIT=50]-->
     <string-array name="bluetooth_a2dp_codec_channel_mode_summaries" >
         <item>Use System Selection (Default)</item>
@@ -232,14 +254,6 @@
         <item>Balanced Audio And Connection Quality (660kbps/606kbps)</item>
         <item>Optimized for Connection Quality (330kbps/303kbps)</item>
         <item>Best Effort (Adaptive Bit Rate)</item>
-    </string-array>
-
-    <!-- Values for Bluetooth Audio Codec LDAC Playback Quaility selection preference. -->
-    <string-array name="bluetooth_a2dp_codec_ldac_playback_quality_values" translatable="false" >
-        <item>1000</item>
-        <item>1001</item>
-        <item>1002</item>
-        <item>1003</item>
     </string-array>
 
     <!-- Summaries for Bluetooth Audio Codec LDAC Playback Quality selection preference. [CHAR LIMIT=70]-->
@@ -269,7 +283,7 @@
         <item>256K</item>
         <item>1M</item>
         <item>4M</item>
-        <item>16M</item>
+        <item>8M</item>
     </string-array>
 
     <!-- Titles for logd limit size lowram selection preference. [CHAR LIMIT=14] -->
@@ -287,7 +301,7 @@
         <item>262144</item>
         <item>1048576</item>
         <item>4194304</item>
-        <item>16777216</item>
+        <item>8388608</item>
     </string-array>
 
     <!-- Summaries for logd limit size selection preference. [CHAR LIMIT=50]-->
@@ -297,7 +311,7 @@
         <item>256K per log buffer</item>
         <item>1M per log buffer</item>
         <item>4M per log buffer</item>
-        <item>16M per log buffer</item>
+        <item>8M per log buffer</item>
     </string-array>
 
     <!-- Values for logpersist state selection preference. -->
@@ -512,7 +526,7 @@
     </string-array>
 
     <!-- USB configuration values for Developer Settings.
-         These are lists of USB functions passed to the USB Manager to change USB configuraton.
+         These are lists of USB functions passed to the USB Manager to change USB configuration.
          This can be overridden by devices with additional USB configurations.
          Do not translate. -->
     <string-array name="usb_configuration_values" translatable="false">
@@ -558,7 +572,7 @@
 
     <!-- BatteryMeterView parameters -->
     <array name="batterymeter_color_levels">
-        <item>15</item>
+        <item>20</item>
         <item>100</item>
     </array>
     <array name="batterymeter_color_values">
@@ -588,5 +602,69 @@
         <item>0</item><item>3</item>
         <item>3</item><item>3</item>
     </array>
+
+    <!-- Bluetooth icon foreground colors -->
+    <integer-array name="bt_icon_fg_colors">
+        <item>@color/bt_color_icon_1</item>
+        <item>@color/bt_color_icon_2</item>
+        <item>@color/bt_color_icon_3</item>
+        <item>@color/bt_color_icon_4</item>
+        <item>@color/bt_color_icon_5</item>
+        <item>@color/bt_color_icon_6</item>
+        <item>@color/bt_color_icon_7</item>
+    </integer-array>
+
+    <!-- Bluetooth icon background colors -->
+    <integer-array name="bt_icon_bg_colors">
+        <item>@color/bt_color_bg_1</item>
+        <item>@color/bt_color_bg_2</item>
+        <item>@color/bt_color_bg_3</item>
+        <item>@color/bt_color_bg_4</item>
+        <item>@color/bt_color_bg_5</item>
+        <item>@color/bt_color_bg_6</item>
+        <item>@color/bt_color_bg_7</item>
+    </integer-array>
+
+    <!-- Cached apps freezer modes -->
+    <array name="cached_apps_freezer_entries">
+        <item>@string/cached_apps_freezer_device_default</item>
+        <item>@string/cached_apps_freezer_enabled</item>
+        <item>@string/cached_apps_freezer_disabled</item>
+    </array>
+
+    <!-- Values for cached apps freezer modes -->
+    <array name="cached_apps_freezer_values">
+        <item>device_default</item>
+        <item>enabled</item>
+        <item>disabled</item>
+    </array>
+
+    <!-- NOTE: if you change this, you must also add the corresponding scale key and lookup table to
+     frameworks/base/core/java/android/content/res/FontScaleConverterFactory.java -->
+    <string-array name="entryvalues_font_size" translatable="false">
+        <item>0.85</item>
+        <item>1.0</item>
+        <item>1.15</item>
+        <item>1.30</item>
+        <item>1.50</item>
+        <item>1.80</item>
+        <item>2.0</item>
+    </string-array>
+
+    <!-- Grammatical genders -->
+    <array name="grammatical_gender_entries">
+        <item>@string/not_specified</item>
+        <item>@string/neuter</item>
+        <item>@string/feminine</item>
+        <item>@string/masculine</item>
+    </array>
+
+    <!-- Values for grammatical genders -->
+    <string-array name="grammatical_gender_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
 
 </resources>

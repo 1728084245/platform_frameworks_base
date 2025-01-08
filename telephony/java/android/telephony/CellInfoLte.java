@@ -17,10 +17,12 @@
 package android.telephony;
 
 import android.annotation.NonNull;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
+
+import com.android.telephony.Rlog;
 
 import java.util.Objects;
 
@@ -37,7 +39,7 @@ public final class CellInfoLte extends CellInfo implements Parcelable {
     private CellConfigLte mCellConfig;
 
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public CellInfoLte() {
         super();
         mCellIdentityLte = new CellIdentityLte();
@@ -54,30 +56,13 @@ public final class CellInfoLte extends CellInfo implements Parcelable {
     }
 
     /** @hide */
-    public CellInfoLte(android.hardware.radio.V1_0.CellInfo ci) {
-        super(ci);
-        final android.hardware.radio.V1_0.CellInfoLte cil = ci.lte.get(0);
-        mCellIdentityLte = new CellIdentityLte(cil.cellIdentityLte);
-        mCellSignalStrengthLte = new CellSignalStrengthLte(cil.signalStrengthLte);
-        mCellConfig = new CellConfigLte();
-    }
-
-    /** @hide */
-    public CellInfoLte(android.hardware.radio.V1_2.CellInfo ci) {
-        super(ci);
-        final android.hardware.radio.V1_2.CellInfoLte cil = ci.lte.get(0);
-        mCellIdentityLte = new CellIdentityLte(cil.cellIdentityLte);
-        mCellSignalStrengthLte = new CellSignalStrengthLte(cil.signalStrengthLte);
-        mCellConfig = new CellConfigLte();
-    }
-
-    /** @hide */
-    public CellInfoLte(android.hardware.radio.V1_4.CellInfo ci, long timeStamp) {
-        super(ci, timeStamp);
-        final android.hardware.radio.V1_4.CellInfoLte cil = ci.info.lte();
-        mCellIdentityLte = new CellIdentityLte(cil.base.cellIdentityLte);
-        mCellSignalStrengthLte = new CellSignalStrengthLte(cil.base.signalStrengthLte);
-        mCellConfig = new CellConfigLte(cil.cellConfig);
+    public CellInfoLte(int connectionStatus, boolean registered, long timeStamp,
+            CellIdentityLte cellIdentityLte, CellSignalStrengthLte cellSignalStrengthLte,
+            CellConfigLte cellConfig) {
+        super(connectionStatus, registered, timeStamp);
+        mCellIdentityLte = cellIdentityLte;
+        mCellSignalStrengthLte = cellSignalStrengthLte;
+        mCellConfig = cellConfig;
     }
 
     /**
@@ -196,7 +181,7 @@ public final class CellInfoLte extends CellInfo implements Parcelable {
     }
 
     /** Implement the Parcelable interface */
-    public static final Creator<CellInfoLte> CREATOR = new Creator<CellInfoLte>() {
+    public static final @android.annotation.NonNull Creator<CellInfoLte> CREATOR = new Creator<CellInfoLte>() {
         @Override
         public CellInfoLte createFromParcel(Parcel in) {
             in.readInt(); // Skip past token, we know what it is

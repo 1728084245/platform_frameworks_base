@@ -16,7 +16,8 @@
 
 package com.android.internal.os;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 
 /**
  * Helper class for passing more arguments though a message
@@ -25,6 +26,7 @@ import android.annotation.UnsupportedAppUsage;
  * it is responsibility of the client to recycle and instance
  * once it is no longer used.
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public final class SomeArgs {
 
     private static final int MAX_POOL_SIZE = 10;
@@ -42,32 +44,32 @@ public final class SomeArgs {
     static final int WAIT_FINISHED = 2;
     int mWaitState = WAIT_NONE;
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public Object arg1;
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public Object arg2;
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public Object arg3;
     public Object arg4;
     public Object arg5;
     public Object arg6;
     public Object arg7;
-    public Object arg8;
-    public Object arg9;
     public int argi1;
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public int argi2;
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public int argi3;
     public int argi4;
     public int argi5;
     public int argi6;
+    public long argl1;
+    public long argl2;
 
     private SomeArgs() {
         /* do nothing - reduce visibility */
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public static SomeArgs obtain() {
         synchronized (sPoolLock) {
             if (sPoolSize > 0) {
@@ -93,7 +95,7 @@ public final class SomeArgs {
         }
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void recycle() {
         if (mInPool) {
             throw new IllegalStateException("Already recycled.");
@@ -120,13 +122,13 @@ public final class SomeArgs {
         arg5 = null;
         arg6 = null;
         arg7 = null;
-        arg8 = null;
-        arg9 = null;
         argi1 = 0;
         argi2 = 0;
         argi3 = 0;
         argi4 = 0;
         argi5 = 0;
         argi6 = 0;
+        argl1 = 0;
+        argl2 = 0;
     }
 }

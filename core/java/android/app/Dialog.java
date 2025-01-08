@@ -24,14 +24,15 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.StringRes;
 import android.annotation.StyleRes;
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.UiContext;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.DialogInterface;
 import android.content.pm.ApplicationInfo;
 import android.content.res.Configuration;
-import android.content.res.ResourceId;
+import android.content.res.Resources;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
@@ -59,6 +60,9 @@ import android.view.ViewGroup.LayoutParams;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
+import android.window.WindowOnBackInvokedDispatcher;
 
 import com.android.internal.R;
 import com.android.internal.app.WindowDecorActionBar;
@@ -101,6 +105,7 @@ public class Dialog implements DialogInterface, Window.Callback,
     private final WindowManager mWindowManager;
 
     @UnsupportedAppUsage
+    @UiContext
     final Context mContext;
     @UnsupportedAppUsage
     final Window mWindow;
@@ -149,6 +154,10 @@ public class Dialog implements DialogInterface, Window.Callback,
 
     private final Runnable mDismissAction = this::dismissDialog;
 
+    /** A {@link Runnable} to run instead of dismissing when {@link #dismiss()} is called. */
+    private Runnable mDismissOverride;
+    private OnBackInvokedCallback mDefaultBackCallback;
+
     /**
      * Creates a dialog window that uses the default dialog theme.
      * <p>
@@ -158,7 +167,7 @@ public class Dialog implements DialogInterface, Window.Callback,
      * @param context the context in which the dialog should run
      * @see android.R.styleable#Theme_dialogTheme
      */
-    public Dialog(@NonNull Context context) {
+    public Dialog(@UiContext @NonNull Context context) {
         this(context, 0, true);
     }
 
@@ -177,13 +186,14 @@ public class Dialog implements DialogInterface, Window.Callback,
      * @param themeResId a style resource describing the theme to use for the
      *              window, or {@code 0} to use the default dialog theme
      */
-    public Dialog(@NonNull Context context, @StyleRes int themeResId) {
+    public Dialog(@UiContext @NonNull Context context, @StyleRes int themeResId) {
         this(context, themeResId, true);
     }
 
-    Dialog(@NonNull Context context, @StyleRes int themeResId, boolean createContextThemeWrapper) {
+    Dialog(@UiContext @NonNull Context context, @StyleRes int themeResId,
+            boolean createContextThemeWrapper) {
         if (createContextThemeWrapper) {
-            if (themeResId == ResourceId.ID_NULL) {
+            if (themeResId == Resources.ID_NULL) {
                 final TypedValue outValue = new TypedValue();
                 context.getTheme().resolveAttribute(R.attr.dialogTheme, outValue, true);
                 themeResId = outValue.resourceId;
@@ -219,15 +229,13 @@ public class Dialog implements DialogInterface, Window.Callback,
             @Nullable Message cancelCallback) {
         this(context);
         mCancelable = cancelable;
-        updateWindowForCancelable();
         mCancelMessage = cancelCallback;
     }
 
-    protected Dialog(@NonNull Context context, boolean cancelable,
+    protected Dialog(@UiContext @NonNull Context context, boolean cancelable,
             @Nullable OnCancelListener cancelListener) {
         this(context);
         mCancelable = cancelable;
-        updateWindowForCancelable();
         setOnCancelListener(cancelListener);
     }
 
@@ -236,7 +244,9 @@ public class Dialog implements DialogInterface, Window.Callback,
      * 
      * @return Context The Context used by the Dialog.
      */
-    public final @NonNull Context getContext() {
+    @UiContext
+    @NonNull
+    public final Context getContext() {
         return mContext;
     }
 
@@ -367,6 +377,11 @@ public class Dialog implements DialogInterface, Window.Callback,
      */
     @Override
     public void dismiss() {
+        if (mDismissOverride != null) {
+            mDismissOverride.run();
+            return;
+        }
+
         if (Looper.myLooper() == mHandler.getLooper()) {
             dismissDialog();
         } else {
@@ -439,6 +454,12 @@ public class Dialog implements DialogInterface, Window.Callback,
      */
     protected void onStart() {
         if (mActionBar != null) mActionBar.setShowHideAnimationEnabled(true);
+        if (allowsRegisterDefaultOnBackInvokedCallback() && mContext != null
+                && WindowOnBackInvokedDispatcher.isOnBackInvokedCallbackEnabled(mContext)) {
+            // Add onBackPressed as default back behavior.
+            mDefaultBackCallback = this::onBackPressed;
+            getOnBackInvokedDispatcher().registerSystemOnBackInvokedCallback(mDefaultBackCallback);
+        }
     }
 
     /**
@@ -446,6 +467,18 @@ public class Dialog implements DialogInterface, Window.Callback,
      */
     protected void onStop() {
         if (mActionBar != null) mActionBar.setShowHideAnimationEnabled(false);
+        if (mDefaultBackCallback != null) {
+            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(mDefaultBackCallback);
+            mDefaultBackCallback = null;
+        }
+    }
+
+    /**
+     * Whether this dialog allows to register the default onBackInvokedCallback.
+     * @hide
+     */
+    protected boolean allowsRegisterDefaultOnBackInvokedCallback() {
+        return true;
     }
 
     private static final String DIALOG_SHOWING_TAG = "android:dialogShowing";
@@ -532,7 +565,9 @@ public class Dialog implements DialogInterface, Window.Callback,
      * @see View#findViewById(int)
      * @see Dialog#requireViewById(int)
      */
-    @Nullable
+    // Strictly speaking this should be marked as @Nullable but the nullability of the return value
+    // is deliberately left unspecified as idiomatically correct code can make assumptions either
+    // way based on local context, e.g. layout specification.
     public <T extends View> T findViewById(@IdRes int id) {
         return mWindow.findViewById(id);
     }
@@ -639,9 +674,20 @@ public class Dialog implements DialogInterface, Window.Callback,
      */
     @Override
     public boolean onKeyDown(int keyCode, @NonNull KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
             event.startTracking();
             return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_ESCAPE) {
+            if (mCancelable) {
+                cancel();
+                event.startTracking();
+                return true;
+            } else if (mWindow.shouldCloseOnTouchOutside()) {
+                dismiss();
+                event.startTracking();
+                return true;
+            }
         }
 
         return false;
@@ -669,11 +715,18 @@ public class Dialog implements DialogInterface, Window.Callback,
      */
     @Override
     public boolean onKeyUp(int keyCode, @NonNull KeyEvent event) {
-        if ((keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE)
-                && event.isTracking()
-                && !event.isCanceled()) {
-            onBackPressed();
-            return true;
+        if (event.isTracking() && !event.isCanceled()) {
+            switch (keyCode) {
+                case KeyEvent.KEYCODE_BACK:
+                    if (!WindowOnBackInvokedDispatcher.isOnBackInvokedCallbackEnabled(mContext)
+                            || !allowsRegisterDefaultOnBackInvokedCallback()) {
+                        onBackPressed();
+                        return true;
+                    }
+                    break;
+                case KeyEvent.KEYCODE_ESCAPE:
+                    return true;
+            }
         }
         return false;
     }
@@ -692,7 +745,30 @@ public class Dialog implements DialogInterface, Window.Callback,
      * Called when the dialog has detected the user's press of the back
      * key.  The default implementation simply cancels the dialog (only if
      * it is cancelable), but you can override this to do whatever you want.
+     *
+     * <p>
+     * If you target version {@link android.os.Build.VERSION_CODES#TIRAMISU} or later, you
+     * should not use this method but register an {@link OnBackInvokedCallback} on an
+     * {@link OnBackInvokedDispatcher} that you can retrieve using
+     * {@link #getOnBackInvokedDispatcher()}. You should also set
+     * {@code android:enableOnBackInvokedCallback="true"} in the application manifest.
+     *
+     * <p>Alternatively, you
+     * can use {@code androidx.activity.ComponentDialog#getOnBackPressedDispatcher()}
+     * for backward compatibility.
+     *
+     * @deprecated Use {@link OnBackInvokedCallback} or
+     * {@code androidx.activity.OnBackPressedCallback} to handle back navigation instead.
+     * <p>
+     * Starting from Android 13 (API level 33), back event handling is
+     * moving to an ahead-of-time model and {@link #onBackPressed()} and
+     * {@link KeyEvent#KEYCODE_BACK} should not be used to handle back events (back gesture or
+     * back button click). Instead, an {@link OnBackInvokedCallback} should be registered using
+     * {@link Dialog#getOnBackInvokedDispatcher()}
+     * {@link OnBackInvokedDispatcher#registerOnBackInvokedCallback(int, OnBackInvokedCallback)
+     * .registerOnBackInvokedCallback(priority, callback)}.
      */
+    @Deprecated
     public void onBackPressed() {
         if (mCancelable) {
             cancel();
@@ -937,8 +1013,8 @@ public class Dialog implements DialogInterface, Window.Callback,
      * @see Activity#onPreparePanel(int, View, Menu)
      */
     @Override
-    public boolean onPreparePanel(int featureId, View view, Menu menu) {
-        if (featureId == Window.FEATURE_OPTIONS_PANEL && menu != null) {
+    public boolean onPreparePanel(int featureId, @Nullable View view, @NonNull Menu menu) {
+        if (featureId == Window.FEATURE_OPTIONS_PANEL) {
             return onPrepareOptionsMenu(menu) && menu.hasVisibleItems();
         }
         return true;
@@ -948,7 +1024,7 @@ public class Dialog implements DialogInterface, Window.Callback,
      * @see Activity#onMenuOpened(int, Menu)
      */
     @Override
-    public boolean onMenuOpened(int featureId, Menu menu) {
+    public boolean onMenuOpened(int featureId, @NonNull Menu menu) {
         if (featureId == Window.FEATURE_ACTION_BAR) {
             mActionBar.dispatchMenuVisibilityChanged(true);
         }
@@ -959,7 +1035,7 @@ public class Dialog implements DialogInterface, Window.Callback,
      * @see Activity#onMenuItemSelected(int, MenuItem)
      */
     @Override
-    public boolean onMenuItemSelected(int featureId, MenuItem item) {
+    public boolean onMenuItemSelected(int featureId, @NonNull MenuItem item) {
         return false;
     }
 
@@ -967,7 +1043,7 @@ public class Dialog implements DialogInterface, Window.Callback,
      * @see Activity#onPanelClosed(int, Menu)
      */
     @Override
-    public void onPanelClosed(int featureId, Menu menu) {
+    public void onPanelClosed(int featureId, @NonNull Menu menu) {
         if (featureId == Window.FEATURE_ACTION_BAR) {
             mActionBar.dispatchMenuVisibilityChanged(false);
         }
@@ -1249,7 +1325,6 @@ public class Dialog implements DialogInterface, Window.Callback,
      */
     public void setCancelable(boolean flag) {
         mCancelable = flag;
-        updateWindowForCancelable();
     }
 
     /**
@@ -1263,7 +1338,6 @@ public class Dialog implements DialogInterface, Window.Callback,
     public void setCanceledOnTouchOutside(boolean cancel) {
         if (cancel && !mCancelable) {
             mCancelable = true;
-            updateWindowForCancelable();
         }
         
         mWindow.setCloseOnTouchOutside(cancel);
@@ -1353,6 +1427,21 @@ public class Dialog implements DialogInterface, Window.Callback,
         mDismissMessage = msg;
     }
 
+    /**
+     * Set a {@link Runnable} to run when this dialog is dismissed instead of directly dismissing
+     * it. This allows to animate the dialog in its window before dismissing it.
+     *
+     * Note that {@code override} should always end up calling this method with {@code null}
+     * followed by a call to {@link #dismiss() dismiss} to actually dismiss the dialog.
+     *
+     * @see #dismiss()
+     *
+     * @hide
+     */
+    public void setDismissOverride(@Nullable Runnable override) {
+        mDismissOverride = override;
+    }
+
     /** @hide */
     public boolean takeCancelAndDismissListeners(@Nullable String msg,
             @Nullable OnCancelListener cancel, @Nullable OnDismissListener dismiss) {
@@ -1416,7 +1505,12 @@ public class Dialog implements DialogInterface, Window.Callback,
         }
     }
 
-    private void updateWindowForCancelable() {
-        mWindow.setCloseOnSwipeEnabled(mCancelable);
+    /**
+     * Returns the {@link OnBackInvokedDispatcher} instance associated with the window that this
+     * dialog is attached to.
+     */
+    @NonNull
+    public OnBackInvokedDispatcher getOnBackInvokedDispatcher() {
+        return mWindow.getOnBackInvokedDispatcher();
     }
 }

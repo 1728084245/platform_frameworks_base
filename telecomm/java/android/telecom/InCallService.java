@@ -16,11 +16,14 @@
 
 package android.telecom;
 
+import android.annotation.CallbackExecutor;
 import android.annotation.NonNull;
 import android.annotation.SdkConstant;
 import android.annotation.SystemApi;
 import android.app.Service;
+import android.app.UiModeManager;
 import android.bluetooth.BluetoothDevice;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.hardware.camera2.CameraManager;
 import android.net.Uri;
@@ -29,41 +32,66 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
+import android.os.OutcomeReceiver;
 import android.view.Surface;
 
 import com.android.internal.os.SomeArgs;
 import com.android.internal.telecom.IInCallAdapter;
 import com.android.internal.telecom.IInCallService;
 
-import java.lang.String;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.Executor;
 
 /**
  * This service is implemented by an app that wishes to provide functionality for managing
  * phone calls.
- * <p>
- * There are three types of apps which Telecom can bind to when there exists a live (active or
- * incoming) call:
- * <ol>
- *     <li>Default Dialer/Phone app - the default dialer/phone app is one which provides the
- *     in-call user interface while the device is in a call.  A device is bundled with a system
- *     provided default dialer/phone app.  The user may choose a single app to take over this role
- *     from the system app.</li>
- *     <li>Default Car-mode Dialer/Phone app - the default car-mode dialer/phone app is one which
- *     provides the in-call user interface while the device is in a call and the device is in car
- *     mode.  The user may choose a single app to fill this role.</li>
- *     <li>Call Companion app - a call companion app is one which provides no user interface itself,
- *     but exposes call information to another display surface, such as a wearable device.  The
- *     user may choose multiple apps to fill this role.</li>
- * </ol>
- * <p>
- * Apps which wish to fulfill one of the above roles use the {@code android.app.role.RoleManager}
- * to request that they fill the desired role.
- *
  * <h2>Becoming the Default Phone App</h2>
- * An app filling the role of the default phone app provides a user interface while the device is in
- * a call, and the device is not in car mode.
+ * The default dialer/phone app is one which provides the in-call user interface while the device is
+ * in a call.  It also provides the user with a means to initiate calls and see a history of calls
+ * on their device.  A device is bundled with a system provided default dialer/phone app.  The user
+ * may choose a single app to take over this role from the system app.  An app which wishes to
+ * fulfill this role uses the {@link android.app.role.RoleManager} to request that they fill the
+ * {@link android.app.role.RoleManager#ROLE_DIALER} role.
+ * <p>
+ * The default phone app provides a user interface while the device is in a call, and the device is
+ * not in car mode (i.e. {@link UiModeManager#getCurrentModeType()} is not
+ * {@link android.content.res.Configuration#UI_MODE_TYPE_CAR}).
+ * <p>
+ * In order to fill the {@link android.app.role.RoleManager#ROLE_DIALER} role, an app must meet a
+ * number of requirements:
+ * <ul>
+ *     <li>It must handle the {@link Intent#ACTION_DIAL} intent.  This means the app must provide
+ *     a dial pad UI for the user to initiate outgoing calls.</li>
+ *     <li>It must fully implement the {@link InCallService} API and provide both an incoming call
+ *     UI, as well as an ongoing call UI.</li>
+ * </ul>
+ * <p>
+ * Note: If the app filling the {@link android.app.role.RoleManager#ROLE_DIALER} returns a
+ * {@code null} {@link InCallService} during binding, the Telecom framework will automatically fall
+ * back to using the dialer app preloaded on the device.  The system will display a notification to
+ * the user to let them know that their call was continued using the preloaded dialer app.  Your
+ * app should never return a {@code null} binding; doing so means it does not fulfil the
+ * requirements of {@link android.app.role.RoleManager#ROLE_DIALER}.
+ * <p>
+ * Note: If your app fills {@link android.app.role.RoleManager#ROLE_DIALER} and makes changes at
+ * runtime which cause it to no longer fulfil the requirements of this role,
+ * {@link android.app.role.RoleManager} will automatically remove your app from the role and close
+ * your app.  For example, if you use
+ * {@link android.content.pm.PackageManager#setComponentEnabledSetting(ComponentName, int, int)} to
+ * programmatically disable the {@link InCallService} your app declares in its manifest, your app
+ * will no longer fulfil the requirements expected of
+ * {@link android.app.role.RoleManager#ROLE_DIALER}.
+ * <p>
+ * The preloaded dialer will ALWAYS be used when the user places an emergency call, even if your
+ * app fills the {@link android.app.role.RoleManager#ROLE_DIALER} role.  To ensure an optimal
+ * experience when placing an emergency call, the default dialer should ALWAYS use
+ * {@link android.telecom.TelecomManager#placeCall(Uri, Bundle)} to place calls (including
+ * emergency calls).  This ensures that the platform is able to verify that the request came from
+ * the default dialer.  If a non-preloaded dialer app uses {@link Intent#ACTION_CALL} to place an
+ * emergency call, it will be raised to the preloaded dialer app using {@link Intent#ACTION_DIAL}
+ * for confirmation; this is a suboptimal user experience.
  * <p>
  * Below is an example manifest registration for an {@code InCallService}. The meta-data
  * {@link TelecomManager#METADATA_IN_CALL_SERVICE_UI} indicates that this particular
@@ -75,7 +103,8 @@ import java.util.List;
  * <pre>
  * {@code
  * <service android:name="your.package.YourInCallServiceImplementation"
- *          android:permission="android.permission.BIND_INCALL_SERVICE">
+ *          android:permission="android.permission.BIND_INCALL_SERVICE"
+ *          android:exported="true">
  *      <meta-data android:name="android.telecom.IN_CALL_SERVICE_UI" android:value="true" />
  *      <meta-data android:name="android.telecom.IN_CALL_SERVICE_RINGING"
  *          android:value="true" />
@@ -85,6 +114,10 @@ import java.util.List;
  * </service>
  * }
  * </pre>
+ *
+ * <em>Note: You should NOT mark your {@link InCallService} with the attribute
+ * {@code android:exported="false"}; doing so can result in a failure to bind to your implementation
+ * during calls.</em>
  * <p>
  * In addition to implementing the {@link InCallService} API, you must also declare an activity in
  * your manifest which handles the {@link Intent#ACTION_DIAL} intent.  The example below illustrates
@@ -97,12 +130,17 @@ import java.util.List;
  *           <action android:name="android.intent.action.DIAL" />
  *           <category android:name="android.intent.category.DEFAULT" />
  *      </intent-filter>
+ *      <intent-filter>
+ *           <action android:name="android.intent.action.DIAL" />
+ *           <category android:name="android.intent.category.DEFAULT" />
+ *           <data android:scheme="tel" />
+ *      </intent-filter>
  * </activity>
  * }
  * </pre>
  * <p>
  * When a user installs your application and runs it for the first time, you should use the
- * {@code android.app.role.RoleManager} to prompt the user to see if they would like your app to
+ * {@link android.app.role.RoleManager} to prompt the user to see if they would like your app to
  * be the new default phone app.
  * <p id="requestRole">
  * The code below shows how your app can request to become the default phone/dialer app:
@@ -126,6 +164,25 @@ import java.util.List;
  *         }
  *     }
  * }
+ * }
+ *
+ * </pre>
+ * <p id="companionInCallService">
+ * <h3>Access to InCallService for Wearable Devices</h3>
+ * <ol>
+ * If your app is a third-party companion app and wants to access InCallService APIs, what your
+ * app could do are:
+ * <p>
+ *   <ol>
+ *     <li> Declare MANAGE_ONGOING_CALLS permission in your manifest
+ *     <li> Associate with a physical wearable device via the
+ *          {@link android.companion.CompanionDeviceManager} API as a companion app. See:
+ *          https://developer.android.com/guide/topics/connectivity/companion-device-pairing
+ *     <li> Implement this InCallService with BIND_INCALL_SERVICE permission
+ *   </ol>
+ * </ol>
+ * <p>
+ *
  * </pre>
  * <p id="incomingCallNotification">
  * <h3>Showing the Incoming Call Notification</h3>
@@ -167,7 +224,7 @@ import java.util.List;
  * Intent intent = new Intent(Intent.ACTION_MAIN, null);
  * intent.setFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION | Intent.FLAG_ACTIVITY_NEW_TASK);
  * intent.setClass(context, YourIncomingCallActivity.class);
- * PendingIntent pendingIntent = PendingIntent.getActivity(context, 1, intent, 0);
+ * PendingIntent pendingIntent = PendingIntent.getActivity(context, 1, intent, PendingIntent.FLAG_MUTABLE_UNAUDITED);
  *
  * // Build the notification as an ongoing high priority item; this ensures it will show as
  * // a heads up notification which slides down over top of the current content.
@@ -194,47 +251,6 @@ import java.util.List;
  * notificationManager.notify(YOUR_CHANNEL_ID, YOUR_TAG, YOUR_ID, builder.build());
  * }</pre>
  * <p>
- * <h2>Becoming the Default Car-mode Phone App</h2>
- * An app filling the role of the default car-mode dialer/phone app provides a user interface while
- * the device is in a call, and in car mode.  See
- * {@link android.app.UiModeManager#ACTION_ENTER_CAR_MODE} for more information about car mode.
- * When the device is in car mode, Telecom binds to the default car-mode dialer/phone app instead
- * of the usual dialer/phone app.
- * <p>
- * Similar to the requirements for becoming the default dialer/phone app, your app must declare a
- * manifest entry for its {@link InCallService} implementation.  Your manifest entry should ensure
- * the following conditions are met:
- * <ul>
- *     <li>Do NOT declare the {@link TelecomManager#METADATA_IN_CALL_SERVICE_UI} metadata.</li>
- *     <li>Set the {@link TelecomManager#METADATA_IN_CALL_SERVICE_CAR_MODE_UI} metadata to
- *     {@code true}<li>
- *     <li>Your app must request the permission
- *     {@link android.Manifest.permission.CALL_COMPANION_APP}.</li>
- * </ul>
- * <p>
- * Your app should request to fill the role {@code android.app.role.CAR_MODE_DIALER_APP} in order to
- * become the default (see <a href="#requestRole">above</a> for how to request your app fills this
- * role).
- *
- * <h2>Becoming a Call Companion App</h2>
- * An app which fills the companion app role does not directly provide a user interface while the
- * device is in a call.  Instead, it is typically used to relay information about calls to another
- * display surface, such as a wearable device.
- * <p>
- * Similar to the requirements for becoming the default dialer/phone app, your app must declare a
- * manifest entry for its {@link InCallService} implementation.  Your manifest entry should
- * ensure the following conditions are met:
- * <ul>
- *     <li>Do NOT declare the {@link TelecomManager#METADATA_IN_CALL_SERVICE_UI} metadata.</li>
- *     <li>Do NOT declare the {@link TelecomManager#METADATA_IN_CALL_SERVICE_CAR_MODE_UI}
- *     metadata.</li>
- *     <li>Your app must request the permission
- *     {@link android.Manifest.permission.CALL_COMPANION_APP}.</li>
- * </ul>
- * <p>
- * Your app should request to fill the role {@code android.app.role.CALL_COMPANION_APP} in order to
- * become a call companion app (see <a href="#requestRole">above</a> for how to request your app
- * fills this role).
  */
 public abstract class InCallService extends Service {
 
@@ -257,6 +273,11 @@ public abstract class InCallService extends Service {
     private static final int MSG_ON_RTT_INITIATION_FAILURE = 11;
     private static final int MSG_ON_HANDOVER_FAILED = 12;
     private static final int MSG_ON_HANDOVER_COMPLETE = 13;
+    private static final int MSG_ON_CALL_ENDPOINT_CHANGED = 14;
+    private static final int MSG_ON_AVAILABLE_CALL_ENDPOINTS_CHANGED = 15;
+    private static final int MSG_ON_MUTE_STATE_CHANGED = 16;
+
+    private CallEndpoint mCallEndpoint;
 
     /** Default Handler used to consolidate binder method calls onto a single thread. */
     private final Handler mHandler = new Handler(Looper.getMainLooper()) {
@@ -268,6 +289,11 @@ public abstract class InCallService extends Service {
 
             switch (msg.what) {
                 case MSG_SET_IN_CALL_ADAPTER:
+                    if (mPhone != null) {
+                        Log.i(this, "mPhone is already instantiated, ignoring "
+                                + "request to reset adapter.");
+                        break;
+                    }
                     String callingPackage = getApplicationContext().getOpPackageName();
                     mPhone = new Phone(new InCallAdapter((IInCallAdapter) msg.obj), callingPackage,
                             getApplicationContext().getApplicationInfo().targetSdkVersion);
@@ -338,6 +364,23 @@ public abstract class InCallService extends Service {
                     mPhone.internalOnHandoverComplete(callId);
                     break;
                 }
+                case MSG_ON_CALL_ENDPOINT_CHANGED: {
+                    CallEndpoint endpoint = (CallEndpoint) msg.obj;
+                    if (!Objects.equals(mCallEndpoint, endpoint)) {
+                        mCallEndpoint = endpoint;
+                        InCallService.this.onCallEndpointChanged(mCallEndpoint);
+                    }
+                    break;
+                }
+                case MSG_ON_AVAILABLE_CALL_ENDPOINTS_CHANGED: {
+                    InCallService.this.onAvailableCallEndpointsChanged(
+                            (List<CallEndpoint>) msg.obj);
+                    break;
+                }
+                case MSG_ON_MUTE_STATE_CHANGED: {
+                    InCallService.this.onMuteStateChanged((boolean) msg.obj);
+                    break;
+                }
                 default:
                     break;
             }
@@ -377,6 +420,22 @@ public abstract class InCallService extends Service {
         @Override
         public void onCallAudioStateChanged(CallAudioState callAudioState) {
             mHandler.obtainMessage(MSG_ON_CALL_AUDIO_STATE_CHANGED, callAudioState).sendToTarget();
+        }
+
+        @Override
+        public void onCallEndpointChanged(CallEndpoint callEndpoint) {
+            mHandler.obtainMessage(MSG_ON_CALL_ENDPOINT_CHANGED, callEndpoint).sendToTarget();
+        }
+
+        @Override
+        public void onAvailableCallEndpointsChanged(List<CallEndpoint> availableEndpoints) {
+            mHandler.obtainMessage(MSG_ON_AVAILABLE_CALL_ENDPOINTS_CHANGED, availableEndpoints)
+                    .sendToTarget();
+        }
+
+        @Override
+        public void onMuteStateChanged(boolean isMuted) {
+            mHandler.obtainMessage(MSG_ON_MUTE_STATE_CHANGED, isMuted).sendToTarget();
         }
 
         @Override
@@ -547,7 +606,11 @@ public abstract class InCallService extends Service {
      *
      * @return An object encapsulating the audio state. Returns null if the service is not
      *         fully initialized.
+     * @deprecated Use {@link #getCurrentCallEndpoint()},
+     * {@link #onAvailableCallEndpointsChanged(List)} and
+     * {@link #onMuteStateChanged(boolean)} instead.
      */
+    @Deprecated
     public final CallAudioState getCallAudioState() {
         return mPhone == null ? null : mPhone.getCallAudioState();
     }
@@ -569,7 +632,10 @@ public abstract class InCallService extends Service {
      * be change to the {@link #getCallAudioState()}.
      *
      * @param route The audio route to use.
+     * @deprecated Use {@link #requestCallEndpointChange(CallEndpoint, Executor, OutcomeReceiver)}
+     * instead.
      */
+    @Deprecated
     public final void setAudioRoute(int route) {
         if (mPhone != null) {
             mPhone.setAudioRoute(route);
@@ -584,11 +650,42 @@ public abstract class InCallService extends Service {
      * {@link CallAudioState#getSupportedBluetoothDevices()}
      *
      * @param bluetoothDevice The bluetooth device to connect to.
+     * @deprecated Use {@link #requestCallEndpointChange(CallEndpoint, Executor, OutcomeReceiver)}
+     * instead.
      */
+    @Deprecated
     public final void requestBluetoothAudio(@NonNull BluetoothDevice bluetoothDevice) {
         if (mPhone != null) {
             mPhone.requestBluetoothAudio(bluetoothDevice.getAddress());
         }
+    }
+
+    /**
+     * Request audio routing to a specific CallEndpoint. Clients should not define their own
+     * CallEndpoint when requesting a change. Instead, the new endpoint should be one of the valid
+     * endpoints provided by {@link #onAvailableCallEndpointsChanged(List)}.
+     * When this request is honored, there will be change to the {@link #getCurrentCallEndpoint()}.
+     *
+     * @param endpoint The call endpoint to use.
+     * @param executor The executor of where the callback will execute.
+     * @param callback The callback to notify the result of the endpoint change.
+     */
+    public final void requestCallEndpointChange(@NonNull CallEndpoint endpoint,
+            @NonNull @CallbackExecutor Executor executor,
+            @NonNull OutcomeReceiver<Void, CallEndpointException> callback) {
+        if (mPhone != null) {
+            mPhone.requestCallEndpointChange(endpoint, executor, callback);
+        }
+    }
+
+    /**
+     * Obtains the current CallEndpoint.
+     *
+     * @return An object encapsulating the CallEndpoint.
+     */
+    @NonNull
+    public final CallEndpoint getCurrentCallEndpoint() {
+        return mCallEndpoint;
     }
 
     /**
@@ -636,8 +733,36 @@ public abstract class InCallService extends Service {
      * Called when the audio state changes.
      *
      * @param audioState The new {@link CallAudioState}.
+     * @deprecated Use {@link #onCallEndpointChanged(CallEndpoint)},
+     * {@link #onAvailableCallEndpointsChanged(List)} and
+     * {@link #onMuteStateChanged(boolean)} instead.
      */
+    @Deprecated
     public void onCallAudioStateChanged(CallAudioState audioState) {
+    }
+
+    /**
+     * Called when the current CallEndpoint changes.
+     *
+     * @param callEndpoint The current CallEndpoint {@link CallEndpoint}.
+     */
+    public void onCallEndpointChanged(@NonNull CallEndpoint callEndpoint) {
+    }
+
+    /**
+     * Called when the available CallEndpoint changes.
+     *
+     * @param availableEndpoints The set of available CallEndpoint {@link CallEndpoint}.
+     */
+    public void onAvailableCallEndpointsChanged(@NonNull List<CallEndpoint> availableEndpoints) {
+    }
+
+    /**
+     * Called when the mute state changes.
+     *
+     * @param isMuted The current mute state.
+     */
+    public void onMuteStateChanged(boolean isMuted) {
     }
 
     /**
@@ -709,6 +834,7 @@ public abstract class InCallService extends Service {
     public static abstract class VideoCall {
 
         /** @hide */
+        @SuppressWarnings("HiddenAbstractMethod")
         public abstract void destroy();
 
         /**
@@ -774,11 +900,13 @@ public abstract class InCallService extends Service {
         public abstract void setDeviceOrientation(int rotation);
 
         /**
-         * Sets camera zoom ratio.
+         * Sets the camera zoom ratio.
          * <p>
          * Handled by {@link Connection.VideoProvider#onSetZoom(float)}.
          *
-         * @param value The camera zoom ratio.
+         * @param value The camera zoom ratio; for the current camera, should be a value in the
+         * range defined by
+         * {@link android.hardware.camera2.CameraCharacteristics#CONTROL_ZOOM_RATIO_RANGE}.
          */
         public abstract void setZoom(float value);
 

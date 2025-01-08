@@ -30,34 +30,41 @@ import com.android.test.filters.SelectTest;
  *     -e selectTest_verbose true \
  *     com.android.frameworks.coretests/androidx.test.runner.AndroidJUnitRunner
  * </pre>
+ *
+ * <p>Use this filter when running FrameworksMockingCoreTests as
+ * <pre>
+ * adb shell am instrument -w \
+ *     -e filter com.android.server.wm.test.filters.FrameworksTestsFilter \
+ *     -e selectTest_verbose true \
+ *     com.android.frameworks.mockingcoretests/androidx.test.runner.AndroidJUnitRunner
+ * </pre>
  */
 public final class FrameworksTestsFilter extends SelectTest {
 
     private static final String[] SELECTED_TESTS = {
+            // Test specifications for FrameworksMockingCoreTests.
+            "android.app.activity.ActivityThreadClientTest",
+            "android.view.DisplayTest",
+            "android.window.ConfigurationHelperTest",
             // Test specifications for FrameworksCoreTests.
             "android.app.servertransaction.", // all tests under the package.
+            "android.view.CutoutSpecificationTest",
             "android.view.DisplayCutoutTest",
-            // Test specifications for FrameworksServicesTests.
-            "com.android.server.policy.", // all tests under the package.
-            "com.android.server.am.ActivityLaunchParamsModifierTests",
-            "com.android.server.am.ActivityRecordTests",
-            "com.android.server.am.ActivityStackSupervisorTests",
-            "com.android.server.am.ActivityStackTests",
-            "com.android.server.am.ActivityStartControllerTests",
-            "com.android.server.am.ActivityStarterTests",
-            "com.android.server.am.ActivityStartInterceptorTest",
-            "com.android.server.am.AssistDataRequesterTest",
-            "com.android.server.am.ClientLifecycleManagerTests",
-            "com.android.server.am.LaunchParamsControllerTests",
-            "com.android.server.am.PendingRemoteAnimationRegistryTest",
-            "com.android.server.am.RecentsAnimationTest",
-            "com.android.server.am.RecentTasksTest",
-            "com.android.server.am.RunningTasksTest",
-            "com.android.server.am.SafeActivityOptionsTest",
-            "com.android.server.am.TaskLaunchParamsModifierTests",
-            "com.android.server.am.TaskPersisterTest",
-            "com.android.server.am.TaskRecordTests",
-            "com.android.server.am.TaskStackChangedListenerTest",
+            "android.view.DisplayShapeTest",
+            "android.view.ImeBackAnimationControllerTest",
+            "android.view.InsetsAnimationControlImplTest",
+            "android.view.InsetsControllerTest",
+            "android.view.InsetsFlagsTest",
+            "android.view.InsetsSourceTest",
+            "android.view.InsetsSourceConsumerTest",
+            "android.view.InsetsStateTest",
+            "android.view.RoundedCornerTest",
+            "android.view.RoundedCornersTest",
+            "android.view.WindowMetricsTest",
+            "android.view.PendingInsetsControllerTest",
+            "android.window.", // all tests under the package.
+            "android.app.activity.ActivityThreadTest",
+            "android.app.activity.RegisterComponentCallbacksTest"
     };
 
     public FrameworksTestsFilter(Bundle testArgs) {

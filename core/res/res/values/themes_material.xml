@@ -52,6 +52,9 @@ please see themes_device_defaults.xml.
         <item name="secondaryContentAlpha">@dimen/secondary_content_alpha_material_dark</item>
         <item name="backgroundDimAmount">0.6</item>
         <item name="colorError">@color/error_color_material_dark</item>
+        <item name="colorPopupBackground">?attr/colorBackground</item>
+        <item name="colorListDivider">?attr/colorForeground</item>
+        <item name="opacityListDivider">@color/list_divider_opacity_material</item>
 
         <!-- Text styles -->
         <item name="textAppearance">@style/TextAppearance.Material</item>
@@ -159,7 +162,6 @@ please see themes_device_defaults.xml.
         <item name="windowFrame">@null</item>
         <item name="windowNoTitle">@bool/config_windowNoTitleDefault</item>
         <item name="windowFullscreen">false</item>
-        <item name="windowOverscan">@bool/config_windowOverscanByDefault</item>
         <item name="windowIsFloating">false</item>
         <item name="windowContentOverlay">@null</item>
         <item name="windowShowWallpaper">false</item>
@@ -173,13 +175,13 @@ please see themes_device_defaults.xml.
         <item name="windowDrawsSystemBarBackgrounds">true</item>
         <item name="windowActionBarFullscreenDecorLayout">@layout/screen_toolbar</item>
         <item name="statusBarColor">?attr/colorPrimaryDark</item>
-        <item name="navigationBarColor">@color/black</item>
+        <item name="navigationBarColor">@color/navigation_bar_default</item>
         <item name="windowEnterTransition">@transition/fade</item>
         <item name="windowSharedElementEnterTransition">@transition/move</item>
         <item name="windowSharedElementExitTransition">@transition/move</item>
         <item name="windowContentTransitions">false</item>
         <item name="windowActivityTransitions">true</item>
-        <item name="windowSwipeToDismiss">@bool/config_windowSwipeToDismiss</item>
+        <item name="windowSwipeToDismiss">@empty</item>
 
         <!-- Dialog attributes -->
         <item name="dialogTheme">@style/ThemeOverlay.Material.Dialog</item>
@@ -406,8 +408,12 @@ please see themes_device_defaults.xml.
         <item name="colorProgressBackgroundNormal">?attr/colorControlNormal</item>
 
         <!-- Tooltip popup properties -->
-        <item name="tooltipForegroundColor">@color/foreground_material_light</item>
-        <item name="tooltipBackgroundColor">@color/tooltip_background_light</item>
+        <item name="tooltipForegroundColor">@color/system_on_surface_light</item>
+        <item name="tooltipBackgroundColor">@color/system_surface_light</item>
+        <item name="tooltipCornerRadius">@dimen/tooltip_corner_radius_material</item>
+        <item name="tooltipHorizontalPadding">@dimen/tooltip_horizontal_padding_material</item>
+        <item name="tooltipVerticalPadding">@dimen/tooltip_vertical_padding_material</item>
+        <item name="tooltipFontSize">@dimen/tooltip_font_size_material</item>
     </style>
 
     <!-- Material theme (light version). -->
@@ -422,6 +428,9 @@ please see themes_device_defaults.xml.
         <item name="secondaryContentAlpha">@dimen/secondary_content_alpha_material_light</item>
         <item name="backgroundDimAmount">0.6</item>
         <item name="colorError">@color/error_color_material_light</item>
+        <item name="colorPopupBackground">?attr/colorBackground</item>
+        <item name="colorListDivider">?attr/colorForeground</item>
+        <item name="opacityListDivider">@color/list_divider_opacity_material</item>
 
         <!-- Text styles -->
         <item name="textAppearance">@style/TextAppearance.Material</item>
@@ -531,7 +540,6 @@ please see themes_device_defaults.xml.
         <item name="windowFrame">@null</item>
         <item name="windowNoTitle">@bool/config_windowNoTitleDefault</item>
         <item name="windowFullscreen">false</item>
-        <item name="windowOverscan">@bool/config_windowOverscanByDefault</item>
         <item name="windowIsFloating">false</item>
         <item name="windowContentOverlay">@null</item>
         <item name="windowShowWallpaper">false</item>
@@ -545,13 +553,13 @@ please see themes_device_defaults.xml.
         <item name="windowDrawsSystemBarBackgrounds">true</item>
         <item name="windowActionBarFullscreenDecorLayout">@layout/screen_toolbar</item>
         <item name="statusBarColor">?attr/colorPrimaryDark</item>
-        <item name="navigationBarColor">@color/black</item>
+        <item name="navigationBarColor">@color/navigation_bar_default</item>
         <item name="windowEnterTransition">@transition/fade</item>
         <item name="windowSharedElementEnterTransition">@transition/move</item>
         <item name="windowSharedElementExitTransition">@transition/move</item>
         <item name="windowContentTransitions">false</item>
         <item name="windowActivityTransitions">true</item>
-        <item name="windowSwipeToDismiss">@bool/config_windowSwipeToDismiss</item>
+        <item name="windowSwipeToDismiss">@empty</item>
 
         <!-- Dialog attributes -->
         <item name="dialogTheme">@style/ThemeOverlay.Material.Dialog</item>
@@ -781,8 +789,13 @@ please see themes_device_defaults.xml.
         <item name="colorProgressBackgroundNormal">?attr/colorControlNormal</item>
 
         <!-- Tooltip popup properties -->
-        <item name="tooltipForegroundColor">@color/foreground_material_dark</item>
-        <item name="tooltipBackgroundColor">@color/tooltip_background_dark</item>
+        <item name="tooltipForegroundColor">@color/system_on_surface_dark</item>
+        <item name="tooltipBackgroundColor">@color/system_surface_dark</item>
+        <item name="tooltipCornerRadius">@dimen/tooltip_corner_radius_material</item>
+        <item name="tooltipHorizontalPadding">@dimen/tooltip_horizontal_padding_material</item>
+        <item name="tooltipVerticalPadding">@dimen/tooltip_vertical_padding_material</item>
+        <item name="tooltipFontSize">@dimen/tooltip_font_size_material</item>
+
     </style>
 
     <!-- Variant of the material (light) theme that has a solid (opaque) action bar
@@ -959,10 +972,11 @@ please see themes_device_defaults.xml.
     <!-- Variant of the material (dark) theme that has no title bar and fills
          the entire screen and extends into the display overscan region.  This theme
          sets {@link android.R.attr#windowFullscreen} and {@link android.R.attr#windowOverscan}
-         to true. -->
+         to true.
+         @deprecated Overscan areas aren't set by any Android product anymore as of Android 11.
+         -->
     <style name="Theme.Material.NoActionBar.Overscan">
         <item name="windowFullscreen">true</item>
-        <item name="windowOverscan">true</item>
         <item name="windowContentOverlay">@null</item>
     </style>
 
@@ -992,10 +1006,11 @@ please see themes_device_defaults.xml.
     <!-- Variant of the material (light) theme that has no title bar and fills
          the entire screen and extends into the display overscan region.  This theme
          sets {@link android.R.attr#windowFullscreen} and {@link android.R.attr#windowOverscan}
-         to true. -->
+         to true.
+         @deprecated Overscan areas aren't set by any Android product anymore as of Android 11.
+         -->
     <style name="Theme.Material.Light.NoActionBar.Overscan">
         <item name="windowFullscreen">true</item>
-        <item name="windowOverscan">true</item>
         <item name="windowContentOverlay">@null</item>
     </style>
 
@@ -1341,14 +1356,6 @@ please see themes_device_defaults.xml.
         <item name="notificationHeaderIconSize">@dimen/notification_header_icon_size</item>
     </style>
 
-    <!-- Theme for inflating ambient notification -->
-    <style name="Theme.Material.Notification.Ambient">
-        <item name="notificationHeaderStyle">@style/Notification.Header.Ambient</item>
-        <item name="notificationHeaderTextAppearance">@style/TextAppearance.Material.Notification.Info.Ambient</item>
-        <item name="notificationHeaderAppNameVisibility">gone</item>
-        <item name="notificationHeaderIconSize">@dimen/notification_header_icon_size_ambient</item>
-    </style>
-
     <!-- Default theme for Settings and activities launched from Settings. -->
     <style name="Theme.Material.Settings" parent="Theme.Material.Light.LightStatusBar">
         <item name="homeAsUpIndicator">@drawable/ic_ab_back_material_settings</item>
@@ -1416,26 +1423,6 @@ please see themes_device_defaults.xml.
         <item name="colorPrimary">@color/primary_material_settings</item>
         <item name="colorPrimaryDark">@color/primary_dark_material_settings</item>
         <item name="colorSecondary">@color/secondary_material_settings</item>
-    </style>
-
-    <!-- @hide -->
-    <style name="Theme.Material.Autofill" parent="Theme.Material">
-        <item name="colorBackground">@color/autofill_background_material_dark</item>
-    </style>
-
-    <!-- @hide -->
-    <style name="Theme.Material.Autofill.Light" parent="Theme.Material.Light">
-        <item name="colorBackground">@color/autofill_background_material_light</item>
-    </style>
-
-    <!-- @hide -->
-    <style name="Theme.Material.Autofill.Save" parent="Theme.Material.Panel">
-        <item name="colorBackground">@color/autofill_background_material_dark</item>
-    </style>
-
-    <!-- @hide -->
-    <style name="Theme.Material.Autofill.Save.Light" parent="Theme.Material.Light.Panel">
-        <item name="colorBackground">@color/autofill_background_material_light</item>
     </style>
 
 </resources>

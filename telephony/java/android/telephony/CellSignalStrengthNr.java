@@ -16,12 +16,22 @@
 
 package android.telephony;
 
+import android.annotation.IntDef;
 import android.annotation.IntRange;
+import android.annotation.NonNull;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.PersistableBundle;
 
+import com.android.telephony.Rlog;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 /**
  * 5G NR signal strength related information.
@@ -34,27 +44,158 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
      */
     public static final int UNKNOWN_ASU_LEVEL = 99;
 
+    private static final boolean VDBG = false;
+
     private static final String TAG = "CellSignalStrengthNr";
 
+    // Lifted from Default carrier configs and max range of SSRSRP
+    // Boundaries: [-156 dB, -31 dB]
+    private int[] mSsRsrpThresholds = new int[] {
+            -110, /* SIGNAL_STRENGTH_POOR */
+            -90, /* SIGNAL_STRENGTH_MODERATE */
+            -80, /* SIGNAL_STRENGTH_GOOD */
+            -65,  /* SIGNAL_STRENGTH_GREAT */
+    };
+
+    // Lifted from Default carrier configs and max range of SSRSRQ
+    // Boundaries: [-43 dB, 20 dB]
+    private int[] mSsRsrqThresholds = new int[] {
+            -31, /* SIGNAL_STRENGTH_POOR */
+            -19, /* SIGNAL_STRENGTH_MODERATE */
+            -7, /* SIGNAL_STRENGTH_GOOD */
+            6  /* SIGNAL_STRENGTH_GREAT */
+    };
+
+    // Lifted from Default carrier configs and max range of SSSINR
+    // Boundaries: [-23 dB, 40 dB]
+    private int[] mSsSinrThresholds = new int[] {
+            -5, /* SIGNAL_STRENGTH_POOR */
+            5, /* SIGNAL_STRENGTH_MODERATE */
+            15, /* SIGNAL_STRENGTH_GOOD */
+            30  /* SIGNAL_STRENGTH_GREAT */
+    };
+
     /**
-     * These threshold values are copied from LTE.
-     * TODO: make it configurable via CarrierConfig.
+     * Indicates SSRSRP is considered for {@link #getLevel()} and reporting from modem.
+     *
+     * @hide
      */
-    private static final int SIGNAL_GREAT_THRESHOLD = -95;
-    private static final int SIGNAL_GOOD_THRESHOLD = -105;
-    private static final int SIGNAL_MODERATE_THRESHOLD = -115;
+    public static final int USE_SSRSRP = 1 << 0;
+    /**
+     * Indicates SSRSRQ is considered for {@link #getLevel()} and reporting from modem.
+     *
+     * @hide
+     */
+    public static final int USE_SSRSRQ = 1 << 1;
+    /**
+     * Indicates SSSINR is considered for {@link #getLevel()} and reporting from modem.
+     *
+     * @hide
+     */
+    public static final int USE_SSSINR = 1 << 2;
+
+    /**
+     * Bit-field integer to determine whether to use SS reference signal received power (SSRSRP),
+     * SS reference signal received quality (SSRSRQ), or/and SS signal-to-noise and interference
+     * ratio (SSSINR) for the number of 5G NR signal bars. If multiple measures are set bit, the
+     * parameter whose value is smallest is used to indicate the signal bar.
+     *
+     * @hide
+     */
+    @IntDef(flag = true, prefix = { "USE_" }, value = {
+        USE_SSRSRP,
+        USE_SSRSRQ,
+        USE_SSSINR
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface SignalLevelAndReportCriteriaSource {}
 
     private int mCsiRsrp;
     private int mCsiRsrq;
     private int mCsiSinr;
+    /**
+     * CSI channel quality indicator (CQI) table index. There are multiple CQI tables.
+     * The definition of CQI in each table is different.
+     *
+     * Reference: 3GPP TS 138.214 section 5.2.2.1.
+     *
+     * Range [1, 3].
+     */
+    private int mCsiCqiTableIndex;
+    /**
+     * CSI channel quality indicators (CQI) for all subbands.
+     *
+     * If the CQI report is for the entire wideband, a single CQI index is provided.
+     * If the CQI report is for all subbands, one CQI index is provided for each subband,
+     * in ascending order of subband index.
+     * If CQI is not available, the CQI report is empty.
+     *
+     * Reference: 3GPP TS 138.214 section 5.2.2.1.
+     *
+     * Range [0, 15] for each CQI.
+     */
+    private List<Integer> mCsiCqiReport;
     private int mSsRsrp;
     private int mSsRsrq;
     private int mSsSinr;
     private int mLevel;
 
+    /**
+     * Bit-field integer to determine whether to use SS reference signal received power (SSRSRP),
+     * SS reference signal received quality (SSRSRQ), or/and SS signal-to-noise and interference
+     * ratio (SSSINR) for the number of 5G NR signal bars. If multiple measures are set bit, the
+     * parameter whose value is smallest is used to indicate the signal bar.
+     *
+     *  SSRSRP = 1 << 0,
+     *  SSRSRQ = 1 << 1,
+     *  SSSINR = 1 << 2,
+     *
+     * For example, if both SSRSRP and SSSINR are used, the value of key is 5 (1 << 0 | 1 << 2).
+     * If the key is invalid or not configured, a default value (SSRSRP = 1 << 0) will apply.
+     */
+    private int mParametersUseForLevel;
+
+    /**
+     * Timing advance value for a one way trip from cell to device in microseconds.
+     * Approximate distance is calculated using 300m/us * timingAdvance.
+     *
+     * Reference: 3GPP TS 36.213 section 4.2.3.
+     *
+     * Range: [0, 1282]
+     */
+    private int mTimingAdvance;
+
     /** @hide */
     public CellSignalStrengthNr() {
         setDefaultValues();
+    }
+
+    /**
+     * @param csiRsrp CSI reference signal received power.
+     * @param csiRsrq CSI reference signal received quality.
+     * @param csiSinr CSI signal-to-noise and interference ratio.
+     * @param csiCqiTableIndex CSI CSI channel quality indicator (CQI) table index.
+     * @param csiCqiReport CSI channel quality indicators (CQI) for all subbands.
+     * @param ssRsrp SS reference signal received power.
+     * @param ssRsrq SS reference signal received quality.
+     * @param ssSinr SS signal-to-noise and interference ratio.
+     * @param timingAdvance Timing advance.
+     * @hide
+     */
+    public CellSignalStrengthNr(int csiRsrp, int csiRsrq, int csiSinr, int csiCqiTableIndex,
+            List<Byte> csiCqiReport, int ssRsrp, int ssRsrq, int ssSinr, int timingAdvance) {
+        mCsiRsrp = inRangeOrUnavailable(csiRsrp, -156, -31);
+        mCsiRsrq = inRangeOrUnavailable(csiRsrq, -20, -3);
+        mCsiSinr = inRangeOrUnavailable(csiSinr, -23, 23);
+        mCsiCqiTableIndex = inRangeOrUnavailable(csiCqiTableIndex, 1, 3);
+        mCsiCqiReport = csiCqiReport.stream()
+                .map(cqi -> inRangeOrUnavailable(Byte.toUnsignedInt(cqi), 0, 15))
+                .collect(Collectors.toList());
+        mSsRsrp = inRangeOrUnavailable(ssRsrp, -156, -31);
+        mSsRsrq = inRangeOrUnavailable(ssRsrq, -43, 20);
+        mSsSinr = inRangeOrUnavailable(ssSinr, -23, 40);
+        mTimingAdvance = inRangeOrUnavailable(timingAdvance, 0, 1282);
+        updateLevel(null, null);
     }
 
     /**
@@ -68,26 +209,23 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
      */
     public CellSignalStrengthNr(
             int csiRsrp, int csiRsrq, int csiSinr, int ssRsrp, int ssRsrq, int ssSinr) {
-        mCsiRsrp = inRangeOrUnavailable(csiRsrp, -140, -44);
-        mCsiRsrq = inRangeOrUnavailable(csiRsrq, -20, -3);
-        mCsiSinr = inRangeOrUnavailable(csiSinr, -23, 23);
-        mSsRsrp = inRangeOrUnavailable(ssRsrp, -140, -44);
-        mSsRsrq = inRangeOrUnavailable(ssRsrq, -20, -3);
-        mSsSinr = inRangeOrUnavailable(ssSinr, -23, 40);
-        updateLevel(null, null);
+        this(csiRsrp, csiRsrq, csiSinr, CellInfo.UNAVAILABLE, Collections.emptyList(),
+                ssRsrp, ssRsrq, ssSinr, CellInfo.UNAVAILABLE);
     }
 
     /**
+     * Flip sign cell strength value when taking in the value from hal
+     * @param val cell strength value
+     * @return flipped value
      * @hide
-     * @param ss signal strength from modem.
      */
-    public CellSignalStrengthNr(android.hardware.radio.V1_4.NrSignalStrength ss) {
-        this(ss.csiRsrp, ss.csiRsrq, ss.csiSinr, ss.ssRsrp, ss.ssRsrq, ss.ssSinr);
+    public static int flip(int val) {
+        return val != CellInfo.UNAVAILABLE ? -val : val;
     }
 
     /**
-     * Reference: 3GPP TS 38.215.
-     * Range: -140 dBm to -44 dBm.
+     * Reference: 3GPP TS 38.133 10.1.6.1.
+     * Range: -156 dBm to -31 dBm.
      * @return SS reference signal received power, {@link CellInfo#UNAVAILABLE} means unreported
      * value.
      */
@@ -96,8 +234,8 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
     }
 
     /**
-     * Reference: 3GPP TS 38.215.
-     * Range: -20 dB to -3 dB.
+     * Reference: 3GPP TS 38.215; 3GPP TS 38.133 section 10
+     * Range: -43 dB to 20 dB.
      * @return SS reference signal received quality, {@link CellInfo#UNAVAILABLE} means unreported
      * value.
      */
@@ -116,8 +254,8 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
     }
 
     /**
-     * Reference: 3GPP TS 38.215.
-     * Range: -140 dBm to -44 dBm.
+     * Reference: 3GPP TS 38.133 10.1.6.1.
+     * Range: -156 dBm to -31 dBm.
      * @return CSI reference signal received power, {@link CellInfo#UNAVAILABLE} means unreported
      * value.
      */
@@ -145,6 +283,53 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
         return mCsiSinr;
     }
 
+    /**
+     * Return CSI channel quality indicator (CQI) table index. There are multiple CQI tables.
+     * The definition of CQI in each table is different.
+     *
+     * Reference: 3GPP TS 138.214 section 5.2.2.1.
+     *
+     * @return the CQI table index if available or
+     *         {@link android.telephony.CellInfo#UNAVAILABLE UNAVAILABLE} if unavailable.
+     */
+    @IntRange(from = 1, to = 3)
+    public int getCsiCqiTableIndex() {
+        return mCsiCqiTableIndex;
+    }
+    /**
+     * Return a list of CSI channel quality indicators (CQI) for all subbands.
+     *
+     * If the CQI report is for the entire wideband, a single CQI index is provided.
+     * If the CQI report is for all subbands, one CQI index is provided for each subband,
+     * in ascending order of subband index.
+     * If CQI is not available, the CQI report is empty.
+     *
+     * Reference: 3GPP TS 138.214 section 5.2.2.1.
+     *
+     * @return the CQIs for all subbands if available or empty list if unavailable.
+     */
+    @NonNull
+    @IntRange(from = 0, to = 15)
+    public List<Integer> getCsiCqiReport() {
+        return mCsiCqiReport;
+    }
+
+    /**
+     * Get the timing advance value for a one way trip from cell to device for NR in microseconds.
+     * {@link android.telephony.CellInfo#UNAVAILABLE} is reported when there is no
+     * active RRC connection.
+     *
+     * Reference: 3GPP TS 36.213 section 4.2.3.
+     * Range: 0 us to 1282 us.
+     *
+     * @return the NR timing advance if available or
+     *         {@link android.telephony.CellInfo#UNAVAILABLE} if unavailable.
+     */
+    @IntRange(from = 0, to = 1282)
+    public int getTimingAdvanceMicros() {
+        return mTimingAdvance;
+    }
+
     @Override
     public int describeContents() {
         return 0;
@@ -156,20 +341,26 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
         dest.writeInt(mCsiRsrp);
         dest.writeInt(mCsiRsrq);
         dest.writeInt(mCsiSinr);
+        dest.writeInt(mCsiCqiTableIndex);
+        dest.writeList(mCsiCqiReport);
         dest.writeInt(mSsRsrp);
         dest.writeInt(mSsRsrq);
         dest.writeInt(mSsSinr);
         dest.writeInt(mLevel);
+        dest.writeInt(mTimingAdvance);
     }
 
     private CellSignalStrengthNr(Parcel in) {
         mCsiRsrp = in.readInt();
         mCsiRsrq = in.readInt();
         mCsiSinr = in.readInt();
+        mCsiCqiTableIndex = in.readInt();
+        mCsiCqiReport = in.readArrayList(Integer.class.getClassLoader(), java.lang.Integer.class);
         mSsRsrp = in.readInt();
         mSsRsrq = in.readInt();
         mSsSinr = in.readInt();
         mLevel = in.readInt();
+        mTimingAdvance = in.readInt();
     }
 
     /** @hide */
@@ -178,10 +369,14 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
         mCsiRsrp = CellInfo.UNAVAILABLE;
         mCsiRsrq = CellInfo.UNAVAILABLE;
         mCsiSinr = CellInfo.UNAVAILABLE;
+        mCsiCqiTableIndex = CellInfo.UNAVAILABLE;
+        mCsiCqiReport = Collections.emptyList();
         mSsRsrp = CellInfo.UNAVAILABLE;
         mSsRsrq = CellInfo.UNAVAILABLE;
         mSsSinr = CellInfo.UNAVAILABLE;
         mLevel = SIGNAL_STRENGTH_NONE_OR_UNKNOWN;
+        mParametersUseForLevel = USE_SSRSRP;
+        mTimingAdvance = CellInfo.UNAVAILABLE;
     }
 
     /** {@inheritDoc} */
@@ -191,20 +386,101 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
         return mLevel;
     }
 
+    /**
+     * Checks if the given parameter type is considered to use for {@link #getLevel()}.
+     *
+     * Note: if multiple parameter types are considered, the smaller level for one of the
+     * parameters would be returned by {@link #getLevel()}
+     *
+     * @param parameterType bitwise OR of {@link #USE_SSRSRP}, {@link #USE_SSRSRQ},
+     *         {@link #USE_SSSINR}
+     * @return {@code true} if the level is calculated based on the given parameter type;
+     *      {@code false} otherwise.
+     *
+     */
+    private boolean isLevelForParameter(@SignalLevelAndReportCriteriaSource int parameterType) {
+        return (parameterType & mParametersUseForLevel) == parameterType;
+    }
+
     /** @hide */
     @Override
     public void updateLevel(PersistableBundle cc, ServiceState ss) {
-        if (mCsiRsrp == CellInfo.UNAVAILABLE) {
-            mLevel = SIGNAL_STRENGTH_NONE_OR_UNKNOWN;
-        } else if (mCsiRsrp >= SIGNAL_GREAT_THRESHOLD) {
-            mLevel = SIGNAL_STRENGTH_GREAT;
-        } else if (mCsiRsrp >= SIGNAL_GOOD_THRESHOLD) {
-            mLevel = SIGNAL_STRENGTH_GOOD;
-        } else if (mCsiRsrp >= SIGNAL_MODERATE_THRESHOLD) {
-            mLevel = SIGNAL_STRENGTH_MODERATE;
+        if (cc == null) {
+            mParametersUseForLevel = USE_SSRSRP;
         } else {
-            mLevel = SIGNAL_STRENGTH_POOR;
+            mParametersUseForLevel = cc.getInt(
+                    CarrierConfigManager.KEY_PARAMETERS_USE_FOR_5G_NR_SIGNAL_BAR_INT, USE_SSRSRP);
+            mSsRsrpThresholds = cc.getIntArray(
+                    CarrierConfigManager.KEY_5G_NR_SSRSRP_THRESHOLDS_INT_ARRAY);
+            if (VDBG) {
+                Rlog.i(TAG, "Applying 5G NR SSRSRP Thresholds: "
+                        + Arrays.toString(mSsRsrpThresholds));
+            }
+            mSsRsrqThresholds = cc.getIntArray(
+                    CarrierConfigManager.KEY_5G_NR_SSRSRQ_THRESHOLDS_INT_ARRAY);
+            if (VDBG) {
+                Rlog.i(TAG, "Applying 5G NR SSRSRQ Thresholds: "
+                        + Arrays.toString(mSsRsrqThresholds));
+            }
+            mSsSinrThresholds = cc.getIntArray(
+                    CarrierConfigManager.KEY_5G_NR_SSSINR_THRESHOLDS_INT_ARRAY);
+            if (VDBG) {
+                Rlog.i(TAG, "Applying 5G NR SSSINR Thresholds: "
+                        + Arrays.toString(mSsSinrThresholds));
+            }
         }
+        int ssRsrpLevel = SignalStrength.INVALID;
+        int ssRsrqLevel = SignalStrength.INVALID;
+        int ssSinrLevel = SignalStrength.INVALID;
+        if (isLevelForParameter(USE_SSRSRP)) {
+            int rsrpBoost = 0;
+            if (ss != null) {
+                rsrpBoost = ss.getArfcnRsrpBoost();
+            }
+            ssRsrpLevel = updateLevelWithMeasure(mSsRsrp + rsrpBoost, mSsRsrpThresholds);
+            if (VDBG) {
+                Rlog.i(TAG, "Updated 5G NR SSRSRP Level: " + ssRsrpLevel);
+            }
+        }
+        if (isLevelForParameter(USE_SSRSRQ)) {
+            ssRsrqLevel = updateLevelWithMeasure(mSsRsrq, mSsRsrqThresholds);
+            if (VDBG) {
+                Rlog.i(TAG, "Updated 5G NR SSRSRQ Level: " + ssRsrqLevel);
+            }
+        }
+        if (isLevelForParameter(USE_SSSINR)) {
+            ssSinrLevel = updateLevelWithMeasure(mSsSinr, mSsSinrThresholds);
+            if (VDBG) {
+                Rlog.i(TAG, "Updated 5G NR SSSINR Level: " + ssSinrLevel);
+            }
+        }
+        // Apply the smaller value among three levels of three measures.
+        mLevel = Math.min(Math.min(ssRsrpLevel, ssRsrqLevel), ssSinrLevel);
+    }
+
+    /**
+     * Update level with corresponding measure and thresholds.
+     *
+     * @param measure corresponding signal measure
+     * @param thresholds corresponding signal thresholds
+     * @return level of the signal strength
+     */
+    private int updateLevelWithMeasure(int measure, int[] thresholds) {
+        int level;
+        if (measure == CellInfo.UNAVAILABLE) {
+            level = SIGNAL_STRENGTH_NONE_OR_UNKNOWN;
+        } else if (measure >= thresholds[3]) {
+            level = SIGNAL_STRENGTH_GREAT;
+        } else if (measure >= thresholds[2]) {
+            level = SIGNAL_STRENGTH_GOOD;
+        } else if (measure >= thresholds[1]) {
+            level = SIGNAL_STRENGTH_MODERATE;
+        }  else if (measure >= thresholds[0]) {
+            level = SIGNAL_STRENGTH_POOR;
+        } else {
+            level = SIGNAL_STRENGTH_NONE_OR_UNKNOWN;
+        }
+        return level;
     }
 
     /**
@@ -212,7 +488,7 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
      *
      * Asu is calculated based on 3GPP RSRP. Refer to 3GPP 27.007 (Ver 10.3.0) Sec 8.69
      *
-     * @return RSCP in ASU 0..97, 255, or UNAVAILABLE
+     * @return RSRP in ASU 0..97, 255, or UNAVAILABLE
      */
     @Override
     public int getAsuLevel() {
@@ -231,11 +507,11 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
     }
 
     /**
-     * Get the CSI-RSRP as dBm value -140..-44dBm or {@link CellInfo#UNAVAILABLE UNAVAILABLE}.
+     * Get the SS-RSRP as dBm value -140..-44dBm or {@link CellInfo#UNAVAILABLE UNAVAILABLE}.
      */
     @Override
     public int getDbm() {
-        return mCsiRsrp;
+        return mSsRsrp;
     }
 
     /** @hide */
@@ -243,10 +519,14 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
         mCsiRsrp = s.mCsiRsrp;
         mCsiRsrq = s.mCsiRsrq;
         mCsiSinr = s.mCsiSinr;
+        mCsiCqiTableIndex = s.mCsiCqiTableIndex;
+        mCsiCqiReport = s.mCsiCqiReport;
         mSsRsrp = s.mSsRsrp;
         mSsRsrq = s.mSsRsrq;
         mSsSinr = s.mSsSinr;
         mLevel = s.mLevel;
+        mParametersUseForLevel = s.mParametersUseForLevel;
+        mTimingAdvance = s.mTimingAdvance;
     }
 
     /** @hide */
@@ -257,7 +537,8 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
 
     @Override
     public int hashCode() {
-        return Objects.hash(mCsiRsrp, mCsiRsrq, mCsiSinr, mSsRsrp, mSsRsrq, mSsSinr, mLevel);
+        return Objects.hash(mCsiRsrp, mCsiRsrq, mCsiSinr, mCsiCqiTableIndex,
+                mCsiCqiReport, mSsRsrp, mSsRsrq, mSsSinr, mLevel, mTimingAdvance);
     }
 
     private static final CellSignalStrengthNr sInvalid = new CellSignalStrengthNr();
@@ -273,8 +554,10 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
         if (obj instanceof CellSignalStrengthNr) {
             CellSignalStrengthNr o = (CellSignalStrengthNr) obj;
             return mCsiRsrp == o.mCsiRsrp && mCsiRsrq == o.mCsiRsrq && mCsiSinr == o.mCsiSinr
+                    && mCsiCqiTableIndex == o.mCsiCqiTableIndex
+                    && mCsiCqiReport.equals(o.mCsiCqiReport)
                     && mSsRsrp == o.mSsRsrp && mSsRsrq == o.mSsRsrq && mSsSinr == o.mSsSinr
-                    && mLevel == o.mLevel;
+                    && mLevel == o.mLevel && mTimingAdvance == o.mTimingAdvance;
         }
         return false;
     }
@@ -285,17 +568,20 @@ public final class CellSignalStrengthNr extends CellSignalStrength implements Pa
                 .append(TAG + ":{")
                 .append(" csiRsrp = " + mCsiRsrp)
                 .append(" csiRsrq = " + mCsiRsrq)
-                .append(" csiSinr = " + mCsiSinr)
+                .append(" csiCqiTableIndex = " + mCsiCqiTableIndex)
+                .append(" csiCqiReport = " + mCsiCqiReport)
                 .append(" ssRsrp = " + mSsRsrp)
                 .append(" ssRsrq = " + mSsRsrq)
                 .append(" ssSinr = " + mSsSinr)
                 .append(" level = " + mLevel)
+                .append(" parametersUseForLevel = " + mParametersUseForLevel)
+                .append(" timingAdvance = " + mTimingAdvance)
                 .append(" }")
                 .toString();
     }
 
     /** Implement the Parcelable interface */
-    public static final Parcelable.Creator<CellSignalStrengthNr> CREATOR =
+    public static final @android.annotation.NonNull Parcelable.Creator<CellSignalStrengthNr> CREATOR =
             new Parcelable.Creator<CellSignalStrengthNr>() {
         @Override
         public CellSignalStrengthNr createFromParcel(Parcel in) {

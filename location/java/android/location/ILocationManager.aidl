@@ -19,18 +19,30 @@ package android.location;
 import android.app.PendingIntent;
 import android.location.Address;
 import android.location.Criteria;
-import android.location.GeocoderParams;
 import android.location.Geofence;
-import android.location.IBatchedLocationCallback;
+import android.location.GnssAntennaInfo;
+import android.location.GnssCapabilities;
+import android.location.GnssMeasurementCorrections;
+import android.location.GnssMeasurementRequest;
+import android.location.IGnssAntennaInfoListener;
 import android.location.IGnssMeasurementsListener;
 import android.location.IGnssStatusListener;
 import android.location.IGnssNavigationMessageListener;
+import android.location.IGnssNmeaListener;
+import android.location.ILocationCallback;
 import android.location.ILocationListener;
+import android.location.LastLocationRequest;
 import android.location.Location;
 import android.location.LocationRequest;
+import android.location.LocationTime;
+import android.location.provider.ForwardGeocodeRequest;
+import android.location.provider.IGeocodeCallback;
+import android.location.provider.IProviderRequestListener;
+import android.location.provider.ProviderProperties;
+import android.location.provider.ReverseGeocodeRequest;
 import android.os.Bundle;
-
-import com.android.internal.location.ProviderProperties;
+import android.os.ICancellationSignal;
+import android.os.PackageTagsList;
 
 /**
  * System private API for talking with the location service.
@@ -39,88 +51,103 @@ import com.android.internal.location.ProviderProperties;
  */
 interface ILocationManager
 {
-    void requestLocationUpdates(in LocationRequest request, in ILocationListener listener,
-            in PendingIntent intent, String packageName);
-    void removeUpdates(in ILocationListener listener, in PendingIntent intent, String packageName);
+    @nullable Location getLastLocation(String provider, in LastLocationRequest request, String packageName, @nullable String attributionTag);
+    @nullable ICancellationSignal getCurrentLocation(String provider, in LocationRequest request, in ILocationCallback callback, String packageName, @nullable String attributionTag, String listenerId);
 
-    void requestGeofence(in LocationRequest request, in Geofence geofence,
-            in PendingIntent intent, String packageName);
-    void removeGeofence(in Geofence fence, in PendingIntent intent, String packageName);
+    void registerLocationListener(String provider, in LocationRequest request, in ILocationListener listener, String packageName, @nullable String attributionTag, String listenerId);
+    void unregisterLocationListener(in ILocationListener listener);
 
-    Location getLastLocation(in LocationRequest request, String packageName);
+    void registerLocationPendingIntent(String provider, in LocationRequest request, in PendingIntent pendingIntent, String packageName, @nullable String attributionTag);
+    void unregisterLocationPendingIntent(in PendingIntent pendingIntent);
 
-    boolean registerGnssStatusCallback(IGnssStatusListener callback, String packageName);
-    void unregisterGnssStatusCallback(IGnssStatusListener callback);
+    @EnforcePermission(allOf={"LOCATION_HARDWARE", "ACCESS_FINE_LOCATION"})
+    void injectLocation(in Location location);
 
-    boolean geocoderIsPresent();
-    String getFromLocation(double latitude, double longitude, int maxResults,
-        in GeocoderParams params, out List<Address> addrs);
-    String getFromLocationName(String locationName,
-        double lowerLeftLatitude, double lowerLeftLongitude,
-        double upperRightLatitude, double upperRightLongitude, int maxResults,
-        in GeocoderParams params, out List<Address> addrs);
+    void requestListenerFlush(String provider, in ILocationListener listener, int requestCode);
+    void requestPendingIntentFlush(String provider, in PendingIntent pendingIntent, int requestCode);
 
-    boolean sendNiResponse(int notifId, int userResponse);
+    void requestGeofence(in Geofence geofence, in PendingIntent intent, String packageName, String attributionTag);
+    void removeGeofence(in PendingIntent intent);
 
-    boolean addGnssMeasurementsListener(in IGnssMeasurementsListener listener, in String packageName);
-    void removeGnssMeasurementsListener(in IGnssMeasurementsListener listener);
+    boolean isGeocodeAvailable();
+    void reverseGeocode(in ReverseGeocodeRequest request, in IGeocodeCallback callback);
+    void forwardGeocode(in ForwardGeocodeRequest request, in IGeocodeCallback callback);
 
-    boolean addGnssNavigationMessageListener(
-            in IGnssNavigationMessageListener listener,
-            in String packageName);
-    void removeGnssNavigationMessageListener(in IGnssNavigationMessageListener listener);
-
+    GnssCapabilities getGnssCapabilities();
     int getGnssYearOfHardware();
     String getGnssHardwareModelName();
 
-    int getGnssBatchSize(String packageName);
-    boolean addGnssBatchingCallback(in IBatchedLocationCallback callback, String packageName);
-    void removeGnssBatchingCallback();
-    boolean startGnssBatch(long periodNanos, boolean wakeOnFifoFull, String packageName);
-    void flushGnssBatch(String packageName);
-    boolean stopGnssBatch();
-    boolean injectLocation(in Location location);
+    @nullable List<GnssAntennaInfo> getGnssAntennaInfos();
 
-    // --- deprecated ---
-    @UnsupportedAppUsage
+    void registerGnssStatusCallback(in IGnssStatusListener callback, String packageName, @nullable String attributionTag, String listenerId);
+    void unregisterGnssStatusCallback(in IGnssStatusListener callback);
+
+    void registerGnssNmeaCallback(in IGnssNmeaListener callback, String packageName, @nullable String attributionTag, String listenerId);
+    void unregisterGnssNmeaCallback(in IGnssNmeaListener callback);
+
+    void addGnssMeasurementsListener(in GnssMeasurementRequest request, in IGnssMeasurementsListener listener, String packageName, @nullable String attributionTag, String listenerId);
+    void removeGnssMeasurementsListener(in IGnssMeasurementsListener listener);
+    void injectGnssMeasurementCorrections(in GnssMeasurementCorrections corrections);
+
+    void addGnssNavigationMessageListener(in IGnssNavigationMessageListener listener, String packageName, @nullable String attributionTag, String listenerId);
+    void removeGnssNavigationMessageListener(in IGnssNavigationMessageListener listener);
+
+    void addGnssAntennaInfoListener(in IGnssAntennaInfoListener listener, String packageName, @nullable String attributionTag, String listenerId);
+    void removeGnssAntennaInfoListener(in IGnssAntennaInfoListener listener);
+
+    @EnforcePermission("INTERACT_ACROSS_USERS")
+    void addProviderRequestListener(in IProviderRequestListener listener);
+    void removeProviderRequestListener(in IProviderRequestListener listener);
+
+    int getGnssBatchSize();
+    @EnforcePermission("LOCATION_HARDWARE")
+    void startGnssBatch(long periodNanos, in ILocationListener listener, String packageName, @nullable String attributionTag, String listenerId);
+    @EnforcePermission("LOCATION_HARDWARE")
+    void flushGnssBatch();
+    @EnforcePermission("LOCATION_HARDWARE")
+    void stopGnssBatch();
+
+    boolean hasProvider(String provider);
     List<String> getAllProviders();
     List<String> getProviders(in Criteria criteria, boolean enabledOnly);
     String getBestProvider(in Criteria criteria, boolean enabledOnly);
-    boolean providerMeetsCriteria(String provider, in Criteria criteria);
     ProviderProperties getProviderProperties(String provider);
-    @UnsupportedAppUsage
-    String getNetworkProviderPackage();
+    @EnforcePermission("READ_DEVICE_CONFIG")
+    boolean isProviderPackage(@nullable String provider, String packageName, @nullable String attributionTag);
+    @EnforcePermission("READ_DEVICE_CONFIG")
+    List<String> getProviderPackages(String provider);
+
+    @EnforcePermission("LOCATION_HARDWARE")
+    void setExtraLocationControllerPackage(String packageName);
+    String getExtraLocationControllerPackage();
+    @EnforcePermission("LOCATION_HARDWARE")
+    void setExtraLocationControllerPackageEnabled(boolean enabled);
+    boolean isExtraLocationControllerPackageEnabled();
 
     boolean isProviderEnabledForUser(String provider, int userId);
-    boolean setProviderEnabledForUser(String provider, boolean enabled, int userId);
     boolean isLocationEnabledForUser(int userId);
     void setLocationEnabledForUser(boolean enabled, int userId);
-    void addTestProvider(String name, in ProviderProperties properties, String opPackageName);
-    void removeTestProvider(String provider, String opPackageName);
-    void setTestProviderLocation(String provider, in Location loc, String opPackageName);
-    void clearTestProviderLocation(String provider, String opPackageName);
-    void setTestProviderEnabled(String provider, boolean enabled, String opPackageName);
-    void clearTestProviderEnabled(String provider, String opPackageName);
-    void setTestProviderStatus(String provider, int status, in Bundle extras, long updateTime,
-            String opPackageName);
-    void clearTestProviderStatus(String provider, String opPackageName);
 
-    boolean sendExtraCommand(String provider, String command, inout Bundle extras);
+    boolean isAdasGnssLocationEnabledForUser(int userId);
+    void setAdasGnssLocationEnabledForUser(boolean enabled, int userId);
 
-    // --- internal ---
+    @EnforcePermission("CONTROL_AUTOMOTIVE_GNSS")
+    boolean isAutomotiveGnssSuspended();
+    @EnforcePermission("CONTROL_AUTOMOTIVE_GNSS")
+    void setAutomotiveGnssSuspended(boolean suspended);
 
-    // Used by location providers to tell the location manager when it has a new location.
-    // Passive is true if the location is coming from the passive provider, in which case
-    // it need not be shared with other providers.
-    @UnsupportedAppUsage
-    void reportLocation(in Location location, boolean passive);
+    void addTestProvider(String name, in ProviderProperties properties,
+        in List<String> locationTags, String packageName, @nullable String attributionTag);
+    void removeTestProvider(String provider, String packageName, @nullable String attributionTag);
+    void setTestProviderLocation(String provider, in Location location, String packageName, @nullable String attributionTag);
+    void setTestProviderEnabled(String provider, boolean enabled, String packageName, @nullable String attributionTag);
 
-    // Used when a (initially Gnss) Location batch arrives
-    void reportLocationBatch(in List<Location> locations);
+    LocationTime getGnssTimeMillis();
 
-    // for reporting callback completion
-    void locationCallbackFinished(ILocationListener listener);
+    void sendExtraCommand(String provider, String command, inout Bundle extras);
 
-    // used by gts tests to verify throttling whitelist
+    // used by gts tests to verify whitelists
     String[] getBackgroundThrottlingWhitelist();
+    PackageTagsList getIgnoreSettingsAllowlist();
+    PackageTagsList getAdasAllowlist();
 }

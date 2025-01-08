@@ -1,4 +1,4 @@
-// Copyright (C} 2018 The Android Open Source Project
+// Copyright (C) 2018 The Android Open Source Project
 //
 // Licensed under the Apache License, Version 2.0 (the "License"};
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 // Sysconfig files
+
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_base_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_base_license"],
+}
 
 prebuilt_etc {
     name: "framework-sysconfig.xml",
@@ -22,9 +30,58 @@ prebuilt_etc {
 }
 
 prebuilt_etc {
+    name: "preinstalled-packages-platform.xml",
+    sub_dir: "sysconfig",
+    src: "preinstalled-packages-platform.xml",
+}
+
+prebuilt_etc {
+    name: "initial-package-stopped-states.xml",
+    sub_dir: "sysconfig",
+    src: "initial-package-stopped-states.xml",
+}
+
+prebuilt_etc {
+    name: "preinstalled-packages-platform-overlays.xml",
+    product_specific: true,
+    sub_dir: "sysconfig",
+    src: "preinstalled-packages-platform-overlays.xml",
+}
+
+prebuilt_etc {
     name: "hiddenapi-package-whitelist.xml",
     sub_dir: "sysconfig",
     src: "hiddenapi-package-whitelist.xml",
+}
+
+prebuilt_etc {
+    name: "preinstalled-packages-asl-files.xml",
+    sub_dir: "sysconfig",
+    src: "preinstalled-packages-asl-files.xml",
+}
+
+prebuilt_etc {
+    name: "preinstalled-packages-strict-signature.xml",
+    sub_dir: "sysconfig",
+    src: "preinstalled-packages-strict-signature.xml",
+}
+
+prebuilt_etc {
+    name: "enhanced-confirmation.xml",
+    sub_dir: "sysconfig",
+    src: "enhanced-confirmation.xml",
+}
+
+prebuilt_etc {
+    name: "package-shareduid-allowlist.xml",
+    sub_dir: "sysconfig",
+    src: "package-shareduid-allowlist.xml",
+}
+
+prebuilt_etc {
+    name: "oem-defined-uids.xml",
+    sub_dir: "sysconfig",
+    src: "oem-defined-uids.xml",
 }
 
 // Privapp permission whitelist files
@@ -43,7 +100,7 @@ prebuilt_etc {
 
 prebuilt_etc {
     name: "privapp_whitelist_com.android.carrierconfig",
-    product_specific: true,
+    system_ext_specific: true,
     sub_dir: "permissions",
     src: "com.android.carrierconfig.xml",
     filename_from_src: true,
@@ -67,23 +124,52 @@ prebuilt_etc {
 
 prebuilt_etc {
     name: "privapp_whitelist_com.android.emergency",
-    product_specific: true,
+    system_ext_specific: true,
     sub_dir: "permissions",
     src: "com.android.emergency.xml",
     filename_from_src: true,
 }
 
 prebuilt_etc {
-    name: "privapp_whitelist_com.android.launcher3",
+    name: "privapp_whitelist_com.android.documentsui",
+    sub_dir: "permissions",
+    src: "com.android.documentsui.xml",
+    filename_from_src: true,
+}
+
+prebuilt_etc {
+    name: "privapp_whitelist_com.android.imsserviceentitlement",
     product_specific: true,
+    sub_dir: "permissions",
+    src: "com.android.imsserviceentitlement.xml",
+    filename_from_src: true,
+}
+
+prebuilt_etc {
+    name: "privapp_whitelist_com.android.intentresolver",
+    sub_dir: "permissions",
+    src: "com.android.intentresolver.xml",
+    filename_from_src: true,
+}
+
+prebuilt_etc {
+    name: "privapp_whitelist_com.android.launcher3",
+    system_ext_specific: true,
     sub_dir: "permissions",
     src: "com.android.launcher3.xml",
     filename_from_src: true,
 }
 
 prebuilt_etc {
+    name: "privapp_whitelist_com.android.networkstack",
+    sub_dir: "permissions",
+    src: "com.android.networkstack.xml",
+    filename_from_src: true,
+}
+
+prebuilt_etc {
     name: "privapp_whitelist_com.android.provision",
-    product_specific: true,
+    system_ext_specific: true,
     sub_dir: "permissions",
     src: "com.android.provision.xml",
     filename_from_src: true,
@@ -91,7 +177,7 @@ prebuilt_etc {
 
 prebuilt_etc {
     name: "privapp_whitelist_com.android.settings",
-    product_specific: true,
+    system_ext_specific: true,
     sub_dir: "permissions",
     src: "com.android.settings.xml",
     filename_from_src: true,
@@ -107,7 +193,7 @@ prebuilt_etc {
 
 prebuilt_etc {
     name: "privapp_whitelist_com.android.storagemanager",
-    product_specific: true,
+    system_ext_specific: true,
     sub_dir: "permissions",
     src: "com.android.storagemanager.xml",
     filename_from_src: true,
@@ -115,14 +201,8 @@ prebuilt_etc {
 
 prebuilt_etc {
     name: "privapp_whitelist_com.android.systemui",
-    product_specific: true,
+    system_ext_specific: true,
     sub_dir: "permissions",
     src: "com.android.systemui.xml",
     filename_from_src: true,
-}
-
-prebuilt_etc {
-    name: "com.android.timezone.updater.xml",
-    sub_dir: "permissions",
-    src: "com.android.timezone.updater.xml",
 }

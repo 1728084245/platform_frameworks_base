@@ -28,7 +28,7 @@ void GetResourceBenchmarkOld(const std::vector<std::string>& paths, const ResTab
   for (const std::string& path : paths) {
     if (!assetmanager.addAssetPath(String8(path.c_str()), nullptr /* cookie */,
                                    false /* appAsLib */, false /* isSystemAssets */)) {
-      state.SkipWithError(base::StringPrintf("Failed to load assets %s", path.c_str()).c_str());
+      state.SkipWithError(base::StringPrintf("Failed to old-load assets %s", path.c_str()).c_str());
       return;
     }
   }
@@ -53,33 +53,25 @@ void GetResourceBenchmarkOld(const std::vector<std::string>& paths, const ResTab
 
 void GetResourceBenchmark(const std::vector<std::string>& paths, const ResTable_config* config,
                           uint32_t resid, benchmark::State& state) {
-  std::vector<std::unique_ptr<const ApkAssets>> apk_assets;
-  std::vector<const ApkAssets*> apk_assets_ptrs;
+  std::vector<AssetManager2::ApkAssetsPtr> apk_assets;
   for (const std::string& path : paths) {
-    std::unique_ptr<const ApkAssets> apk = ApkAssets::Load(path);
+    auto apk = ApkAssets::Load(path);
     if (apk == nullptr) {
-      state.SkipWithError(base::StringPrintf("Failed to load assets %s", path.c_str()).c_str());
+      state.SkipWithError(base::StringPrintf("Failed to new-load assets %s", path.c_str()).c_str());
       return;
     }
-    apk_assets_ptrs.push_back(apk.get());
     apk_assets.push_back(std::move(apk));
   }
 
   AssetManager2 assetmanager;
-  assetmanager.SetApkAssets(apk_assets_ptrs);
+  assetmanager.SetApkAssets(apk_assets);
   if (config != nullptr) {
-    assetmanager.SetConfiguration(*config);
+    assetmanager.SetConfigurations({{{*config}}});
   }
 
-  Res_value value;
-  ResTable_config selected_config;
-  uint32_t flags;
-  uint32_t last_id = 0u;
-
   while (state.KeepRunning()) {
-    ApkAssetsCookie cookie = assetmanager.GetResource(
-        resid, false /* may_be_bag */, 0u /* density_override */, &value, &selected_config, &flags);
-    assetmanager.ResolveReference(cookie, &value, &selected_config, &flags, &last_id);
+    auto value = assetmanager.GetResource(resid);
+    assetmanager.ResolveReference(*value);
   }
 }
 

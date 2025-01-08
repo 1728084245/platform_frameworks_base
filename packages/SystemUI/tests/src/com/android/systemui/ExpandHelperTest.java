@@ -20,34 +20,52 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import android.animation.ObjectAnimator;
 import android.content.Context;
 import android.testing.AndroidTestingRunner;
+import android.testing.TestableLooper;
 import android.testing.TestableLooper.RunWithLooper;
 
+import androidx.core.animation.ObjectAnimator;
 import androidx.test.annotation.UiThreadTest;
 import androidx.test.filters.SmallTest;
 
-import com.android.systemui.statusbar.ExpandableNotificationRow;
-import com.android.systemui.statusbar.NotificationTestHelper;
+import com.android.keyguard.KeyguardUpdateMonitor;
+import com.android.systemui.animation.AnimatorTestRule;
+import com.android.systemui.flags.FakeFeatureFlags;
+import com.android.systemui.statusbar.NotificationMediaManager;
+import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
+import com.android.systemui.statusbar.notification.row.NotificationTestHelper;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 @SmallTest
 @RunWith(AndroidTestingRunner.class)
-@RunWithLooper(setAsMainLooper = true)
+@RunWithLooper
 public class ExpandHelperTest extends SysuiTestCase {
 
+    @Rule
+    public final AnimatorTestRule mAnimatorTestRule = new AnimatorTestRule(this);
+
+    private final FakeFeatureFlags mFeatureFlags = new FakeFeatureFlags();
     private ExpandableNotificationRow mRow;
     private ExpandHelper mExpandHelper;
     private ExpandHelper.Callback mCallback;
 
     @Before
     public void setUp() throws Exception {
+        mDependency.injectMockDependency(KeyguardUpdateMonitor.class);
+        mDependency.injectMockDependency(NotificationMediaManager.class);
+        allowTestableLooperAsMainThread();
         Context context = getContext();
-        mRow = new NotificationTestHelper(context).createRow();
+        NotificationTestHelper helper = new NotificationTestHelper(
+                mContext,
+                mDependency,
+                TestableLooper.get(this),
+                mFeatureFlags);
+        mRow = helper.createRow();
         mCallback = mock(ExpandHelper.Callback.class);
         mExpandHelper = new ExpandHelper(context, mCallback, 10, 100);
     }

@@ -16,68 +16,105 @@
 
 package com.android.systemui.statusbar.policy;
 
+import static com.android.systemui.statusbar.policy.dagger.StatusBarPolicyModule.DEVICE_STATE_ROTATION_LOCK_DEFAULTS;
+
+import android.Manifest;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.os.UserHandle;
 
-import com.android.internal.view.RotationPolicy;
+import androidx.annotation.NonNull;
+
+import com.android.internal.view.RotationPolicy.RotationPolicyListener;
+import com.android.systemui.dagger.SysUISingleton;
+import com.android.systemui.util.wrapper.RotationPolicyWrapper;
 
 import java.util.concurrent.CopyOnWriteArrayList;
 
-/** Platform implementation of the rotation lock controller. **/
-public final class RotationLockControllerImpl implements RotationLockController {
-    private final Context mContext;
-    private final CopyOnWriteArrayList<RotationLockControllerCallback> mCallbacks =
-            new CopyOnWriteArrayList<RotationLockControllerCallback>();
+import javax.inject.Inject;
+import javax.inject.Named;
 
-    private final RotationPolicy.RotationPolicyListener mRotationPolicyListener =
-            new RotationPolicy.RotationPolicyListener() {
+/** Platform implementation of the rotation lock controller. **/
+@SysUISingleton
+public final class RotationLockControllerImpl implements RotationLockController {
+
+    private final CopyOnWriteArrayList<RotationLockControllerCallback> mCallbacks =
+            new CopyOnWriteArrayList<>();
+
+    private final RotationPolicyListener mRotationPolicyListener =
+            new RotationPolicyListener() {
         @Override
         public void onChange() {
             notifyChanged();
         }
     };
 
-    public RotationLockControllerImpl(Context context) {
-        mContext = context;
+    private final RotationPolicyWrapper mRotationPolicy;
+    private final DeviceStateRotationLockSettingController
+            mDeviceStateRotationLockSettingController;
+    private final boolean mIsPerDeviceStateRotationLockEnabled;
+
+    @Inject
+    public RotationLockControllerImpl(
+            RotationPolicyWrapper rotationPolicyWrapper,
+            DeviceStateRotationLockSettingController deviceStateRotationLockSettingController,
+            @Named(DEVICE_STATE_ROTATION_LOCK_DEFAULTS) String[] deviceStateRotationLockDefaults
+    ) {
+        mRotationPolicy = rotationPolicyWrapper;
+        mDeviceStateRotationLockSettingController = deviceStateRotationLockSettingController;
+        mIsPerDeviceStateRotationLockEnabled = deviceStateRotationLockDefaults.length > 0;
+        if (mIsPerDeviceStateRotationLockEnabled) {
+            mCallbacks.add(mDeviceStateRotationLockSettingController);
+        }
+
         setListening(true);
     }
 
-    public void addCallback(RotationLockControllerCallback callback) {
+    @Override
+    public void addCallback(@NonNull RotationLockControllerCallback callback) {
         mCallbacks.add(callback);
         notifyChanged(callback);
     }
 
-    public void removeCallback(RotationLockControllerCallback callback) {
+    @Override
+    public void removeCallback(@NonNull RotationLockControllerCallback callback) {
         mCallbacks.remove(callback);
     }
 
     public int getRotationLockOrientation() {
-        return RotationPolicy.getRotationLockOrientation(mContext);
+        return mRotationPolicy.getRotationLockOrientation();
     }
 
     public boolean isRotationLocked() {
-        return RotationPolicy.isRotationLocked(mContext);
+        return mRotationPolicy.isRotationLocked();
     }
 
-    public void setRotationLocked(boolean locked) {
-        RotationPolicy.setRotationLock(mContext, locked);
+    public boolean isCameraRotationEnabled() {
+        return mRotationPolicy.isCameraRotationEnabled();
     }
 
-    public void setRotationLockedAtAngle(boolean locked, int rotation){
-        RotationPolicy.setRotationLockAtAngle(mContext, locked, rotation);
+    public void setRotationLocked(boolean locked, String caller) {
+        mRotationPolicy.setRotationLock(locked, caller);
+    }
+
+    public void setRotationLockedAtAngle(boolean locked, int rotation, String caller) {
+        mRotationPolicy.setRotationLockAtAngle(locked, rotation, caller);
     }
 
     public boolean isRotationLockAffordanceVisible() {
-        return RotationPolicy.isRotationLockToggleVisible(mContext);
+        return mRotationPolicy.isRotationLockToggleVisible();
     }
 
     @Override
     public void setListening(boolean listening) {
         if (listening) {
-            RotationPolicy.registerRotationPolicyListener(mContext, mRotationPolicyListener,
+            mRotationPolicy.registerRotationPolicyListener(mRotationPolicyListener,
                     UserHandle.USER_ALL);
         } else {
-            RotationPolicy.unregisterRotationPolicyListener(mContext, mRotationPolicyListener);
+            mRotationPolicy.unregisterRotationPolicyListener(mRotationPolicyListener);
+        }
+        if (mIsPerDeviceStateRotationLockEnabled) {
+            mDeviceStateRotationLockSettingController.setListening(listening);
         }
     }
 
@@ -88,7 +125,14 @@ public final class RotationLockControllerImpl implements RotationLockController 
     }
 
     private void notifyChanged(RotationLockControllerCallback callback) {
-        callback.onRotationLockStateChanged(RotationPolicy.isRotationLocked(mContext),
-                RotationPolicy.isRotationLockToggleVisible(mContext));
+        callback.onRotationLockStateChanged(mRotationPolicy.isRotationLocked(),
+                mRotationPolicy.isRotationLockToggleVisible());
+    }
+
+    public static boolean hasSufficientPermission(Context context) {
+        final PackageManager packageManager = context.getPackageManager();
+        final String rotationPackage = packageManager.getRotationResolverPackageName();
+        return rotationPackage != null && packageManager.checkPermission(
+                Manifest.permission.CAMERA, rotationPackage) == PackageManager.PERMISSION_GRANTED;
     }
 }

@@ -18,7 +18,8 @@ package android.app;
 
 import android.compat.Compatibility;
 import android.os.Process;
-import android.util.Log;
+
+import com.android.internal.compat.ChangeReporter;
 
 import java.util.Arrays;
 
@@ -27,38 +28,62 @@ import java.util.Arrays;
  *
  * @hide
  */
-public final class AppCompatCallbacks extends Compatibility.Callbacks {
-
-    private static final String TAG = "Compatibility";
-
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
+public final class AppCompatCallbacks implements Compatibility.BehaviorChangeDelegate {
     private final long[] mDisabledChanges;
+    private final long[] mLoggableChanges;
+    private final ChangeReporter mChangeReporter;
 
     /**
-     * Install this class into the current process.
+     * Install this class into the current process using the disabled and loggable changes lists.
      *
      * @param disabledChanges Set of compatibility changes that are disabled for this process.
+     * @param loggableChanges Set of compatibility changes that we want to log.
      */
-    public static void install(long[] disabledChanges) {
-        Compatibility.setCallbacks(new AppCompatCallbacks(disabledChanges));
+    public static void install(long[] disabledChanges, long[] loggableChanges) {
+        Compatibility.setBehaviorChangeDelegate(
+                new AppCompatCallbacks(disabledChanges, loggableChanges));
     }
 
-    private AppCompatCallbacks(long[] disabledChanges) {
+    private AppCompatCallbacks(long[] disabledChanges, long[] loggableChanges) {
         mDisabledChanges = Arrays.copyOf(disabledChanges, disabledChanges.length);
+        mLoggableChanges = Arrays.copyOf(loggableChanges, loggableChanges.length);
         Arrays.sort(mDisabledChanges);
+        Arrays.sort(mLoggableChanges);
+        mChangeReporter = new ChangeReporter(ChangeReporter.SOURCE_APP_PROCESS);
     }
 
-    protected void reportChange(long changeId) {
-        Log.d(TAG, "Compat change reported: " + changeId + "; UID " + Process.myUid());
-        // TODO log via StatsLog
+    /**
+     * Helper to determine if a list contains a changeId.
+     *
+     * @param list to search through
+     * @param changeId for which to search in the list
+     * @return true if the given changeId is found in the provided array.
+     */
+    private boolean changeIdInChangeList(long[] list, long changeId) {
+        return Arrays.binarySearch(list, changeId) >= 0;
     }
 
-    protected boolean isChangeEnabled(long changeId) {
-        if (Arrays.binarySearch(mDisabledChanges, changeId) < 0) {
-            // Not present in the disabled array
-            reportChange(changeId);
+    public void onChangeReported(long changeId) {
+        boolean isLoggable = changeIdInChangeList(mLoggableChanges, changeId);
+        reportChange(changeId, ChangeReporter.STATE_LOGGED, isLoggable);
+    }
+
+    public boolean isChangeEnabled(long changeId) {
+        boolean isEnabled = !changeIdInChangeList(mDisabledChanges, changeId);
+        boolean isLoggable = changeIdInChangeList(mLoggableChanges, changeId);
+        if (isEnabled) {
+            // Not present in the disabled changeId array
+            reportChange(changeId, ChangeReporter.STATE_ENABLED, isLoggable);
             return true;
         }
+        reportChange(changeId, ChangeReporter.STATE_DISABLED, isLoggable);
         return false;
+    }
+
+    private void reportChange(long changeId, int state, boolean isLoggable) {
+        int uid = Process.myUid();
+        mChangeReporter.reportChange(uid, changeId, state, false, isLoggable);
     }
 
 }

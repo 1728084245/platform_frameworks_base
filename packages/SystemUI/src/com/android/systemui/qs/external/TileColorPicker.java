@@ -18,8 +18,10 @@ package com.android.systemui.qs.external;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.service.quicksettings.Tile;
+
 import androidx.annotation.VisibleForTesting;
-import com.android.systemui.R;
+
+import com.android.systemui.res.R;
 
 public class TileColorPicker {
     @VisibleForTesting static final int[] DISABLE_STATE_SET = {-android.R.attr.state_enabled};

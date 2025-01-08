@@ -14,43 +14,48 @@
 
 package com.android.systemui;
 
-import static android.view.Surface.ROTATION_0;
-import static android.view.Surface.ROTATION_180;
-import static android.view.Surface.ROTATION_270;
-import static android.view.Surface.ROTATION_90;
+import static android.view.DisplayCutout.BOUNDS_POSITION_BOTTOM;
+import static android.view.DisplayCutout.BOUNDS_POSITION_LEFT;
+import static android.view.DisplayCutout.BOUNDS_POSITION_LENGTH;
+import static android.view.DisplayCutout.BOUNDS_POSITION_RIGHT;
+import static android.view.DisplayCutout.BOUNDS_POSITION_TOP;
 import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 import static android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
 
-import static com.android.systemui.tuner.TunablePadding.FLAG_END;
-import static com.android.systemui.tuner.TunablePadding.FLAG_START;
+import static com.android.systemui.util.DumpUtilsKt.asIndenting;
 
-import android.annotation.Dimension;
-import android.app.Fragment;
+import android.annotation.IdRes;
+import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.content.Context;
-import android.content.res.ColorStateList;
+import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
-import android.graphics.Canvas;
+import android.content.res.Resources;
 import android.graphics.Color;
-import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
+import android.graphics.Point;
 import android.graphics.Rect;
-import android.graphics.Region;
-import android.hardware.display.DisplayManager;
+import android.graphics.drawable.Drawable;
+import android.hardware.graphics.common.AlphaInterpretation;
+import android.hardware.graphics.common.DisplayDecorationSupport;
 import android.os.Handler;
-import android.os.HandlerThread;
+import android.os.HandlerExecutor;
 import android.os.SystemProperties;
+import android.os.Trace;
 import android.provider.Settings.Secure;
-import androidx.annotation.VisibleForTesting;
-import android.util.DisplayMetrics;
+import android.util.DisplayUtils;
+import android.util.IndentingPrintWriter;
 import android.util.Log;
+import android.util.Size;
+import android.view.Display;
 import android.view.DisplayCutout;
+import android.view.DisplayCutout.BoundsPosition;
 import android.view.DisplayInfo;
 import android.view.Gravity;
 import android.view.LayoutInflater;
-import android.view.Surface;
 import android.view.View;
 import android.view.View.OnLayoutChangeListener;
 import android.view.ViewGroup;
@@ -58,87 +63,460 @@ import android.view.ViewGroup.LayoutParams;
 import android.view.ViewTreeObserver;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
 
+import androidx.annotation.VisibleForTesting;
+
+import com.android.app.viewcapture.ViewCaptureAwareWindowManager;
 import com.android.internal.util.Preconditions;
-import com.android.systemui.RegionInterceptingFrameLayout.RegionInterceptableView;
-import com.android.systemui.fragments.FragmentHostManager;
-import com.android.systemui.fragments.FragmentHostManager.FragmentListener;
-import com.android.systemui.plugins.qs.QS;
-import com.android.systemui.qs.SecureSetting;
-import com.android.systemui.statusbar.phone.CollapsedStatusBarFragment;
-import com.android.systemui.statusbar.phone.StatusBar;
-import com.android.systemui.tuner.TunablePadding;
-import com.android.systemui.tuner.TunerService;
-import com.android.systemui.tuner.TunerService.Tunable;
-import com.android.systemui.util.leak.RotationUtils;
+import com.android.settingslib.Utils;
+import com.android.systemui.biometrics.data.repository.FacePropertyRepository;
+import com.android.systemui.dagger.SysUISingleton;
+import com.android.systemui.decor.CutoutDecorProviderFactory;
+import com.android.systemui.decor.DebugRoundedCornerDelegate;
+import com.android.systemui.decor.DebugRoundedCornerModel;
+import com.android.systemui.decor.DecorProvider;
+import com.android.systemui.decor.DecorProviderFactory;
+import com.android.systemui.decor.DecorProviderKt;
+import com.android.systemui.decor.FaceScanningProviderFactory;
+import com.android.systemui.decor.OverlayWindow;
+import com.android.systemui.decor.PrivacyDotDecorProviderFactory;
+import com.android.systemui.decor.RoundedCornerDecorProviderFactory;
+import com.android.systemui.decor.RoundedCornerResDelegateImpl;
+import com.android.systemui.decor.ScreenDecorCommand;
+import com.android.systemui.log.ScreenDecorationsLogger;
+import com.android.systemui.qs.UserSettingObserver;
+import com.android.systemui.res.R;
+import com.android.systemui.settings.DisplayTracker;
+import com.android.systemui.settings.UserTracker;
+import com.android.systemui.statusbar.commandline.CommandRegistry;
+import com.android.systemui.statusbar.events.PrivacyDotViewController;
+import com.android.systemui.statusbar.policy.ConfigurationController;
+import com.android.systemui.util.concurrency.DelayableExecutor;
+import com.android.systemui.util.concurrency.ThreadFactory;
+import com.android.systemui.util.kotlin.JavaAdapter;
+import com.android.systemui.util.settings.SecureSettings;
+
+import dalvik.annotation.optimization.NeverCompile;
+
+import kotlin.Pair;
+
+import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+import javax.inject.Inject;
 
 /**
  * An overlay that draws screen decorations in software (e.g for rounded corners or display cutout)
  * for antialiasing and emulation purposes.
  */
-public class ScreenDecorations extends SystemUI implements Tunable {
-    private static final boolean DEBUG = false;
+@SysUISingleton
+public class ScreenDecorations implements
+        CoreStartable, ConfigurationController.ConfigurationListener, Dumpable {
+    private static final boolean DEBUG_LOGGING = false;
     private static final String TAG = "ScreenDecorations";
 
-    public static final String SIZE = "sysui_rounded_size";
-    public static final String PADDING = "sysui_rounded_content_padding";
+    // Provide a way for factory to disable ScreenDecorations to run the Display tests.
+    private static final boolean DEBUG_DISABLE_SCREEN_DECORATIONS =
+            SystemProperties.getBoolean("debug.disable_screen_decorations", false);
     private static final boolean DEBUG_SCREENSHOT_ROUNDED_CORNERS =
             SystemProperties.getBoolean("debug.screenshot_rounded_corners", false);
 
-    private DisplayManager mDisplayManager;
-    private DisplayManager.DisplayListener mDisplayListener;
+    private static final boolean sToolkitSetFrameRateReadOnly =
+            android.view.flags.Flags.toolkitSetFrameRateReadOnly();
+    private boolean mDebug = DEBUG_SCREENSHOT_ROUNDED_CORNERS;
+    private int mDebugColor = Color.RED;
 
-    @VisibleForTesting protected int mRoundedDefault;
-    @VisibleForTesting protected int mRoundedDefaultTop;
-    @VisibleForTesting protected int mRoundedDefaultBottom;
-    private View mOverlay;
-    private View mBottomOverlay;
-    private float mDensity;
-    private WindowManager mWindowManager;
+    private static final int[] DISPLAY_CUTOUT_IDS = {
+            R.id.display_cutout,
+            R.id.display_cutout_left,
+            R.id.display_cutout_right,
+            R.id.display_cutout_bottom
+    };
+    private final ScreenDecorationsLogger mLogger;
+
+    private DisplayTracker mDisplayTracker;
+    @VisibleForTesting
+    protected boolean mIsRegistered;
+    private final Context mContext;
+    private final CommandRegistry mCommandRegistry;
+    private final SecureSettings mSecureSettings;
+    @VisibleForTesting
+    DisplayTracker.Callback mDisplayListener;
+    private CameraAvailabilityListener mCameraListener;
+    private final UserTracker mUserTracker;
+    private final PrivacyDotViewController mDotViewController;
+    private final ThreadFactory mThreadFactory;
+    private final DecorProviderFactory mDotFactory;
+    private final FaceScanningProviderFactory mFaceScanningFactory;
+    private final CameraProtectionLoader mCameraProtectionLoader;
+    public final int mFaceScanningViewId;
+
+    @VisibleForTesting
+    protected RoundedCornerResDelegateImpl mRoundedCornerResDelegate;
+    @VisibleForTesting
+    protected DecorProviderFactory mRoundedCornerFactory;
+    @VisibleForTesting
+    protected DebugRoundedCornerDelegate mDebugRoundedCornerDelegate =
+            new DebugRoundedCornerDelegate();
+    protected DecorProviderFactory mDebugRoundedCornerFactory;
+    private CutoutDecorProviderFactory mCutoutFactory;
+    private int mProviderRefreshToken = 0;
+    @VisibleForTesting
+    protected OverlayWindow[] mOverlays = null;
+    @VisibleForTesting
+    ViewGroup mScreenDecorHwcWindow;
+    @VisibleForTesting
+    ScreenDecorHwcLayer mScreenDecorHwcLayer;
+    private ViewCaptureAwareWindowManager mWindowManager;
     private int mRotation;
-    private DisplayCutoutView mCutoutTop;
-    private DisplayCutoutView mCutoutBottom;
-    private boolean mPendingRotationChange;
+    private UserSettingObserver mColorInversionSetting;
+    @Nullable
+    private DelayableExecutor mExecutor;
     private Handler mHandler;
+    boolean mPendingConfigChange;
+    @VisibleForTesting
+    String mDisplayUniqueId;
+    private int mTintColor = Color.BLACK;
+    @VisibleForTesting
+    protected DisplayDecorationSupport mHwcScreenDecorationSupport;
+    private final Point mDisplaySize = new Point();
+    @VisibleForTesting
+    protected DisplayInfo mDisplayInfo = new DisplayInfo();
+    private DisplayCutout mDisplayCutout;
+    private boolean mPendingManualConfigUpdate;
 
-    @Override
-    public void start() {
-        mHandler = startHandlerThread();
-        mHandler.post(this::startOnScreenDecorationsThread);
-        setupStatusBarPaddingIfNeeded();
+    private FacePropertyRepository mFacePropertyRepository;
+    private JavaAdapter mJavaAdapter;
+
+    @VisibleForTesting
+    protected void showCameraProtection(@NonNull Path protectionPath, @NonNull Rect bounds) {
+        if (mFaceScanningFactory.shouldShowFaceScanningAnim()) {
+            DisplayCutoutView overlay = (DisplayCutoutView) getOverlayView(
+                    mFaceScanningViewId);
+            if (overlay != null) {
+                mLogger.cameraProtectionBoundsForScanningOverlay(bounds);
+                overlay.setProtection(protectionPath, bounds);
+                overlay.enableShowProtection(true);
+                updateOverlayWindowVisibilityIfViewExists(
+                        overlay.findViewById(mFaceScanningViewId));
+                // immediately return, bc FaceScanningOverlay also renders the camera
+                // protection, so we don't need to show the camera protection in
+                // mScreenDecorHwcLayer or mCutoutViews
+                return;
+            }
+        }
+
+        if (mScreenDecorHwcLayer != null) {
+            mLogger.hwcLayerCameraProtectionBounds(bounds);
+            mScreenDecorHwcLayer.setProtection(protectionPath, bounds);
+            mScreenDecorHwcLayer.enableShowProtection(true);
+            return;
+        }
+
+        int setProtectionCnt = 0;
+        for (int id: DISPLAY_CUTOUT_IDS) {
+            final View view = getOverlayView(id);
+            if (!(view instanceof DisplayCutoutView)) {
+                continue;
+            }
+            ++setProtectionCnt;
+            final DisplayCutoutView dcv = (DisplayCutoutView) view;
+            mLogger.dcvCameraBounds(id, bounds);
+            dcv.setProtection(protectionPath, bounds);
+            dcv.enableShowProtection(true);
+        }
+        if (setProtectionCnt == 0) {
+            mLogger.cutoutViewNotInitialized();
+        }
     }
 
     @VisibleForTesting
-    Handler startHandlerThread() {
-        HandlerThread thread = new HandlerThread("ScreenDecorations");
-        thread.start();
-        return thread.getThreadHandler();
+    protected void hideCameraProtection() {
+        FaceScanningOverlay faceScanningOverlay =
+                (FaceScanningOverlay) getOverlayView(mFaceScanningViewId);
+        if (faceScanningOverlay != null) {
+            faceScanningOverlay.setHideOverlayRunnable(() -> {
+                Trace.beginSection("ScreenDecorations#hideOverlayRunnable");
+                updateOverlayWindowVisibilityIfViewExists(
+                        faceScanningOverlay.findViewById(mFaceScanningViewId));
+                Trace.endSection();
+            });
+            faceScanningOverlay.enableShowProtection(false);
+        }
+
+        if (mScreenDecorHwcLayer != null) {
+            mScreenDecorHwcLayer.enableShowProtection(false);
+            return;
+        }
+
+        int setProtectionCnt = 0;
+        for (int id: DISPLAY_CUTOUT_IDS) {
+            final View view = getOverlayView(id);
+            if (!(view instanceof DisplayCutoutView)) {
+                continue;
+            }
+            ++setProtectionCnt;
+            ((DisplayCutoutView) view).enableShowProtection(false);
+        }
+        if (setProtectionCnt == 0) {
+            Log.e(TAG, "CutoutView not initialized hideCameraProtection");
+        }
+    }
+
+    private CameraAvailabilityListener.CameraTransitionCallback mCameraTransitionCallback =
+            new CameraAvailabilityListener.CameraTransitionCallback() {
+        @Override
+        public void onApplyCameraProtection(@NonNull Path protectionPath, @NonNull Rect bounds) {
+            mLogger.cameraProtectionEvent("onApplyCameraProtection");
+            showCameraProtection(protectionPath, bounds);
+        }
+
+        @Override
+        public void onHideCameraProtection() {
+            mLogger.cameraProtectionEvent("onHideCameraProtection");
+            hideCameraProtection();
+        }
+    };
+
+    @VisibleForTesting
+    PrivacyDotViewController.ShowingListener mPrivacyDotShowingListener =
+            new PrivacyDotViewController.ShowingListener() {
+        @Override
+        public void onPrivacyDotShown(@Nullable View v) {
+            updateOverlayWindowVisibilityIfViewExists(v);
+        }
+
+        @Override
+        public void onPrivacyDotHidden(@Nullable View v) {
+            updateOverlayWindowVisibilityIfViewExists(v);
+        }
+    };
+
+    @VisibleForTesting
+    protected void updateOverlayWindowVisibilityIfViewExists(@Nullable View view) {
+        if (view == null) {
+            return;
+        }
+        mExecutor.execute(() -> {
+            // We don't need to control the window visibility if rounded corners or cutout is drawn
+            // on sw layer since the overlay windows are always visible in this case.
+            if (mOverlays == null || !shouldOptimizeVisibility()) {
+                return;
+            }
+            Trace.beginSection("ScreenDecorations#updateOverlayWindowVisibilityIfViewExists");
+            for (final OverlayWindow overlay : mOverlays) {
+                if (overlay == null) {
+                    continue;
+                }
+                if (overlay.getView(view.getId()) != null) {
+                    overlay.getRootView().setVisibility(getWindowVisibility(overlay, true));
+                    Trace.endSection();
+                    return;
+                }
+            }
+            Trace.endSection();
+        });
+    }
+
+    private static boolean eq(DisplayDecorationSupport a, DisplayDecorationSupport b) {
+        if (a == null) return (b == null);
+        if (b == null) return false;
+        return a.format == b.format && a.alphaInterpretation == b.alphaInterpretation;
+    }
+
+    @Inject
+    public ScreenDecorations(Context context,
+            SecureSettings secureSettings,
+            CommandRegistry commandRegistry,
+            UserTracker userTracker,
+            DisplayTracker displayTracker,
+            PrivacyDotViewController dotViewController,
+            ThreadFactory threadFactory,
+            PrivacyDotDecorProviderFactory dotFactory,
+            FaceScanningProviderFactory faceScanningFactory,
+            ScreenDecorationsLogger logger,
+            FacePropertyRepository facePropertyRepository,
+            JavaAdapter javaAdapter,
+            CameraProtectionLoader cameraProtectionLoader,
+            ViewCaptureAwareWindowManager viewCaptureAwareWindowManager) {
+        mContext = context;
+        mSecureSettings = secureSettings;
+        mCommandRegistry = commandRegistry;
+        mUserTracker = userTracker;
+        mDisplayTracker = displayTracker;
+        mDotViewController = dotViewController;
+        mThreadFactory = threadFactory;
+        mDotFactory = dotFactory;
+        mFaceScanningFactory = faceScanningFactory;
+        mCameraProtectionLoader = cameraProtectionLoader;
+        mFaceScanningViewId = com.android.systemui.res.R.id.face_scanning_anim;
+        mLogger = logger;
+        mFacePropertyRepository = facePropertyRepository;
+        mJavaAdapter = javaAdapter;
+        mWindowManager = viewCaptureAwareWindowManager;
+    }
+
+    private final ScreenDecorCommand.Callback mScreenDecorCommandCallback = (cmd, pw) -> {
+        // If we are exiting debug mode, we can set it (false) and bail, otherwise we will
+        // ensure that debug mode is set
+        if (cmd.getDebug() != null && !cmd.getDebug()) {
+            setDebug(false);
+            return;
+        } else {
+            // setDebug is idempotent
+            setDebug(true);
+        }
+
+        if (cmd.getColor() != null) {
+            mDebugColor = cmd.getColor();
+            mExecutor.execute(() -> {
+                if (mScreenDecorHwcLayer != null) {
+                    mScreenDecorHwcLayer.setDebugColor(cmd.getColor());
+                }
+                updateColorInversionDefault();
+            });
+        }
+
+        DebugRoundedCornerModel roundedTop = null;
+        DebugRoundedCornerModel roundedBottom = null;
+        if (cmd.getRoundedTop() != null) {
+            roundedTop = cmd.getRoundedTop().toRoundedCornerDebugModel();
+        }
+        if (cmd.getRoundedBottom() != null) {
+            roundedBottom = cmd.getRoundedBottom().toRoundedCornerDebugModel();
+        }
+        if (roundedTop != null || roundedBottom != null) {
+            mDebugRoundedCornerDelegate.applyNewDebugCorners(roundedTop, roundedBottom);
+            mExecutor.execute(() -> {
+                removeAllOverlays();
+                removeHwcOverlay();
+                setupDecorations();
+            });
+        }
+    };
+
+    @Override
+    public void start() {
+        if (DEBUG_DISABLE_SCREEN_DECORATIONS) {
+            Log.i(TAG, "ScreenDecorations is disabled");
+            return;
+        }
+        mHandler = mThreadFactory.buildHandlerOnNewThread("ScreenDecorations");
+        mExecutor = mThreadFactory.buildDelayableExecutorOnHandler(mHandler);
+        mExecutor.execute(this::startOnScreenDecorationsThread);
+        mDotViewController.setUiExecutor(mExecutor);
+        mCommandRegistry.registerCommand(ScreenDecorCommand.SCREEN_DECOR_CMD_NAME,
+                () -> new ScreenDecorCommand(mScreenDecorCommandCallback));
+    }
+
+    /**
+     * Change the value of {@link ScreenDecorations#mDebug}. This operation is heavyweight, since
+     * it requires essentially re-init-ing this screen decorations process with the debug
+     * information taken into account.
+     */
+    @VisibleForTesting
+    protected void setDebug(boolean debug) {
+        if (mDebug == debug) {
+            return;
+        }
+
+        mDebug = debug;
+        if (!mDebug) {
+            mDebugRoundedCornerDelegate.removeDebugState();
+        }
+
+        mExecutor.execute(() -> {
+            // Re-trigger all of the screen decorations setup here so that the debug values
+            // can be picked up
+            removeAllOverlays();
+            removeHwcOverlay();
+            startOnScreenDecorationsThread();
+            updateColorInversionDefault();
+        });
+    }
+
+    private boolean isPrivacyDotEnabled() {
+        return mDotFactory.getHasProviders();
+    }
+
+    @NonNull
+    @VisibleForTesting
+    protected List<DecorProvider> getProviders(boolean hasHwLayer) {
+        List<DecorProvider> decorProviders = new ArrayList<>(mDotFactory.getProviders());
+        decorProviders.addAll(mFaceScanningFactory.getProviders());
+        if (!hasHwLayer) {
+            if (mDebug && mDebugRoundedCornerFactory.getHasProviders()) {
+                decorProviders.addAll(mDebugRoundedCornerFactory.getProviders());
+            } else {
+                decorProviders.addAll(mRoundedCornerFactory.getProviders());
+            }
+            decorProviders.addAll(mCutoutFactory.getProviders());
+        }
+        return decorProviders;
+    }
+
+    /**
+     * Check that newProviders is the same list with decorProviders inside mOverlay.
+     * @param newProviders expected comparing DecorProviders
+     * @return true if same provider list
+     */
+    @VisibleForTesting
+    boolean hasSameProviders(@NonNull List<DecorProvider> newProviders) {
+        final ArrayList<Integer> overlayViewIds = new ArrayList<>();
+        if (mOverlays != null) {
+            for (OverlayWindow overlay : mOverlays) {
+                if (overlay == null) {
+                    continue;
+                }
+                overlayViewIds.addAll(overlay.getViewIds());
+            }
+        }
+        if (overlayViewIds.size() != newProviders.size()) {
+            return false;
+        }
+
+        for (DecorProvider provider: newProviders) {
+            if (!overlayViewIds.contains(provider.getViewId())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void startOnScreenDecorationsThread() {
-        mRotation = RotationUtils.getExactRotation(mContext);
-        mWindowManager = mContext.getSystemService(WindowManager.class);
-        updateRoundedCornerRadii();
-        if (hasRoundedCorners() || shouldDrawCutout()) {
-            setupDecorations();
-        }
+        Trace.beginSection("ScreenDecorations#startOnScreenDecorationsThread");
+        mContext.getDisplay().getDisplayInfo(mDisplayInfo);
+        mRotation = mDisplayInfo.rotation;
+        mDisplaySize.x = mDisplayInfo.getNaturalWidth();
+        mDisplaySize.y = mDisplayInfo.getNaturalHeight();
+        mDisplayUniqueId = mDisplayInfo.uniqueId;
+        mDisplayCutout = mDisplayInfo.displayCutout;
+        mRoundedCornerResDelegate =
+                new RoundedCornerResDelegateImpl(mContext.getResources(), mDisplayUniqueId);
+        mRoundedCornerResDelegate.setPhysicalPixelDisplaySizeRatio(
+                getPhysicalPixelDisplaySizeRatio());
+        mRoundedCornerFactory = new RoundedCornerDecorProviderFactory(mRoundedCornerResDelegate);
+        mDebugRoundedCornerFactory =
+                new RoundedCornerDecorProviderFactory(mDebugRoundedCornerDelegate);
+        mCutoutFactory = getCutoutFactory();
+        mHwcScreenDecorationSupport = mContext.getDisplay().getDisplayDecorationSupport();
+        updateHwLayerRoundedCornerDrawable();
+        setupDecorations();
+        setupCameraListener();
 
-        mDisplayListener = new DisplayManager.DisplayListener() {
-            @Override
-            public void onDisplayAdded(int displayId) {
-                // do nothing
-            }
-
-            @Override
-            public void onDisplayRemoved(int displayId) {
-                // do nothing
-            }
-
+        mDisplayListener = new DisplayTracker.Callback() {
             @Override
             public void onDisplayChanged(int displayId) {
-                final int newRotation = RotationUtils.getExactRotation(mContext);
-                if (mOverlay != null && mBottomOverlay != null && mRotation != newRotation) {
+                mContext.getDisplay().getDisplayInfo(mDisplayInfo);
+                final int newRotation = mDisplayInfo.rotation;
+                if ((mOverlays != null || mScreenDecorHwcWindow != null)
+                        && (mRotation != newRotation
+                        || displaySizeChanged(mDisplaySize, mDisplayInfo))) {
+                    final Point newSize = new Point();
+                    newSize.x = mDisplayInfo.getNaturalWidth();
+                    newSize.y = mDisplayInfo.getNaturalHeight();
                     // We cannot immediately update the orientation. Otherwise
                     // WindowManager is still deferring layout until it has finished dispatching
                     // the config changes, which may cause divergence between what we draw
@@ -146,528 +524,943 @@ public class ScreenDecorations extends SystemUI implements Tunable {
                     // Instead we wait until either:
                     // - we are trying to redraw. This because WM resized our window and told us to.
                     // - the config change has been dispatched, so WM is no longer deferring layout.
-                    mPendingRotationChange = true;
-                    if (DEBUG) {
-                        Log.i(TAG, "Rotation changed, deferring " + newRotation + ", staying at "
-                                + mRotation);
+                    mPendingConfigChange = true;
+                    if (mRotation != newRotation) {
+                        mLogger.logRotationChangeDeferred(mRotation, newRotation);
+                    }
+                    if (!mDisplaySize.equals(newSize)) {
+                        mLogger.logDisplaySizeChanged(mDisplaySize, newSize);
                     }
 
-                    mOverlay.getViewTreeObserver().addOnPreDrawListener(
-                            new RestartingPreDrawListener(mOverlay, newRotation));
-                    mBottomOverlay.getViewTreeObserver().addOnPreDrawListener(
-                            new RestartingPreDrawListener(mBottomOverlay, newRotation));
+                    if (mOverlays != null) {
+                        for (int i = 0; i < BOUNDS_POSITION_LENGTH; i++) {
+                            if (mOverlays[i] != null) {
+                                final ViewGroup overlayView = mOverlays[i].getRootView();
+                                overlayView.getViewTreeObserver().addOnPreDrawListener(
+                                        new RestartingPreDrawListener(
+                                                overlayView, i, newRotation, newSize));
+                            }
+                        }
+                    }
+
+                    if (mScreenDecorHwcWindow != null) {
+                        mScreenDecorHwcWindow.getViewTreeObserver().addOnPreDrawListener(
+                                new RestartingPreDrawListener(
+                                        mScreenDecorHwcWindow,
+                                        -1, // Pass -1 for views with no specific position.
+                                        newRotation, newSize));
+                    }
+                    if (mScreenDecorHwcLayer != null) {
+                        mScreenDecorHwcLayer.pendingConfigChange = true;
+                    }
                 }
-                updateOrientation();
+
+                final String newUniqueId = mDisplayInfo.uniqueId;
+                if (!Objects.equals(newUniqueId, mDisplayUniqueId)) {
+                    mDisplayUniqueId = newUniqueId;
+                    final DisplayDecorationSupport newScreenDecorationSupport =
+                            mContext.getDisplay().getDisplayDecorationSupport();
+
+                    mRoundedCornerResDelegate.updateDisplayUniqueId(newUniqueId, null);
+
+                    // When providers or the value of mSupportHwcScreenDecoration is changed,
+                    // re-setup the whole screen decoration.
+                    if (!hasSameProviders(getProviders(newScreenDecorationSupport != null))
+                            || !eq(newScreenDecorationSupport, mHwcScreenDecorationSupport)) {
+                        mHwcScreenDecorationSupport = newScreenDecorationSupport;
+                        removeAllOverlays();
+                        setupDecorations();
+                        return;
+                    }
+
+                    if (mPendingManualConfigUpdate) {
+                        mPendingManualConfigUpdate = false;
+                        onConfigChanged(mContext.getResources().getConfiguration());
+                    }
+                }
             }
         };
+        mDisplayTracker.addDisplayChangeCallback(mDisplayListener, new HandlerExecutor(mHandler));
+        updateConfiguration();
+        mJavaAdapter.alwaysCollectFlow(mFacePropertyRepository.getSensorLocation(),
+                this::onFaceSensorLocationChanged);
+        Trace.endSection();
+    }
 
-        mDisplayManager = (DisplayManager) mContext.getSystemService(
-                Context.DISPLAY_SERVICE);
-        mDisplayManager.registerDisplayListener(mDisplayListener, mHandler);
-        updateOrientation();
+    @VisibleForTesting
+    @Nullable
+    View getOverlayView(@IdRes int id) {
+        if (mOverlays == null) {
+            return null;
+        }
+
+        for (final OverlayWindow overlay : mOverlays) {
+            if (overlay == null) {
+                continue;
+            }
+            final View view = overlay.getView(id);
+            if (view != null) {
+                return view;
+            }
+        }
+        return null;
+    }
+
+    private void removeRedundantOverlayViews(@NonNull List<DecorProvider> decorProviders) {
+        if (mOverlays == null) {
+            return;
+        }
+        int[] viewIds = decorProviders.stream().mapToInt(DecorProvider::getViewId).toArray();
+        for (final OverlayWindow overlay : mOverlays) {
+            if (overlay == null) {
+                continue;
+            }
+            overlay.removeRedundantViews(viewIds);
+        }
+    }
+
+    private void removeOverlayView(@IdRes int id) {
+        if (mOverlays == null) {
+            return;
+        }
+
+        for (final OverlayWindow overlay : mOverlays) {
+            if (overlay == null) {
+                continue;
+            }
+
+            overlay.removeView(id);
+        }
     }
 
     private void setupDecorations() {
-        mOverlay = LayoutInflater.from(mContext)
-                .inflate(R.layout.rounded_corners, null);
-        mCutoutTop = new DisplayCutoutView(mContext, true,
-                this::updateWindowVisibilities, this);
-        ((ViewGroup)mOverlay).addView(mCutoutTop);
-        mBottomOverlay = LayoutInflater.from(mContext)
-                .inflate(R.layout.rounded_corners, null);
-        mCutoutBottom = new DisplayCutoutView(mContext, false,
-                this::updateWindowVisibilities, this);
-        ((ViewGroup)mBottomOverlay).addView(mCutoutBottom);
+        Trace.beginSection("ScreenDecorations#setupDecorations");
+        setupDecorationsInner();
+        Trace.endSection();
+    }
 
-        mOverlay.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
-        mOverlay.setAlpha(0);
+    private void setupDecorationsInner() {
+        if (hasRoundedCorners() || shouldDrawCutout() || isPrivacyDotEnabled()
+                || mFaceScanningFactory.getHasProviders()) {
 
-        mBottomOverlay.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
-        mBottomOverlay.setAlpha(0);
+            List<DecorProvider> decorProviders = getProviders(mHwcScreenDecorationSupport != null);
+            removeRedundantOverlayViews(decorProviders);
 
-        updateViews();
-
-        mWindowManager.addView(mOverlay, getWindowLayoutParams());
-        mWindowManager.addView(mBottomOverlay, getBottomLayoutParams());
-
-        DisplayMetrics metrics = new DisplayMetrics();
-        mWindowManager.getDefaultDisplay().getMetrics(metrics);
-        mDensity = metrics.density;
-
-        Dependency.get(Dependency.MAIN_HANDLER).post(
-                () -> Dependency.get(TunerService.class).addTunable(this, SIZE));
-
-        // Watch color inversion and invert the overlay as needed.
-        SecureSetting setting = new SecureSetting(mContext, mHandler,
-                Secure.ACCESSIBILITY_DISPLAY_INVERSION_ENABLED) {
-            @Override
-            protected void handleValueChanged(int value, boolean observedChange) {
-                int tint = value != 0 ? Color.WHITE : Color.BLACK;
-                ColorStateList tintList = ColorStateList.valueOf(tint);
-                ((ImageView) mOverlay.findViewById(R.id.left)).setImageTintList(tintList);
-                ((ImageView) mOverlay.findViewById(R.id.right)).setImageTintList(tintList);
-                ((ImageView) mBottomOverlay.findViewById(R.id.left)).setImageTintList(tintList);
-                ((ImageView) mBottomOverlay.findViewById(R.id.right)).setImageTintList(tintList);
-                mCutoutTop.setColor(tint);
-                mCutoutBottom.setColor(tint);
+            if (mHwcScreenDecorationSupport != null) {
+                createHwcOverlay();
+            } else {
+                removeHwcOverlay();
             }
-        };
-        setting.setListening(true);
-        setting.onChange(false);
 
-        mOverlay.addOnLayoutChangeListener(new OnLayoutChangeListener() {
+            boolean[] hasCreatedOverlay = new boolean[BOUNDS_POSITION_LENGTH];
+            final boolean shouldOptimizeVisibility = shouldOptimizeVisibility();
+            Integer bound;
+            while ((bound = DecorProviderKt.getProperBound(decorProviders)) != null) {
+                hasCreatedOverlay[bound] = true;
+                Pair<List<DecorProvider>, List<DecorProvider>> pair =
+                        DecorProviderKt.partitionAlignedBound(decorProviders, bound);
+                decorProviders = pair.getSecond();
+                createOverlay(bound, pair.getFirst(), shouldOptimizeVisibility);
+            }
+            for (int i = 0; i < BOUNDS_POSITION_LENGTH; i++) {
+                if (!hasCreatedOverlay[i]) {
+                    removeOverlay(i);
+                }
+            }
+
+            if (shouldOptimizeVisibility) {
+                mDotViewController.setShowingListener(mPrivacyDotShowingListener);
+            } else {
+                mDotViewController.setShowingListener(null);
+            }
+            final View tl, tr, bl, br;
+            if ((tl = getOverlayView(R.id.privacy_dot_top_left_container)) != null
+                    && (tr = getOverlayView(R.id.privacy_dot_top_right_container)) != null
+                    && (bl = getOverlayView(R.id.privacy_dot_bottom_left_container)) != null
+                    && (br = getOverlayView(R.id.privacy_dot_bottom_right_container)) != null) {
+                // Overlays have been created, send the dots to the controller
+                //TODO: need a better way to do this
+                mDotViewController.initialize(tl, tr, bl, br);
+            }
+        } else {
+            removeAllOverlays();
+            removeHwcOverlay();
+        }
+
+        if (hasOverlays() || hasHwcOverlay()) {
+            if (mIsRegistered) {
+                return;
+            }
+
+            // Watch color inversion and invert the overlay as needed.
+            if (mColorInversionSetting == null) {
+                mColorInversionSetting = new UserSettingObserver(mSecureSettings, mHandler,
+                        Secure.ACCESSIBILITY_DISPLAY_INVERSION_ENABLED,
+                        mUserTracker.getUserId()) {
+                    @Override
+                    protected void handleValueChanged(int value, boolean observedChange) {
+                        updateColorInversion(value);
+                    }
+                };
+            }
+            mColorInversionSetting.setListening(true);
+            mColorInversionSetting.onChange(false);
+            updateColorInversion(mColorInversionSetting.getValue());
+
+            mUserTracker.addCallback(mUserChangedCallback, mExecutor);
+            mIsRegistered = true;
+        } else {
+            if (mColorInversionSetting != null) {
+                mColorInversionSetting.setListening(false);
+            }
+
+            mUserTracker.removeCallback(mUserChangedCallback);
+            mIsRegistered = false;
+        }
+    }
+
+    // For unit test to override
+    protected CutoutDecorProviderFactory getCutoutFactory() {
+        return new CutoutDecorProviderFactory(mContext.getResources(),
+                mContext.getDisplay());
+    }
+
+    @VisibleForTesting
+    boolean hasOverlays() {
+        if (mOverlays == null) {
+            return false;
+        }
+
+        for (int i = 0; i < BOUNDS_POSITION_LENGTH; i++) {
+            if (mOverlays[i] != null) {
+                return true;
+            }
+        }
+        mOverlays = null;
+        return false;
+    }
+
+    private void removeAllOverlays() {
+        if (mOverlays == null) {
+            return;
+        }
+
+        for (int i = 0; i < BOUNDS_POSITION_LENGTH; i++) {
+            if (mOverlays[i] != null) {
+                removeOverlay(i);
+            }
+        }
+        mOverlays = null;
+    }
+
+    private void removeOverlay(@BoundsPosition int pos) {
+        if (mOverlays == null || mOverlays[pos] == null) {
+            return;
+        }
+        mWindowManager.removeViewImmediate(mOverlays[pos].getRootView());
+        mOverlays[pos] = null;
+    }
+
+    @View.Visibility
+    private int getWindowVisibility(@NonNull OverlayWindow overlay,
+            boolean shouldOptimizeVisibility) {
+        if (!shouldOptimizeVisibility) {
+            // All overlays have visible views so there's no need to optimize visibility.
+            // For example, the rounded corners could exist in each overlay and since the rounded
+            // corners are always visible, there's no need to optimize visibility.
+            return View.VISIBLE;
+        }
+
+        // Optimize if it's just the privacy dot & face scanning animation, since the privacy
+        // dot and face scanning overlay aren't always visible.
+        int[] ids = {
+                R.id.privacy_dot_top_left_container,
+                R.id.privacy_dot_top_right_container,
+                R.id.privacy_dot_bottom_left_container,
+                R.id.privacy_dot_bottom_right_container,
+                mFaceScanningViewId
+        };
+        for (int id: ids) {
+            final View notAlwaysVisibleViews = overlay.getView(id);
+            if (notAlwaysVisibleViews != null
+                    && notAlwaysVisibleViews.getVisibility() == View.VISIBLE) {
+                // Overlay is VISIBLE if one the views inside this overlay is VISIBLE
+                return View.VISIBLE;
+            }
+        }
+
+        // Only non-visible views in this overlay, so set overlay to INVISIBLE
+        return View.INVISIBLE;
+    }
+
+    private void createOverlay(
+            @BoundsPosition int pos,
+            @NonNull List<DecorProvider> decorProviders,
+            boolean shouldOptimizeVisibility) {
+        if (mOverlays == null) {
+            mOverlays = new OverlayWindow[BOUNDS_POSITION_LENGTH];
+        }
+
+        if (mOverlays[pos] != null) {
+            initOverlay(mOverlays[pos], decorProviders, shouldOptimizeVisibility);
+            return;
+        }
+        mOverlays[pos] = new OverlayWindow(mContext);
+        initOverlay(mOverlays[pos], decorProviders, shouldOptimizeVisibility);
+        final ViewGroup overlayView = mOverlays[pos].getRootView();
+        overlayView.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        overlayView.setAlpha(0);
+        overlayView.setForceDarkAllowed(false);
+
+        mWindowManager.addView(overlayView, getWindowLayoutParams(pos));
+
+        overlayView.addOnLayoutChangeListener(new OnLayoutChangeListener() {
             @Override
             public void onLayoutChange(View v, int left, int top, int right, int bottom,
-                    int oldLeft,
-                    int oldTop, int oldRight, int oldBottom) {
-                mOverlay.removeOnLayoutChangeListener(this);
-                mOverlay.animate()
-                        .alpha(1)
-                        .setDuration(1000)
-                        .start();
-                mBottomOverlay.animate()
+                    int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                overlayView.removeOnLayoutChangeListener(this);
+                overlayView.animate()
                         .alpha(1)
                         .setDuration(1000)
                         .start();
             }
         });
 
-        mOverlay.getViewTreeObserver().addOnPreDrawListener(
-                new ValidatingPreDrawListener(mOverlay));
-        mBottomOverlay.getViewTreeObserver().addOnPreDrawListener(
-                new ValidatingPreDrawListener(mBottomOverlay));
+        overlayView.getRootView().getViewTreeObserver().addOnPreDrawListener(
+                new ValidatingPreDrawListener(overlayView.getRootView()));
+    }
+
+    private boolean hasHwcOverlay() {
+        return mScreenDecorHwcWindow != null;
+    }
+
+    private void removeHwcOverlay() {
+        if (mScreenDecorHwcWindow == null) {
+            return;
+        }
+        mWindowManager.removeViewImmediate(mScreenDecorHwcWindow);
+        mScreenDecorHwcWindow = null;
+        mScreenDecorHwcLayer = null;
+    }
+
+    private void createHwcOverlay() {
+        if (mScreenDecorHwcWindow != null) {
+            return;
+        }
+        mScreenDecorHwcWindow = (ViewGroup) LayoutInflater.from(mContext).inflate(
+                R.layout.screen_decor_hwc_layer, null);
+        mScreenDecorHwcLayer =
+                new ScreenDecorHwcLayer(mContext, mHwcScreenDecorationSupport, mDebug);
+        mScreenDecorHwcWindow.addView(mScreenDecorHwcLayer, new FrameLayout.LayoutParams(
+                MATCH_PARENT, MATCH_PARENT, Gravity.TOP | Gravity.START));
+        mWindowManager.addView(mScreenDecorHwcWindow, getHwcWindowLayoutParams());
+        updateHwLayerRoundedCornerExistAndSize();
+        updateHwLayerRoundedCornerDrawable();
+        mScreenDecorHwcWindow.getViewTreeObserver().addOnPreDrawListener(
+                new ValidatingPreDrawListener(mScreenDecorHwcWindow));
+    }
+
+    /**
+     * Init OverlayWindow with decorProviders
+     */
+    private void initOverlay(
+            @NonNull OverlayWindow overlay,
+            @NonNull List<DecorProvider> decorProviders,
+            boolean shouldOptimizeVisibility) {
+        if (!overlay.hasSameProviders(decorProviders)) {
+            decorProviders.forEach(provider -> {
+                if (overlay.getView(provider.getViewId()) != null) {
+                    return;
+                }
+                removeOverlayView(provider.getViewId());
+                overlay.addDecorProvider(provider, mRotation, mTintColor);
+            });
+        }
+        // Use visibility of privacy dot views & face scanning view to determine the overlay's
+        // visibility if the screen decoration SW layer overlay isn't persistently showing
+        // (ie: rounded corners always showing in SW layer)
+        overlay.getRootView().setVisibility(getWindowVisibility(overlay, shouldOptimizeVisibility));
+    }
+
+    @VisibleForTesting
+    WindowManager.LayoutParams getWindowLayoutParams(@BoundsPosition int pos) {
+        final WindowManager.LayoutParams lp = getWindowLayoutBaseParams();
+        lp.width = getWidthLayoutParamByPos(pos);
+        lp.height = getHeightLayoutParamByPos(pos);
+        lp.setTitle(getWindowTitleByPos(pos));
+        lp.gravity = getOverlayWindowGravity(pos);
+        return lp;
+    }
+
+    private WindowManager.LayoutParams getHwcWindowLayoutParams() {
+        final WindowManager.LayoutParams lp = getWindowLayoutBaseParams();
+        lp.width = MATCH_PARENT;
+        lp.height = MATCH_PARENT;
+        lp.setTitle("ScreenDecorHwcOverlay");
+        if (sToolkitSetFrameRateReadOnly) {
+            lp.setFrameRateBoostOnTouchEnabled(false);
+            lp.setFrameRatePowerSavingsBalanced(false);
+        }
+        lp.gravity = Gravity.TOP | Gravity.START;
+        if (!mDebug) {
+            lp.setColorMode(ActivityInfo.COLOR_MODE_A8);
+        }
+        return lp;
+    }
+
+    private WindowManager.LayoutParams getWindowLayoutBaseParams() {
+        final WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_SPLIT_TOUCH
+                        | WindowManager.LayoutParams.FLAG_SLIPPERY
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                PixelFormat.TRANSLUCENT);
+        lp.privateFlags |= WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS
+                | WindowManager.LayoutParams.PRIVATE_FLAG_NO_MOVE_ANIMATION;
+
+        // FLAG_SLIPPERY can only be set by trusted overlays
+        lp.privateFlags |= WindowManager.LayoutParams.PRIVATE_FLAG_TRUSTED_OVERLAY;
+
+        if (!DEBUG_SCREENSHOT_ROUNDED_CORNERS) {
+            lp.privateFlags |= WindowManager.LayoutParams.PRIVATE_FLAG_IS_ROUNDED_CORNERS_OVERLAY;
+        }
+
+        lp.layoutInDisplayCutoutMode = LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+        lp.setFitInsetsTypes(0 /* types */);
+        lp.privateFlags |= WindowManager.LayoutParams.PRIVATE_FLAG_COLOR_SPACE_AGNOSTIC;
+        return lp;
+    }
+
+    private int getWidthLayoutParamByPos(@BoundsPosition int pos) {
+        final int rotatedPos = getBoundPositionFromRotation(pos, mRotation);
+        return rotatedPos == BOUNDS_POSITION_TOP || rotatedPos == BOUNDS_POSITION_BOTTOM
+                ? MATCH_PARENT : WRAP_CONTENT;
+    }
+
+    private int getHeightLayoutParamByPos(@BoundsPosition int pos) {
+        final int rotatedPos = getBoundPositionFromRotation(pos, mRotation);
+        return rotatedPos == BOUNDS_POSITION_TOP || rotatedPos == BOUNDS_POSITION_BOTTOM
+                ? WRAP_CONTENT : MATCH_PARENT;
+    }
+
+    private static String getWindowTitleByPos(@BoundsPosition int pos) {
+        switch (pos) {
+            case BOUNDS_POSITION_LEFT:
+                return "ScreenDecorOverlayLeft";
+            case BOUNDS_POSITION_TOP:
+                return "ScreenDecorOverlay";
+            case BOUNDS_POSITION_RIGHT:
+                return "ScreenDecorOverlayRight";
+            case BOUNDS_POSITION_BOTTOM:
+                return "ScreenDecorOverlayBottom";
+            default:
+                throw new IllegalArgumentException("unknown bound position: " + pos);
+        }
+    }
+
+    private static boolean displaySizeChanged(Point size, DisplayInfo info) {
+        return size.x != info.getNaturalWidth() || size.y != info.getNaturalHeight();
+    }
+
+    private int getOverlayWindowGravity(@BoundsPosition int pos) {
+        final int rotated = getBoundPositionFromRotation(pos, mRotation);
+        switch (rotated) {
+            case BOUNDS_POSITION_TOP:
+                return Gravity.TOP;
+            case BOUNDS_POSITION_BOTTOM:
+                return Gravity.BOTTOM;
+            case BOUNDS_POSITION_LEFT:
+                return Gravity.LEFT;
+            case BOUNDS_POSITION_RIGHT:
+                return Gravity.RIGHT;
+            default:
+                throw new IllegalArgumentException("unknown bound position: " + pos);
+        }
+    }
+
+    @VisibleForTesting
+    static int getBoundPositionFromRotation(@BoundsPosition int pos, int rotation) {
+        return (pos - rotation) < 0
+                ? pos - rotation + DisplayCutout.BOUNDS_POSITION_LENGTH
+                : pos - rotation;
+    }
+
+    private void setupCameraListener() {
+        // TODO(b/238143614) Support dual screen camera protection
+        Resources res = mContext.getResources();
+        boolean enabled = res.getBoolean(R.bool.config_enableDisplayCutoutProtection);
+        if (enabled) {
+            mCameraListener =
+                    CameraAvailabilityListener.Factory.build(
+                            mContext, mExecutor, mCameraProtectionLoader);
+            mCameraListener.addTransitionCallback(mCameraTransitionCallback);
+            mCameraListener.startListening();
+        }
+    }
+
+    private final UserTracker.Callback mUserChangedCallback =
+            new UserTracker.Callback() {
+                @Override
+                public void onUserChanged(int newUser, @NonNull Context userContext) {
+                    mLogger.logUserSwitched(newUser);
+                    // update color inversion setting to the new user
+                    mColorInversionSetting.setUserId(newUser);
+                    updateColorInversion(mColorInversionSetting.getValue());
+                }
+            };
+
+    /**
+     * Use the current value of {@link ScreenDecorations#mColorInversionSetting} and passes it
+     * to {@link ScreenDecorations#updateColorInversion}
+     */
+    private void updateColorInversionDefault() {
+        int inversion = 0;
+        if (mColorInversionSetting != null) {
+            inversion = mColorInversionSetting.getValue();
+        }
+
+        updateColorInversion(inversion);
+    }
+
+    /**
+     * Update the tint color of screen decoration assets. Defaults to Color.BLACK. In the case of
+     * a color inversion being set, use Color.WHITE (which inverts to black).
+     *
+     * When {@link ScreenDecorations#mDebug} is {@code true}, this value is updated to use
+     * {@link ScreenDecorations#mDebugColor}, and does not handle inversion.
+     *
+     * @param colorsInvertedValue if non-zero, assume that colors are inverted, and use Color.WHITE
+     *                            for screen decoration tint
+     */
+    private void updateColorInversion(int colorsInvertedValue) {
+        mTintColor = colorsInvertedValue != 0 ? Color.WHITE : Color.BLACK;
+        if (mDebug) {
+            mTintColor = mDebugColor;
+            mDebugRoundedCornerDelegate.setColor(mTintColor);
+            //TODO(b/285941724): update the hwc layer color here too (or disable it in debug mode)
+        }
+
+        updateOverlayProviderViews(new Integer[] {
+                mFaceScanningViewId,
+                R.id.display_cutout,
+                R.id.display_cutout_left,
+                R.id.display_cutout_right,
+                R.id.display_cutout_bottom,
+                R.id.rounded_corner_top_left,
+                R.id.rounded_corner_top_right,
+                R.id.rounded_corner_bottom_left,
+                R.id.rounded_corner_bottom_right
+        });
+    }
+
+    @VisibleForTesting
+    float getPhysicalPixelDisplaySizeRatio() {
+        mContext.getDisplay().getDisplayInfo(mDisplayInfo);
+        final Display.Mode maxDisplayMode =
+                DisplayUtils.getMaximumResolutionDisplayMode(mDisplayInfo.supportedModes);
+        if (maxDisplayMode == null) {
+            return 1f;
+        }
+        return DisplayUtils.getPhysicalPixelDisplaySizeRatio(
+                maxDisplayMode.getPhysicalWidth(), maxDisplayMode.getPhysicalHeight(),
+                mDisplayInfo.getNaturalWidth(), mDisplayInfo.getNaturalHeight());
     }
 
     @Override
-    protected void onConfigurationChanged(Configuration newConfig) {
-        mHandler.post(() -> {
-            int oldRotation = mRotation;
-            mPendingRotationChange = false;
-            updateOrientation();
-            updateRoundedCornerRadii();
-            if (DEBUG) Log.i(TAG, "onConfigChanged from rot " + oldRotation + " to " + mRotation);
-            if (shouldDrawCutout() && mOverlay == null) {
-                setupDecorations();
+    public void onConfigChanged(Configuration newConfig) {
+        if (DEBUG_DISABLE_SCREEN_DECORATIONS) {
+            Log.i(TAG, "ScreenDecorations is disabled");
+            return;
+        }
+
+        mExecutor.execute(() -> {
+            Trace.beginSection("ScreenDecorations#onConfigurationChanged");
+            mContext.getDisplay().getDisplayInfo(mDisplayInfo);
+            if (displaySizeChanged(mDisplaySize, mDisplayInfo)) {
+                // We expect the display change event to happen first, but in this case, we received
+                // onConfigurationChanged first.
+                // Return so that we handle the display change event first, and then manually
+                // trigger the config update.
+                mPendingManualConfigUpdate = true;
+                return;
             }
-            if (mOverlay != null) {
+            int oldRotation = mRotation;
+            mPendingConfigChange = false;
+            updateConfiguration();
+            if (oldRotation != mRotation) {
+                mLogger.logRotationChanged(oldRotation, mRotation);
+            }
+            setupDecorations();
+            if (mOverlays != null) {
                 // Updating the layout params ensures that ViewRootImpl will call relayoutWindow(),
                 // which ensures that the forced seamless rotation will end, even if we updated
                 // the rotation before window manager was ready (and was still waiting for sending
                 // the updated rotation).
                 updateLayoutParams();
             }
+            Trace.endSection();
         });
     }
 
-    private void updateOrientation() {
+    private static String alphaInterpretationToString(int alpha) {
+        switch (alpha) {
+            case AlphaInterpretation.COVERAGE: return "COVERAGE";
+            case AlphaInterpretation.MASK:     return "MASK";
+            default:                           return "Unknown: " + alpha;
+        }
+    }
+
+    @NeverCompile
+    @Override
+    public void dump(@NonNull PrintWriter pw, @NonNull String[] args) {
+        pw.println("ScreenDecorations state:");
+        IndentingPrintWriter ipw = asIndenting(pw);
+        ipw.increaseIndent();
+        ipw.println("DEBUG_DISABLE_SCREEN_DECORATIONS:" + DEBUG_DISABLE_SCREEN_DECORATIONS);
+        if (DEBUG_DISABLE_SCREEN_DECORATIONS) {
+            return;
+        }
+        ipw.println("mDebug:" + mDebug);
+
+        ipw.println("mIsPrivacyDotEnabled:" + isPrivacyDotEnabled());
+        ipw.println("shouldOptimizeOverlayVisibility:" + shouldOptimizeVisibility());
+        final boolean supportsShowingFaceScanningAnim = mFaceScanningFactory.getHasProviders();
+        ipw.println("supportsShowingFaceScanningAnim:" + supportsShowingFaceScanningAnim);
+        if (supportsShowingFaceScanningAnim) {
+            ipw.increaseIndent();
+            ipw.println("canShowFaceScanningAnim:"
+                    + mFaceScanningFactory.canShowFaceScanningAnim());
+            ipw.println("shouldShowFaceScanningAnim (at time dump was taken):"
+                    + mFaceScanningFactory.shouldShowFaceScanningAnim());
+            ipw.decreaseIndent();
+        }
+        FaceScanningOverlay faceScanningOverlay =
+                (FaceScanningOverlay) getOverlayView(mFaceScanningViewId);
+        if (faceScanningOverlay != null) {
+            faceScanningOverlay.dump(ipw);
+        }
+        ipw.println("mPendingConfigChange:" + mPendingConfigChange);
+        if (mHwcScreenDecorationSupport != null) {
+            ipw.increaseIndent();
+            ipw.println("mHwcScreenDecorationSupport:");
+            ipw.increaseIndent();
+            ipw.println("format="
+                    + PixelFormat.formatToString(mHwcScreenDecorationSupport.format));
+            ipw.println("alphaInterpretation="
+                    + alphaInterpretationToString(mHwcScreenDecorationSupport.alphaInterpretation));
+            ipw.decreaseIndent();
+            ipw.decreaseIndent();
+        } else {
+            ipw.increaseIndent();
+            pw.println("mHwcScreenDecorationSupport: null");
+            ipw.decreaseIndent();
+        }
+        if (mScreenDecorHwcLayer != null) {
+            ipw.increaseIndent();
+            mScreenDecorHwcLayer.dump(ipw);
+            ipw.decreaseIndent();
+        } else {
+            ipw.println("mScreenDecorHwcLayer: null");
+        }
+        if (mOverlays != null) {
+            ipw.println("mOverlays(left,top,right,bottom)=("
+                    + (mOverlays[BOUNDS_POSITION_LEFT] != null) + ","
+                    + (mOverlays[BOUNDS_POSITION_TOP] != null) + ","
+                    + (mOverlays[BOUNDS_POSITION_RIGHT] != null) + ","
+                    + (mOverlays[BOUNDS_POSITION_BOTTOM] != null) + ")");
+
+            for (int i = BOUNDS_POSITION_LEFT; i < BOUNDS_POSITION_LENGTH; i++) {
+                if (mOverlays[i] != null) {
+                    mOverlays[i].dump(pw, getWindowTitleByPos(i));
+                }
+            }
+        }
+        mRoundedCornerResDelegate.dump(pw, args);
+        mDebugRoundedCornerDelegate.dump(pw);
+    }
+
+    @VisibleForTesting
+    void updateConfiguration() {
         Preconditions.checkState(mHandler.getLooper().getThread() == Thread.currentThread(),
                 "must call on " + mHandler.getLooper().getThread()
                         + ", but was " + Thread.currentThread());
-        if (mPendingRotationChange) {
-            return;
+
+        mContext.getDisplay().getDisplayInfo(mDisplayInfo);
+        final int newRotation = mDisplayInfo.rotation;
+        if (mRotation != newRotation) {
+            mDotViewController.setNewRotation(newRotation);
         }
-        int newRotation = RotationUtils.getExactRotation(mContext);
-        if (newRotation != mRotation) {
+        final DisplayCutout newCutout = mDisplayInfo.displayCutout;
+
+        if (!mPendingConfigChange
+                && (newRotation != mRotation || displaySizeChanged(mDisplaySize, mDisplayInfo)
+                || !Objects.equals(newCutout, mDisplayCutout))) {
             mRotation = newRotation;
-
-            if (mOverlay != null) {
-                updateLayoutParams();
-                updateViews();
+            mDisplaySize.x = mDisplayInfo.getNaturalWidth();
+            mDisplaySize.y = mDisplayInfo.getNaturalHeight();
+            mDisplayCutout = newCutout;
+            float ratio = getPhysicalPixelDisplaySizeRatio();
+            mRoundedCornerResDelegate.setPhysicalPixelDisplaySizeRatio(ratio);
+            mDebugRoundedCornerDelegate.setPhysicalPixelDisplaySizeRatio(ratio);
+            if (mScreenDecorHwcLayer != null) {
+                mScreenDecorHwcLayer.pendingConfigChange = false;
+                mScreenDecorHwcLayer.updateConfiguration(mDisplayUniqueId);
+                updateHwLayerRoundedCornerExistAndSize();
+                updateHwLayerRoundedCornerDrawable();
             }
-        }
-    }
+            updateLayoutParams();
 
-    private void updateRoundedCornerRadii() {
-        final int newRoundedDefault = mContext.getResources().getDimensionPixelSize(
-                R.dimen.rounded_corner_radius);
-        final int newRoundedDefaultTop = mContext.getResources().getDimensionPixelSize(
-                R.dimen.rounded_corner_radius_top);
-        final int newRoundedDefaultBottom = mContext.getResources().getDimensionPixelSize(
-                R.dimen.rounded_corner_radius_bottom);
-
-        final boolean roundedCornersChanged = mRoundedDefault != newRoundedDefault
-                || mRoundedDefaultBottom != newRoundedDefaultBottom
-                || mRoundedDefaultTop != newRoundedDefaultTop;
-
-        if (roundedCornersChanged) {
-            mRoundedDefault = newRoundedDefault;
-            mRoundedDefaultTop = newRoundedDefaultTop;
-            mRoundedDefaultBottom = newRoundedDefaultBottom;
-            onTuningChanged(SIZE, null);
-        }
-    }
-
-    private void updateViews() {
-        View topLeft = mOverlay.findViewById(R.id.left);
-        View topRight = mOverlay.findViewById(R.id.right);
-        View bottomLeft = mBottomOverlay.findViewById(R.id.left);
-        View bottomRight = mBottomOverlay.findViewById(R.id.right);
-
-        if (mRotation == RotationUtils.ROTATION_NONE) {
-            updateView(topLeft, Gravity.TOP | Gravity.LEFT, 0);
-            updateView(topRight, Gravity.TOP | Gravity.RIGHT, 90);
-            updateView(bottomLeft, Gravity.BOTTOM | Gravity.LEFT, 270);
-            updateView(bottomRight, Gravity.BOTTOM | Gravity.RIGHT, 180);
-        } else if (mRotation == RotationUtils.ROTATION_LANDSCAPE) {
-            updateView(topLeft, Gravity.TOP | Gravity.LEFT, 0);
-            updateView(topRight, Gravity.BOTTOM | Gravity.LEFT, 270);
-            updateView(bottomLeft, Gravity.TOP | Gravity.RIGHT, 90);;
-            updateView(bottomRight, Gravity.BOTTOM | Gravity.RIGHT, 180);
-        } else if (mRotation == RotationUtils.ROTATION_UPSIDE_DOWN) {
-            updateView(topLeft, Gravity.BOTTOM | Gravity.LEFT, 270);
-            updateView(topRight, Gravity.BOTTOM | Gravity.RIGHT, 180);
-            updateView(bottomLeft, Gravity.TOP | Gravity.LEFT, 0);
-            updateView(bottomRight, Gravity.TOP | Gravity.RIGHT, 90);
-        } else if (mRotation == RotationUtils.ROTATION_SEASCAPE) {
-            updateView(topLeft, Gravity.BOTTOM | Gravity.RIGHT, 180);
-            updateView(topRight, Gravity.TOP | Gravity.RIGHT, 90);
-            updateView(bottomLeft, Gravity.BOTTOM | Gravity.LEFT, 270);
-            updateView(bottomRight, Gravity.TOP | Gravity.LEFT, 0);
+            // update all provider views inside overlay
+            updateOverlayProviderViews(null);
         }
 
-        mCutoutTop.setRotation(mRotation);
-        mCutoutBottom.setRotation(mRotation);
-
-        updateWindowVisibilities();
-    }
-
-    private void updateView(View v, int gravity, int rotation) {
-        ((FrameLayout.LayoutParams)v.getLayoutParams()).gravity = gravity;
-        v.setRotation(rotation);
-    }
-
-    private void updateWindowVisibilities() {
-        updateWindowVisibility(mOverlay);
-        updateWindowVisibility(mBottomOverlay);
-    }
-
-    private void updateWindowVisibility(View overlay) {
-        boolean visibleForCutout = shouldDrawCutout()
-                && overlay.findViewById(R.id.display_cutout).getVisibility() == View.VISIBLE;
-        boolean visibleForRoundedCorners = hasRoundedCorners();
-        overlay.setVisibility(visibleForCutout || visibleForRoundedCorners
-                ? View.VISIBLE : View.GONE);
+        FaceScanningOverlay faceScanningOverlay =
+                (FaceScanningOverlay) getOverlayView(mFaceScanningViewId);
+        if (faceScanningOverlay != null) {
+            faceScanningOverlay.setFaceScanningAnimColor(
+                    Utils.getColorAttrDefaultColor(faceScanningOverlay.getContext(),
+                            com.android.systemui.res.R.attr.wallpaperTextColorAccent));
+        }
     }
 
     private boolean hasRoundedCorners() {
-        return mRoundedDefault > 0 || mRoundedDefaultBottom > 0 || mRoundedDefaultTop > 0;
+        return mRoundedCornerFactory.getHasProviders()
+                || mDebugRoundedCornerFactory.getHasProviders();
+    }
+
+    private boolean shouldOptimizeVisibility() {
+        return (isPrivacyDotEnabled() || mFaceScanningFactory.getHasProviders())
+                && (mHwcScreenDecorationSupport != null
+                    || (!hasRoundedCorners() && !shouldDrawCutout())
+                );
     }
 
     private boolean shouldDrawCutout() {
-        return shouldDrawCutout(mContext);
+        return mCutoutFactory.getHasProviders();
     }
 
     static boolean shouldDrawCutout(Context context) {
-        return context.getResources().getBoolean(
-                com.android.internal.R.bool.config_fillMainBuiltInDisplayCutout);
+        return DisplayCutout.getFillBuiltInDisplayCutout(
+                context.getResources(), context.getDisplay().getUniqueId());
     }
 
+    @VisibleForTesting
+    void updateOverlayProviderViews(@Nullable Integer[] filterIds) {
+        if (mOverlays == null) {
+            return;
+        }
+        if (mPendingConfigChange) {
+            // Let RestartingPreDrawListener's onPreDraw call updateConfiguration
+            // -> updateOverlayProviderViews to redraw with display change synchronously.
+            return;
+        }
+        ++mProviderRefreshToken;
+        for (final OverlayWindow overlay: mOverlays) {
+            if (overlay == null) {
+                continue;
+            }
+            overlay.onReloadResAndMeasure(filterIds, mProviderRefreshToken, mRotation, mTintColor,
+                    mDisplayUniqueId);
+        }
+    }
 
-    private void setupStatusBarPaddingIfNeeded() {
-        // TODO: This should be moved to a more appropriate place, as it is not related to the
-        // screen decorations overlay.
-        int padding = mContext.getResources().getDimensionPixelSize(
-                R.dimen.rounded_corner_content_padding);
-        if (padding != 0) {
-            setupStatusBarPadding(padding);
+    private void updateLayoutParams() {
+        //ToDo: We should skip unnecessary call to update view layout.
+        Trace.beginSection("ScreenDecorations#updateLayoutParams");
+        if (mScreenDecorHwcWindow != null) {
+            mWindowManager.updateViewLayout(mScreenDecorHwcWindow, getHwcWindowLayoutParams());
         }
 
+        if (mOverlays != null) {
+            for (int i = 0; i < BOUNDS_POSITION_LENGTH; i++) {
+                if (mOverlays[i] == null) {
+                    continue;
+                }
+                mWindowManager.updateViewLayout(
+                        mOverlays[i].getRootView(), getWindowLayoutParams(i));
+            }
+        }
+        Trace.endSection();
     }
 
-    private void setupStatusBarPadding(int padding) {
-        // Add some padding to all the content near the edge of the screen.
-        StatusBar sb = getComponent(StatusBar.class);
-        View statusBar = (sb != null ? sb.getStatusBarWindow() : null);
-        if (statusBar != null) {
-            TunablePadding.addTunablePadding(statusBar.findViewById(R.id.keyguard_header), PADDING,
-                    padding, FLAG_END);
+    private void updateHwLayerRoundedCornerDrawable() {
+        if (mScreenDecorHwcLayer == null) {
+            return;
+        }
 
-            FragmentHostManager fragmentHostManager = FragmentHostManager.get(statusBar);
-            fragmentHostManager.addTagListener(CollapsedStatusBarFragment.TAG,
-                    new TunablePaddingTagListener(padding, R.id.status_bar));
-            fragmentHostManager.addTagListener(QS.TAG,
-                    new TunablePaddingTagListener(padding, R.id.header));
+        Drawable topDrawable = mRoundedCornerResDelegate.getTopRoundedDrawable();
+        Drawable bottomDrawable = mRoundedCornerResDelegate.getBottomRoundedDrawable();
+        if (mDebug && (mDebugRoundedCornerFactory.getHasProviders())) {
+            topDrawable = mDebugRoundedCornerDelegate.getTopRoundedDrawable();
+            bottomDrawable = mDebugRoundedCornerDelegate.getBottomRoundedDrawable();
+        }
+
+        if (topDrawable == null && bottomDrawable == null) {
+            return;
+        }
+        mScreenDecorHwcLayer.updateRoundedCornerDrawable(topDrawable, bottomDrawable);
+    }
+
+    private void updateHwLayerRoundedCornerExistAndSize() {
+        if (mScreenDecorHwcLayer == null) {
+            return;
+        }
+        if (mDebug && mDebugRoundedCornerFactory.getHasProviders()) {
+            mScreenDecorHwcLayer.updateRoundedCornerExistenceAndSize(
+                    mDebugRoundedCornerDelegate.getHasTop(),
+                    mDebugRoundedCornerDelegate.getHasBottom(),
+                    mDebugRoundedCornerDelegate.getTopRoundedSize().getWidth(),
+                    mDebugRoundedCornerDelegate.getBottomRoundedSize().getWidth());
+        } else {
+            mScreenDecorHwcLayer.updateRoundedCornerExistenceAndSize(
+                    mRoundedCornerResDelegate.getHasTop(),
+                    mRoundedCornerResDelegate.getHasBottom(),
+                    mRoundedCornerResDelegate.getTopRoundedSize().getWidth(),
+                    mRoundedCornerResDelegate.getBottomRoundedSize().getWidth());
         }
     }
 
     @VisibleForTesting
-    WindowManager.LayoutParams getWindowLayoutParams() {
-        final WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                        | WindowManager.LayoutParams.FLAG_SPLIT_TOUCH
-                        | WindowManager.LayoutParams.FLAG_SLIPPERY
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                PixelFormat.TRANSLUCENT);
-        lp.privateFlags |= WindowManager.LayoutParams.PRIVATE_FLAG_SHOW_FOR_ALL_USERS
-                | WindowManager.LayoutParams.PRIVATE_FLAG_NO_MOVE_ANIMATION;
-
-        if (!DEBUG_SCREENSHOT_ROUNDED_CORNERS) {
-            lp.privateFlags |= WindowManager.LayoutParams.PRIVATE_FLAG_IS_ROUNDED_CORNERS_OVERLAY;
-        }
-
-        lp.setTitle("ScreenDecorOverlay");
-        if (mRotation == RotationUtils.ROTATION_SEASCAPE
-                || mRotation == RotationUtils.ROTATION_UPSIDE_DOWN) {
-            lp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
-        } else {
-            lp.gravity = Gravity.TOP | Gravity.LEFT;
-        }
-        lp.layoutInDisplayCutoutMode = LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
-        if (isLandscape(mRotation)) {
-            lp.width = WRAP_CONTENT;
-            lp.height = MATCH_PARENT;
-        }
-        return lp;
-    }
-
-    private WindowManager.LayoutParams getBottomLayoutParams() {
-        WindowManager.LayoutParams lp = getWindowLayoutParams();
-        lp.setTitle("ScreenDecorOverlayBottom");
-        if (mRotation == RotationUtils.ROTATION_SEASCAPE
-                || mRotation == RotationUtils.ROTATION_UPSIDE_DOWN) {
-            lp.gravity = Gravity.TOP | Gravity.LEFT;
-        } else {
-            lp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
-        }
-        return lp;
-    }
-
-    private void updateLayoutParams() {
-        mWindowManager.updateViewLayout(mOverlay, getWindowLayoutParams());
-        mWindowManager.updateViewLayout(mBottomOverlay, getBottomLayoutParams());
-    }
-
-    @Override
-    public void onTuningChanged(String key, String newValue) {
-        mHandler.post(() -> {
-            if (mOverlay == null) return;
-            if (SIZE.equals(key)) {
-                int size = mRoundedDefault;
-                int sizeTop = mRoundedDefaultTop;
-                int sizeBottom = mRoundedDefaultBottom;
-                if (newValue != null) {
-                    try {
-                        size = (int) (Integer.parseInt(newValue) * mDensity);
-                    } catch (Exception e) {
-                    }
-                }
-
-                if (sizeTop == 0) {
-                    sizeTop = size;
-                }
-                if (sizeBottom == 0) {
-                    sizeBottom = size;
-                }
-
-                setSize(mOverlay.findViewById(R.id.left), sizeTop);
-                setSize(mOverlay.findViewById(R.id.right), sizeTop);
-                setSize(mBottomOverlay.findViewById(R.id.left), sizeBottom);
-                setSize(mBottomOverlay.findViewById(R.id.right), sizeBottom);
-            }
-        });
-    }
-
-    private void setSize(View view, int pixelSize) {
+    protected void setSize(View view, Size pixelSize) {
         LayoutParams params = view.getLayoutParams();
-        params.width = pixelSize;
-        params.height = pixelSize;
+        params.width = pixelSize.getWidth();
+        params.height = pixelSize.getHeight();
         view.setLayoutParams(params);
     }
 
     @VisibleForTesting
-    static class TunablePaddingTagListener implements FragmentListener {
+    void onFaceSensorLocationChanged(Point location) {
+        mLogger.onSensorLocationChanged();
 
-        private final int mPadding;
-        private final int mId;
-        private TunablePadding mTunablePadding;
-
-        public TunablePaddingTagListener(int padding, int id) {
-            mPadding = padding;
-            mId = id;
-        }
-
-        @Override
-        public void onFragmentViewCreated(String tag, Fragment fragment) {
-            if (mTunablePadding != null) {
-                mTunablePadding.destroy();
-            }
-            View view = fragment.getView();
-            if (mId != 0) {
-                view = view.findViewById(mId);
-            }
-            mTunablePadding = TunablePadding.addTunablePadding(view, PADDING, mPadding,
-                    FLAG_START | FLAG_END);
+        if (mExecutor != null) {
+            mExecutor.execute(
+                    () -> {
+                        if (getOverlayView(mFaceScanningViewId) == null) {
+                            // face sensor location was just initialized
+                            setupDecorations();
+                        } else {
+                            updateOverlayProviderViews(new Integer[]{mFaceScanningViewId});
+                        }
+                    }
+            );
         }
     }
 
-    public static class DisplayCutoutView extends View implements DisplayManager.DisplayListener,
-            RegionInterceptableView {
+    public static class DisplayCutoutView extends DisplayCutoutBaseView {
+        final List<Rect> mBounds = new ArrayList();
+        final Rect mBoundingRect = new Rect();
+        Rect mTotalBounds = new Rect();
 
-        private final DisplayInfo mInfo = new DisplayInfo();
-        private final Paint mPaint = new Paint();
-        private final Region mBounds = new Region();
-        private final Rect mBoundingRect = new Rect();
-        private final Path mBoundingPath = new Path();
-        private final int[] mLocation = new int[2];
-        private final boolean mInitialStart;
-        private final Runnable mVisibilityChangedListener;
-        private final ScreenDecorations mDecorations;
         private int mColor = Color.BLACK;
-        private boolean mStart;
         private int mRotation;
+        private int mInitialPosition;
+        private int mPosition;
 
-        public DisplayCutoutView(Context context, boolean start,
-                Runnable visibilityChangedListener, ScreenDecorations decorations) {
+        public DisplayCutoutView(Context context, @BoundsPosition int pos) {
             super(context);
-            mInitialStart = start;
-            mVisibilityChangedListener = visibilityChangedListener;
-            mDecorations = decorations;
-            setId(R.id.display_cutout);
-            if (DEBUG) {
+            mInitialPosition = pos;
+
+            paint.setColor(mColor);
+            paint.setStyle(Paint.Style.FILL);
+            if (DEBUG_LOGGING) {
                 getViewTreeObserver().addOnDrawListener(() -> Log.i(TAG,
-                        (mInitialStart ? "OverlayTop" : "OverlayBottom")
-                                + " drawn in rot " + mRotation));
+                        getWindowTitleByPos(pos) + " drawn in rot " + mRotation));
             }
         }
 
         public void setColor(int color) {
+            if (color == mColor) {
+                return;
+            }
             mColor = color;
+            paint.setColor(mColor);
             invalidate();
         }
 
         @Override
-        protected void onAttachedToWindow() {
-            super.onAttachedToWindow();
-            mContext.getSystemService(DisplayManager.class).registerDisplayListener(this,
-                    getHandler());
-            update();
-        }
-
-        @Override
-        protected void onDetachedFromWindow() {
-            super.onDetachedFromWindow();
-            mContext.getSystemService(DisplayManager.class).unregisterDisplayListener(this);
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            getLocationOnScreen(mLocation);
-            canvas.translate(-mLocation[0], -mLocation[1]);
-            if (!mBoundingPath.isEmpty()) {
-                mPaint.setColor(mColor);
-                mPaint.setStyle(Paint.Style.FILL);
-                mPaint.setAntiAlias(true);
-                canvas.drawPath(mBoundingPath, mPaint);
-            }
-        }
-
-        @Override
-        public void onDisplayAdded(int displayId) {
-        }
-
-        @Override
-        public void onDisplayRemoved(int displayId) {
-        }
-
-        @Override
-        public void onDisplayChanged(int displayId) {
-            if (displayId == getDisplay().getDisplayId()) {
-                update();
-            }
-        }
-
-        public void setRotation(int rotation) {
-            mRotation = rotation;
-            update();
-        }
-
-        private boolean isStart() {
-            final boolean flipped = (mRotation == RotationUtils.ROTATION_SEASCAPE
-                    || mRotation == RotationUtils.ROTATION_UPSIDE_DOWN);
-            return flipped ? !mInitialStart : mInitialStart;
-        }
-
-        private void update() {
-            if (!isAttachedToWindow() || mDecorations.mPendingRotationChange) {
+        public void updateRotation(int rotation) {
+            // updateRotation() is called inside CutoutDecorProviderImpl::onReloadResAndMeasure()
+            // during onDisplayChanged. In order to prevent reloading cutout info in super class,
+            // check mRotation at first
+            if (rotation == mRotation) {
                 return;
             }
-            mStart = isStart();
+            mRotation = rotation;
+            super.updateRotation(rotation);
+        }
+
+        @VisibleForTesting(otherwise = VisibleForTesting.PROTECTED)
+        @Override
+        public void updateCutout() {
+            if (!isAttachedToWindow() || pendingConfigChange) {
+                return;
+            }
+            mPosition = getBoundPositionFromRotation(mInitialPosition, mRotation);
             requestLayout();
-            getDisplay().getDisplayInfo(mInfo);
-            mBounds.setEmpty();
+            getDisplay().getDisplayInfo(displayInfo);
+            mBounds.clear();
             mBoundingRect.setEmpty();
-            mBoundingPath.reset();
+            cutoutPath.reset();
             int newVisible;
             if (shouldDrawCutout(getContext()) && hasCutout()) {
-                mBounds.set(mInfo.displayCutout.getBounds());
+                mBounds.addAll(displayInfo.displayCutout.getBoundingRects());
                 localBounds(mBoundingRect);
+                updateGravity();
                 updateBoundingPath();
                 invalidate();
                 newVisible = VISIBLE;
             } else {
                 newVisible = GONE;
             }
-            if (newVisible != getVisibility()) {
+            if (updateVisOnUpdateCutout() && newVisible != getVisibility()) {
                 setVisibility(newVisible);
-                mVisibilityChangedListener.run();
             }
         }
 
-        private void updateBoundingPath() {
-            int lw = mInfo.logicalWidth;
-            int lh = mInfo.logicalHeight;
-
-            boolean flipped = mInfo.rotation == ROTATION_90 || mInfo.rotation == ROTATION_270;
-
-            int dw = flipped ? lh : lw;
-            int dh = flipped ? lw : lh;
-
-            mBoundingPath.set(DisplayCutout.pathFromResources(getResources(), dw, dh));
-            Matrix m = new Matrix();
-            transformPhysicalToLogicalCoordinates(mInfo.rotation, dw, dh, m);
-            mBoundingPath.transform(m);
+        protected boolean updateVisOnUpdateCutout() {
+            return true;
         }
 
-        private static void transformPhysicalToLogicalCoordinates(@Surface.Rotation int rotation,
-                @Dimension int physicalWidth, @Dimension int physicalHeight, Matrix out) {
-            switch (rotation) {
-                case ROTATION_0:
-                    out.reset();
-                    break;
-                case ROTATION_90:
-                    out.setRotate(270);
-                    out.postTranslate(0, physicalWidth);
-                    break;
-                case ROTATION_180:
-                    out.setRotate(180);
-                    out.postTranslate(physicalWidth, physicalHeight);
-                    break;
-                case ROTATION_270:
-                    out.setRotate(90);
-                    out.postTranslate(physicalHeight, 0);
-                    break;
-                default:
-                    throw new IllegalArgumentException("Unknown rotation: " + rotation);
+        private void updateBoundingPath() {
+            final Path path = displayInfo.displayCutout.getCutoutPath();
+            if (path != null) {
+                cutoutPath.set(path);
+            } else {
+                cutoutPath.reset();
+            }
+        }
+
+        private void updateGravity() {
+            LayoutParams lp = getLayoutParams();
+            if (lp instanceof FrameLayout.LayoutParams) {
+                FrameLayout.LayoutParams flp = (FrameLayout.LayoutParams) lp;
+                int newGravity = getGravity(displayInfo.displayCutout);
+                if (flp.gravity != newGravity) {
+                    flp.gravity = newGravity;
+                    setLayoutParams(flp);
+                }
             }
         }
 
         private boolean hasCutout() {
-            final DisplayCutout displayCutout = mInfo.displayCutout;
+            final DisplayCutout displayCutout = displayInfo.displayCutout;
             if (displayCutout == null) {
                 return false;
             }
-            if (mStart) {
-                return displayCutout.getSafeInsetLeft() > 0
-                        || displayCutout.getSafeInsetTop() > 0;
-            } else {
-                return displayCutout.getSafeInsetRight() > 0
-                        || displayCutout.getSafeInsetBottom() > 0;
+
+            if (mPosition == BOUNDS_POSITION_LEFT) {
+                return !displayCutout.getBoundingRectLeft().isEmpty();
+            } else if (mPosition == BOUNDS_POSITION_TOP) {
+                return !displayCutout.getBoundingRectTop().isEmpty();
+            } else if (mPosition == BOUNDS_POSITION_BOTTOM) {
+                return !displayCutout.getBoundingRectBottom().isEmpty();
+            } else if (mPosition == BOUNDS_POSITION_RIGHT) {
+                return !displayCutout.getBoundingRectRight().isEmpty();
             }
+            return false;
         }
 
         @Override
@@ -676,88 +1469,67 @@ public class ScreenDecorations extends SystemUI implements Tunable {
                 super.onMeasure(widthMeasureSpec, heightMeasureSpec);
                 return;
             }
-            setMeasuredDimension(
-                    resolveSizeAndState(mBoundingRect.width(), widthMeasureSpec, 0),
-                    resolveSizeAndState(mBoundingRect.height(), heightMeasureSpec, 0));
+
+            if (showProtection) {
+                // Make sure that our measured height encompasses the protection
+                mTotalBounds.set(mBoundingRect);
+                mTotalBounds.union((int) protectionRect.left, (int) protectionRect.top,
+                        (int) protectionRect.right, (int) protectionRect.bottom);
+                setMeasuredDimension(
+                        resolveSizeAndState(mTotalBounds.width(), widthMeasureSpec, 0),
+                        resolveSizeAndState(mTotalBounds.height(), heightMeasureSpec, 0));
+            } else {
+                setMeasuredDimension(
+                        resolveSizeAndState(mBoundingRect.width(), widthMeasureSpec, 0),
+                        resolveSizeAndState(mBoundingRect.height(), heightMeasureSpec, 0));
+            }
         }
 
         public static void boundsFromDirection(DisplayCutout displayCutout, int gravity,
                 Rect out) {
-            Region bounds = boundsFromDirection(displayCutout, gravity);
-            out.set(bounds.getBounds());
-            bounds.recycle();
-        }
-
-        public static Region boundsFromDirection(DisplayCutout displayCutout, int gravity) {
-            Region bounds = displayCutout.getBounds();
             switch (gravity) {
                 case Gravity.TOP:
-                    bounds.op(0, 0, Integer.MAX_VALUE, displayCutout.getSafeInsetTop(),
-                            Region.Op.INTERSECT);
+                    out.set(displayCutout.getBoundingRectTop());
                     break;
                 case Gravity.LEFT:
-                    bounds.op(0, 0, displayCutout.getSafeInsetLeft(), Integer.MAX_VALUE,
-                            Region.Op.INTERSECT);
+                    out.set(displayCutout.getBoundingRectLeft());
                     break;
                 case Gravity.BOTTOM:
-                    bounds.op(0, displayCutout.getSafeInsetTop() + 1, Integer.MAX_VALUE,
-                            Integer.MAX_VALUE, Region.Op.INTERSECT);
+                    out.set(displayCutout.getBoundingRectBottom());
                     break;
                 case Gravity.RIGHT:
-                    bounds.op(displayCutout.getSafeInsetLeft() + 1, 0, Integer.MAX_VALUE,
-                            Integer.MAX_VALUE, Region.Op.INTERSECT);
+                    out.set(displayCutout.getBoundingRectRight());
                     break;
+                default:
+                    out.setEmpty();
             }
-            return bounds;
         }
 
         private void localBounds(Rect out) {
-            final DisplayCutout displayCutout = mInfo.displayCutout;
+            DisplayCutout displayCutout = displayInfo.displayCutout;
+            boundsFromDirection(displayCutout, getGravity(displayCutout), out);
+        }
 
-            if (mStart) {
-                if (displayCutout.getSafeInsetLeft() > 0) {
-                    boundsFromDirection(displayCutout, Gravity.LEFT, out);
-                } else if (displayCutout.getSafeInsetTop() > 0) {
-                    boundsFromDirection(displayCutout, Gravity.TOP, out);
+        private int getGravity(DisplayCutout displayCutout) {
+            if (mPosition == BOUNDS_POSITION_LEFT) {
+                if (!displayCutout.getBoundingRectLeft().isEmpty()) {
+                    return Gravity.LEFT;
                 }
-            } else {
-                if (displayCutout.getSafeInsetRight() > 0) {
-                    boundsFromDirection(displayCutout, Gravity.RIGHT, out);
-                } else if (displayCutout.getSafeInsetBottom() > 0) {
-                    boundsFromDirection(displayCutout, Gravity.BOTTOM, out);
+            } else if (mPosition == BOUNDS_POSITION_TOP) {
+                if (!displayCutout.getBoundingRectTop().isEmpty()) {
+                    return Gravity.TOP;
+                }
+            } else if (mPosition == BOUNDS_POSITION_BOTTOM) {
+                if (!displayCutout.getBoundingRectBottom().isEmpty()) {
+                    return Gravity.BOTTOM;
+                }
+            } else if (mPosition == BOUNDS_POSITION_RIGHT) {
+                if (!displayCutout.getBoundingRectRight().isEmpty()) {
+                    return Gravity.RIGHT;
                 }
             }
+            return Gravity.NO_GRAVITY;
         }
-
-        @Override
-        public boolean shouldInterceptTouch() {
-            return mInfo.displayCutout != null && getVisibility() == VISIBLE;
-        }
-
-        @Override
-        public Region getInterceptRegion() {
-            if (mInfo.displayCutout == null) {
-                return null;
-            }
-
-            View rootView = getRootView();
-            Region cutoutBounds = mInfo.displayCutout.getBounds();
-
-            // Transform to window's coordinate space
-            rootView.getLocationOnScreen(mLocation);
-            cutoutBounds.translate(-mLocation[0], -mLocation[1]);
-
-            // Intersect with window's frame
-            cutoutBounds.op(rootView.getLeft(), rootView.getTop(), rootView.getRight(),
-                    rootView.getBottom(), Region.Op.INTERSECT);
-
-            return cutoutBounds;
-        }
-    }
-
-    private boolean isLandscape(int rotation) {
-        return rotation == RotationUtils.ROTATION_LANDSCAPE || rotation ==
-                RotationUtils.ROTATION_SEASCAPE;
     }
 
     /**
@@ -768,32 +1540,44 @@ public class ScreenDecorations extends SystemUI implements Tunable {
 
         private final View mView;
         private final int mTargetRotation;
+        private final Point mTargetDisplaySize;
+        // Pass -1 for ScreenDecorHwcLayer since it's a fullscreen window and has no specific
+        // position.
+        private final int mPosition;
 
-        private RestartingPreDrawListener(View view, int targetRotation) {
+        private RestartingPreDrawListener(View view, @BoundsPosition int position,
+                int targetRotation, Point targetDisplaySize) {
             mView = view;
             mTargetRotation = targetRotation;
+            mTargetDisplaySize = targetDisplaySize;
+            mPosition = position;
         }
 
         @Override
         public boolean onPreDraw() {
             mView.getViewTreeObserver().removeOnPreDrawListener(this);
-
-            if (mTargetRotation == mRotation) {
-                if (DEBUG) {
-                    Log.i(TAG, (mView == mOverlay ? "OverlayTop" : "OverlayBottom")
-                            + " already in target rot "
-                            + mTargetRotation + ", allow draw without restarting it");
+            if (mTargetRotation == mRotation && mDisplaySize.equals(mTargetDisplaySize)) {
+                if (DEBUG_LOGGING) {
+                    final String title = mPosition < 0 ? "ScreenDecorHwcLayer"
+                            : getWindowTitleByPos(mPosition);
+                    Log.i(TAG, title + " already in target rot "
+                            + mTargetRotation + " and in target resolution "
+                            + mTargetDisplaySize.x + "x" + mTargetDisplaySize.y
+                            + ", allow draw without restarting it");
                 }
                 return true;
             }
 
-            mPendingRotationChange = false;
+            mPendingConfigChange = false;
             // This changes the window attributes - we need to restart the traversal for them to
             // take effect.
-            updateOrientation();
-            if (DEBUG) {
-                Log.i(TAG, (mView == mOverlay ? "OverlayTop" : "OverlayBottom")
-                        + " restarting listener fired, restarting draw for rot " + mRotation);
+            updateConfiguration();
+            if (DEBUG_LOGGING) {
+                final String title = mPosition < 0 ? "ScreenDecorHwcLayer"
+                        : getWindowTitleByPos(mPosition);
+                Log.i(TAG, title
+                        + " restarting listener fired, restarting draw for rot " + mRotation
+                        + ", resolution " + mDisplaySize.x + "x" + mDisplaySize.y);
             }
             mView.invalidate();
             return false;
@@ -801,8 +1585,8 @@ public class ScreenDecorations extends SystemUI implements Tunable {
     }
 
     /**
-     * A pre-draw listener, that validates that the rotation we draw in matches the displays
-     * rotation before continuing the draw.
+     * A pre-draw listener, that validates that the rotation and display resolution we draw in
+     * matches the display's rotation and resolution before continuing the draw.
      *
      * This is to prevent a race condition, where we have not received the display changed event
      * yet, and would thus draw in an old orientation.
@@ -817,11 +1601,21 @@ public class ScreenDecorations extends SystemUI implements Tunable {
 
         @Override
         public boolean onPreDraw() {
-            final int displayRotation = RotationUtils.getExactRotation(mContext);
-            if (displayRotation != mRotation && !mPendingRotationChange) {
-                if (DEBUG) {
-                    Log.i(TAG, "Drawing rot " + mRotation + ", but display is at rot "
-                            + displayRotation + ". Restarting draw");
+            mContext.getDisplay().getDisplayInfo(mDisplayInfo);
+            final int displayRotation = mDisplayInfo.rotation;
+            if ((displayRotation != mRotation || displaySizeChanged(mDisplaySize, mDisplayInfo))
+                    && !mPendingConfigChange) {
+                if (DEBUG_LOGGING) {
+                    if (displayRotation != mRotation) {
+                        Log.i(TAG, "Drawing rot " + mRotation + ", but display is at rot "
+                                + displayRotation + ". Restarting draw");
+                    }
+                    if (displaySizeChanged(mDisplaySize, mDisplayInfo)) {
+                        Log.i(TAG, "Drawing at " + mDisplaySize.x + "x" + mDisplaySize.y
+                                + ", but display is at "
+                                + mDisplayInfo.getNaturalWidth() + "x"
+                                + mDisplayInfo.getNaturalHeight() + ". Restarting draw");
+                    }
                 }
                 mView.invalidate();
                 return false;

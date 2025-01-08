@@ -22,6 +22,8 @@ import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.PersistableBundle;
 
+import com.android.telephony.Rlog;
+
 import java.util.Objects;
 
 /**
@@ -70,28 +72,6 @@ public final class CellSignalStrengthTdscdma extends CellSignalStrength implemen
         mBitErrorRate = inRangeOrUnavailable(ber, 0, 7, 99);
         mRscp = inRangeOrUnavailable(rscp, -120, -24);
         updateLevel(null, null);
-    }
-
-    /** @hide */
-    public CellSignalStrengthTdscdma(android.hardware.radio.V1_0.TdScdmaSignalStrength tdscdma) {
-        // Convert from HAL values as part of construction.
-        this(CellInfo.UNAVAILABLE, CellInfo.UNAVAILABLE,
-                tdscdma.rscp != CellInfo.UNAVAILABLE ? -tdscdma.rscp : tdscdma.rscp);
-
-        if (mRssi == CellInfo.UNAVAILABLE && mRscp == CellInfo.UNAVAILABLE) {
-            setDefaultValues();
-        }
-    }
-
-    /** @hide */
-    public CellSignalStrengthTdscdma(android.hardware.radio.V1_2.TdscdmaSignalStrength tdscdma) {
-        // Convert from HAL values as part of construction.
-        this(getRssiDbmFromAsu(tdscdma.signalStrength),
-                tdscdma.bitErrorRate, getRscpDbmFromAsu(tdscdma.rscp));
-
-        if (mRssi == CellInfo.UNAVAILABLE && mRscp == CellInfo.UNAVAILABLE) {
-            setDefaultValues();
-        }
     }
 
     /** @hide */

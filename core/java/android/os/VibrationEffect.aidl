@@ -17,6 +17,3 @@
 package android.os;
 
 parcelable VibrationEffect;
-parcelable VibrationEffect.OneShotVibration;
-parcelable VibrationEffect.WaveformVibration;
-parcelable VibrationEffect.EffectVibration;

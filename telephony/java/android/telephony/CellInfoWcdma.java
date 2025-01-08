@@ -18,7 +18,8 @@ package android.telephony;
 
 import android.os.Parcel;
 import android.os.Parcelable;
-import android.telephony.Rlog;
+
+import com.android.telephony.Rlog;
 
 import java.util.Objects;
 
@@ -48,27 +49,11 @@ public final class CellInfoWcdma extends CellInfo implements Parcelable {
     }
 
     /** @hide */
-    public CellInfoWcdma(android.hardware.radio.V1_0.CellInfo ci) {
-        super(ci);
-        final android.hardware.radio.V1_0.CellInfoWcdma ciw = ci.wcdma.get(0);
-        mCellIdentityWcdma = new CellIdentityWcdma(ciw.cellIdentityWcdma);
-        mCellSignalStrengthWcdma = new CellSignalStrengthWcdma(ciw.signalStrengthWcdma);
-    }
-
-    /** @hide */
-    public CellInfoWcdma(android.hardware.radio.V1_2.CellInfo ci) {
-        super(ci);
-        final android.hardware.radio.V1_2.CellInfoWcdma ciw = ci.wcdma.get(0);
-        mCellIdentityWcdma = new CellIdentityWcdma(ciw.cellIdentityWcdma);
-        mCellSignalStrengthWcdma = new CellSignalStrengthWcdma(ciw.signalStrengthWcdma);
-    }
-
-    /** @hide */
-    public CellInfoWcdma(android.hardware.radio.V1_4.CellInfo ci, long timeStamp) {
-        super(ci, timeStamp);
-        final android.hardware.radio.V1_2.CellInfoWcdma ciw = ci.info.wcdma();
-        mCellIdentityWcdma = new CellIdentityWcdma(ciw.cellIdentityWcdma);
-        mCellSignalStrengthWcdma = new CellSignalStrengthWcdma(ciw.signalStrengthWcdma);
+    public CellInfoWcdma(int connectionStatus, boolean registered, long timeStamp,
+            CellIdentityWcdma cellIdentityWcdma, CellSignalStrengthWcdma cellSignalStrengthWcdma) {
+        super(connectionStatus, registered, timeStamp);
+        mCellIdentityWcdma = cellIdentityWcdma;
+        mCellSignalStrengthWcdma = cellSignalStrengthWcdma;
     }
 
     /**
@@ -165,7 +150,7 @@ public final class CellInfoWcdma extends CellInfo implements Parcelable {
     }
 
     /** Implement the Parcelable interface */
-    public static final Creator<CellInfoWcdma> CREATOR = new Creator<CellInfoWcdma>() {
+    public static final @android.annotation.NonNull Creator<CellInfoWcdma> CREATOR = new Creator<CellInfoWcdma>() {
         @Override
         public CellInfoWcdma createFromParcel(Parcel in) {
             in.readInt(); // Skip past token, we know what it is

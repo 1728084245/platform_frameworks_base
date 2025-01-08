@@ -31,7 +31,8 @@ static void detach(sp<BaseRenderNodeAnimator>& animator) {
     animator->detach();
 }
 
-AnimatorManager::AnimatorManager(RenderNode& parent) : mParent(parent), mAnimationHandle(nullptr) {}
+AnimatorManager::AnimatorManager(RenderNode& parent)
+        : mParent(parent), mAnimationHandle(nullptr), mCancelAllAnimators(false) {}
 
 AnimatorManager::~AnimatorManager() {
     for_each(mNewAnimators.begin(), mNewAnimators.end(), detach);
@@ -82,8 +83,22 @@ void AnimatorManager::pushStaging() {
         }
         mNewAnimators.clear();
     }
-    for (auto& animator : mAnimators) {
-        animator->pushStaging(mAnimationHandle->context());
+
+    if (mCancelAllAnimators) {
+        for (auto& animator : mAnimators) {
+            animator->forceEndNow(mAnimationHandle->context());
+        }
+        mCancelAllAnimators = false;
+    } else {
+        // create a copy of mAnimators as onAnimatorTargetChanged can erase mAnimators.
+        FatVector<sp<BaseRenderNodeAnimator>> animators;
+        animators.reserve(mAnimators.size());
+        for (const auto& animator : mAnimators) {
+            animators.push_back(animator);
+        }
+        for (auto& animator : animators) {
+            animator->pushStaging(mAnimationHandle->context());
+        }
     }
 }
 
@@ -182,6 +197,10 @@ void AnimatorManager::endAllActiveAnimators() {
     for_each(mAnimators.begin(), mAnimators.end(), functor);
     mAnimators.clear();
     mAnimationHandle->release();
+}
+
+void AnimatorManager::forceEndAnimators() {
+    mCancelAllAnimators = true;
 }
 
 } /* namespace uirenderer */

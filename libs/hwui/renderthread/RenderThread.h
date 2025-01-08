@@ -17,24 +17,24 @@
 #ifndef RENDERTHREAD_H_
 #define RENDERTHREAD_H_
 
-#include "RenderTask.h"
-
-#include "../JankTracker.h"
-#include "CacheManager.h"
-#include "TimeLord.h"
-#include "thread/ThreadBase.h"
-
-#include <GrContext.h>
 #include <SkBitmap.h>
 #include <cutils/compiler.h>
-#include <ui/DisplayInfo.h>
-#include <utils/Looper.h>
+#include <include/gpu/ganesh/GrDirectContext.h>
+#include <surface_control_private.h>
 #include <utils/Thread.h>
 
-#include <thread/ThreadBase.h>
 #include <memory>
 #include <mutex>
 #include <set>
+
+#include "CacheManager.h"
+#include "MemoryPolicy.h"
+#include "ProfileDataContainer.h"
+#include "RenderTask.h"
+#include "TimeLord.h"
+#include "WebViewFunctorManager.h"
+#include "thread/ThreadBase.h"
+#include "utils/TimeUtils.h"
 
 namespace android {
 
@@ -42,9 +42,18 @@ class Bitmap;
 
 namespace uirenderer {
 
+class AutoBackendTextureRelease;
 class Readback;
 class RenderState;
 class TestUtils;
+
+namespace skiapipeline {
+class VkFunctorDrawHandler;
+}
+
+namespace VectorDrawable {
+class Tree;
+}
 
 namespace renderthread {
 
@@ -64,18 +73,65 @@ protected:
 
 struct VsyncSource {
     virtual void requestNextVsync() = 0;
-    virtual nsecs_t latestVsyncEvent() = 0;
+    virtual void drainPendingEvents() = 0;
     virtual ~VsyncSource() {}
 };
 
+typedef ASurfaceControl* (*ASC_create)(ASurfaceControl* parent, const char* debug_name);
+typedef void (*ASC_acquire)(ASurfaceControl* control);
+typedef void (*ASC_release)(ASurfaceControl* control);
+
+typedef void (*ASC_registerSurfaceStatsListener)(ASurfaceControl* control, int32_t id,
+                                                 void* context,
+                                                 ASurfaceControl_SurfaceStatsListener func);
+typedef void (*ASC_unregisterSurfaceStatsListener)(void* context,
+                                                   ASurfaceControl_SurfaceStatsListener func);
+
+typedef int64_t (*ASCStats_getAcquireTime)(ASurfaceControlStats* stats);
+typedef uint64_t (*ASCStats_getFrameNumber)(ASurfaceControlStats* stats);
+
+typedef ASurfaceTransaction* (*AST_create)();
+typedef void (*AST_delete)(ASurfaceTransaction* transaction);
+typedef void (*AST_apply)(ASurfaceTransaction* transaction);
+typedef void (*AST_reparent)(ASurfaceTransaction* aSurfaceTransaction,
+                             ASurfaceControl* aSurfaceControl,
+                             ASurfaceControl* newParentASurfaceControl);
+typedef void (*AST_setVisibility)(ASurfaceTransaction* transaction,
+                                  ASurfaceControl* surface_control, int8_t visibility);
+typedef void (*AST_setZOrder)(ASurfaceTransaction* transaction, ASurfaceControl* surface_control,
+                              int32_t z_order);
+
+struct ASurfaceControlFunctions {
+    ASurfaceControlFunctions();
+
+    ASC_create createFunc;
+    ASC_acquire acquireFunc;
+    ASC_release releaseFunc;
+    ASC_registerSurfaceStatsListener registerListenerFunc;
+    ASC_unregisterSurfaceStatsListener unregisterListenerFunc;
+    ASCStats_getAcquireTime getAcquireTimeFunc;
+    ASCStats_getFrameNumber getFrameNumberFunc;
+
+    AST_create transactionCreateFunc;
+    AST_delete transactionDeleteFunc;
+    AST_apply transactionApplyFunc;
+    AST_reparent transactionReparentFunc;
+    AST_setVisibility transactionSetVisibilityFunc;
+    AST_setZOrder transactionSetZOrderFunc;
+};
+
+class ChoreographerSource;
 class DummyVsyncSource;
+
+typedef void (*JVMAttachHook)(const char* name);
 
 class RenderThread : private ThreadBase {
     PREVENT_COPY_AND_ASSIGN(RenderThread);
 
 public:
-    // Sets a callback that fires before any RenderThread setup has occured.
-    ANDROID_API static void setOnStartHook(void (*onStartHook)());
+    // Sets a callback that fires before any RenderThread setup has occurred.
+    static void setOnStartHook(JVMAttachHook onStartHook);
+    static JVMAttachHook getOnStartHook();
 
     WorkQueue& queue() { return ThreadBase::queue(); }
 
@@ -90,18 +146,32 @@ public:
     RenderState& renderState() const { return *mRenderState; }
     EglManager& eglManager() const { return *mEglManager; }
     ProfileDataContainer& globalProfileData() { return mGlobalProfileData; }
+    std::mutex& getJankDataMutex() { return mJankDataMutex; }
     Readback& readback();
 
-    const DisplayInfo& mainDisplayInfo() { return mDisplayInfo; }
-
-    GrContext* getGrContext() const { return mGrContext.get(); }
-    void setGrContext(sk_sp<GrContext> cxt);
+    GrDirectContext* getGrContext() const { return mGrContext.get(); }
+    void setGrContext(sk_sp<GrDirectContext> cxt);
+    sk_sp<GrDirectContext> requireGrContext();
 
     CacheManager& cacheManager() { return *mCacheManager; }
-    VulkanManager& vulkanManager() { return *mVkManager; }
+    VulkanManager& vulkanManager();
 
     sk_sp<Bitmap> allocateHardwareBitmap(SkBitmap& skBitmap);
-    void dumpGraphicsMemory(int fd);
+    void dumpGraphicsMemory(int fd, bool includeProfileData);
+    void getMemoryUsage(size_t* cpuUsage, size_t* gpuUsage);
+
+    void requireGlContext();
+    void requireVkContext();
+    void destroyRenderingContext();
+
+    void preload();
+
+    const ASurfaceControlFunctions& getASurfaceControlFunctions() {
+        return mASurfaceControlFunctions;
+    }
+
+    void trimMemory(TrimLevel level);
+    void trimCaches(CacheTrimLevel level);
 
     /**
      * isCurrent provides a way to query, if the caller is running on
@@ -111,6 +181,8 @@ public:
      */
     static bool isCurrent();
 
+    static void initGrContextOptions(GrContextOptions& options);
+
 protected:
     virtual bool threadLoop() override;
 
@@ -118,7 +190,13 @@ private:
     friend class DispatchFrameCallbacks;
     friend class RenderProxy;
     friend class DummyVsyncSource;
+    friend class ChoreographerSource;
+    friend class android::uirenderer::AutoBackendTextureRelease;
     friend class android::uirenderer::TestUtils;
+    friend class android::uirenderer::WebViewFunctor;
+    friend class android::uirenderer::skiapipeline::VkFunctorDrawHandler;
+    friend class android::uirenderer::VectorDrawable::Tree;
+    friend class sp<RenderThread>;
 
     RenderThread();
     virtual ~RenderThread();
@@ -127,14 +205,23 @@ private:
     static RenderThread& getInstance();
 
     void initThreadLocals();
-    void initializeDisplayEventReceiver();
-    static int displayEventReceiverCallback(int fd, int events, void* data);
+    void initializeChoreographer();
+    void setupFrameInterval();
+    // Callbacks for choreographer events:
+    // choreographerCallback will call AChoreograper_handleEvent to call the
+    // corresponding callbacks for each display event type
+    static int choreographerCallback(int fd, int events, void* data);
+    // Callback that will be run on vsync ticks.
+    static void extendedFrameCallback(const AChoreographerFrameCallbackData* cbData, void* data);
+    void frameCallback(int64_t vsyncId, int64_t frameDeadline, int64_t frameTimeNanos,
+                       int64_t frameInterval);
+    // Callback that will be run whenver there is a refresh rate change.
+    static void refreshRateCallback(int64_t vsyncPeriod, void* data);
     void drainDisplayEventQueue();
     void dispatchFrameCallbacks();
     void requestVsync();
 
-    DisplayInfo mDisplayInfo;
-
+    AChoreographer* mChoreographer;
     VsyncSource* mVsyncSource;
     bool mVsyncRequested;
     std::set<IFrameCallback*> mFrameCallbacks;
@@ -148,13 +235,17 @@ private:
     TimeLord mTimeLord;
     RenderState* mRenderState;
     EglManager* mEglManager;
+    WebViewFunctorManager& mFunctorManager;
 
     ProfileDataContainer mGlobalProfileData;
     Readback* mReadback = nullptr;
 
-    sk_sp<GrContext> mGrContext;
+    sk_sp<GrDirectContext> mGrContext;
     CacheManager* mCacheManager;
-    VulkanManager* mVkManager;
+    sp<VulkanManager> mVkManager;
+
+    ASurfaceControlFunctions mASurfaceControlFunctions;
+    std::mutex mJankDataMutex;
 };
 
 } /* namespace renderthread */

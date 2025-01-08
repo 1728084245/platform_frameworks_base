@@ -15,7 +15,8 @@
   ~ limitations under the License
   -->
 
-<selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:state_enabled="true" android:color="@color/remote_input_text_enabled" /> <!-- white -->
-    <item android:color="#99ffffff" /> <!-- 60% white -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:androidprv="http://schemas.android.com/apk/prv/res/android">
+    <item android:state_enabled="false" android:color="?androidprv:attr/materialColorOnSurfaceVariant" android:alpha=".6" />
+    <item android:color="?androidprv:attr/materialColorOnSurfaceVariant" />
 </selector>

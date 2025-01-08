@@ -16,16 +16,16 @@
 
 #pragma once
 
-#include <cutils/compiler.h>
-#include <utils/Macros.h>
-#include <utils/RefBase.h>
-#include <utils/Timers.h>
-
 #include <SkAnimatedImage.h>
 #include <SkCanvas.h>
 #include <SkColorFilter.h>
 #include <SkDrawable.h>
+#include <SkEncodedImageFormat.h>
 #include <SkPicture.h>
+#include <cutils/compiler.h>
+#include <utils/Macros.h>
+#include <utils/RefBase.h>
+#include <utils/Timers.h>
 
 #include <future>
 #include <mutex>
@@ -44,11 +44,12 @@ public:
  * This class can be drawn into Canvas.h and maintains the state needed to drive
  * the animation from the RenderThread.
  */
-class ANDROID_API AnimatedImageDrawable : public SkDrawable {
+class AnimatedImageDrawable : public SkDrawable {
 public:
     // bytesUsed includes the approximate sizes of the SkAnimatedImage and the SkPictures in the
     // Snapshots.
-    AnimatedImageDrawable(sk_sp<SkAnimatedImage> animatedImage, size_t bytesUsed);
+    AnimatedImageDrawable(sk_sp<SkAnimatedImage> animatedImage, size_t bytesUsed,
+                          SkEncodedImageFormat format);
 
     /**
      * This updates the internal time and returns true if the image needs
@@ -67,9 +68,10 @@ public:
         mStagingProperties.mColorFilter = filter;
     }
     void setStagingMirrored(bool mirrored) { mStagingProperties.mMirrored = mirrored; }
+    void setStagingBounds(const SkRect& bounds) { mStagingProperties.mBounds = bounds; }
     void syncProperties();
 
-    virtual SkRect onGetBounds() override { return mSkAnimatedImage->getBounds(); }
+    SkRect onGetBounds() override;
 
     // Draw to software canvas, and return time to next draw.
     // 0 means the animation is not running.
@@ -106,16 +108,15 @@ public:
     Snapshot decodeNextFrame();
     Snapshot reset();
 
-    size_t byteSize() const {
-        return sizeof(this) + mBytesUsed;
-    }
+    size_t byteSize() const { return sizeof(*this) + mBytesUsed; }
 
 protected:
-    virtual void onDraw(SkCanvas* canvas) override;
+    void onDraw(SkCanvas* canvas) override;
 
 private:
     sk_sp<SkAnimatedImage> mSkAnimatedImage;
     const size_t mBytesUsed;
+    const SkEncodedImageFormat mFormat;
 
     bool mRunning = false;
     bool mStarting = false;
@@ -147,6 +148,7 @@ private:
         int mAlpha = SK_AlphaOPAQUE;
         sk_sp<SkColorFilter> mColorFilter;
         bool mMirrored = false;
+        SkRect mBounds;
 
         Properties() = default;
         Properties(Properties&) = default;
@@ -157,6 +159,9 @@ private:
     Properties mProperties;
 
     std::unique_ptr<OnAnimationEndListener> mEndListener;
+
+    int adjustFrameDuration(int);
+    int currentFrameDuration();
 };
 
 }  // namespace android

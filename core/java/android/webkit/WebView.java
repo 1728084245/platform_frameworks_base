@@ -16,12 +16,13 @@
 
 package android.webkit;
 
+import android.annotation.CallbackExecutor;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
 import android.annotation.Widget;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
@@ -44,23 +45,32 @@ import android.os.StrictMode;
 import android.print.PrintDocumentAdapter;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.util.LongSparseArray;
 import android.util.SparseArray;
 import android.view.DragEvent;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.PointerIcon;
 import android.view.View;
 import android.view.ViewDebug;
 import android.view.ViewGroup;
 import android.view.ViewHierarchyEncoder;
 import android.view.ViewStructure;
 import android.view.ViewTreeObserver;
+import android.view.WindowInsets;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
+import android.view.autofill.AutofillId;
 import android.view.autofill.AutofillValue;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
+import android.view.inspector.InspectableProperty;
 import android.view.textclassifier.TextClassifier;
+import android.view.translation.TranslationCapability;
+import android.view.translation.TranslationSpec.DataFormat;
+import android.view.translation.ViewTranslationRequest;
+import android.view.translation.ViewTranslationResponse;
 import android.widget.AbsoluteLayout;
 
 import java.io.BufferedWriter;
@@ -69,6 +79,8 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.function.Consumer;
 
 /**
  * A View that displays web pages.
@@ -108,7 +120,7 @@ public class WebView extends AbsoluteLayout
     // Throwing an exception for incorrect thread usage if the
     // build target is JB MR2 or newer. Defaults to false, and is
     // set in the WebView constructor.
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private static volatile boolean sEnforceThreadChecking = false;
 
     /**
@@ -122,7 +134,7 @@ public class WebView extends AbsoluteLayout
          *
          * @param webview the WebView to transport
          */
-        public synchronized void setWebView(WebView webview) {
+        public synchronized void setWebView(@Nullable WebView webview) {
             mWebview = webview;
         }
 
@@ -131,6 +143,7 @@ public class WebView extends AbsoluteLayout
          *
          * @return the transported WebView object
          */
+        @Nullable
         public synchronized WebView getWebView() {
             return mWebview;
         }
@@ -306,7 +319,7 @@ public class WebView extends AbsoluteLayout
      *
      * @param context an Activity Context to access application assets
      */
-    public WebView(Context context) {
+    public WebView(@NonNull Context context) {
         this(context, null);
     }
 
@@ -316,7 +329,7 @@ public class WebView extends AbsoluteLayout
      * @param context an Activity Context to access application assets
      * @param attrs an AttributeSet passed to our parent
      */
-    public WebView(Context context, AttributeSet attrs) {
+    public WebView(@NonNull Context context, @Nullable AttributeSet attrs) {
         this(context, attrs, com.android.internal.R.attr.webViewStyle);
     }
 
@@ -329,7 +342,7 @@ public class WebView extends AbsoluteLayout
      *        reference to a style resource that supplies default values for
      *        the view. Can be 0 to not look for defaults.
      */
-    public WebView(Context context, AttributeSet attrs, int defStyleAttr) {
+    public WebView(@NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr) {
         this(context, attrs, defStyleAttr, 0);
     }
 
@@ -346,7 +359,8 @@ public class WebView extends AbsoluteLayout
      *        defStyleAttr is 0 or can not be found in the theme. Can be 0
      *        to not look for defaults.
      */
-    public WebView(Context context, AttributeSet attrs, int defStyleAttr, int defStyleRes) {
+    public WebView(@NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr,
+            int defStyleRes) {
         this(context, attrs, defStyleAttr, defStyleRes, null, false);
     }
 
@@ -367,7 +381,7 @@ public class WebView extends AbsoluteLayout
      * and {@link WebStorage} for fine-grained control of privacy data.
      */
     @Deprecated
-    public WebView(Context context, AttributeSet attrs, int defStyleAttr,
+    public WebView(@NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr,
             boolean privateBrowsing) {
         this(context, attrs, defStyleAttr, 0, null, privateBrowsing);
     }
@@ -392,8 +406,8 @@ public class WebView extends AbsoluteLayout
      *       be added synchronously, before a subsequent loadUrl call takes effect.
      */
     @UnsupportedAppUsage
-    protected WebView(Context context, AttributeSet attrs, int defStyleAttr,
-            Map<String, Object> javaScriptInterfaces, boolean privateBrowsing) {
+    protected WebView(@NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr,
+            @Nullable Map<String, Object> javaScriptInterfaces, boolean privateBrowsing) {
         this(context, attrs, defStyleAttr, 0, javaScriptInterfaces, privateBrowsing);
     }
 
@@ -401,14 +415,18 @@ public class WebView extends AbsoluteLayout
      * @hide
      */
     @SuppressWarnings("deprecation")  // for super() call into deprecated base class constructor.
-    @UnsupportedAppUsage
-    protected WebView(Context context, AttributeSet attrs, int defStyleAttr, int defStyleRes,
-            Map<String, Object> javaScriptInterfaces, boolean privateBrowsing) {
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+    protected WebView(@NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr,
+            int defStyleRes, @Nullable Map<String, Object> javaScriptInterfaces,
+            boolean privateBrowsing) {
         super(context, attrs, defStyleAttr, defStyleRes);
 
         // WebView is important by default, unless app developer overrode attribute.
         if (getImportantForAutofill() == IMPORTANT_FOR_AUTOFILL_AUTO) {
             setImportantForAutofill(IMPORTANT_FOR_AUTOFILL_YES);
+        }
+        if (getImportantForContentCapture() == IMPORTANT_FOR_CONTENT_CAPTURE_AUTO) {
+            setImportantForContentCapture(IMPORTANT_FOR_CONTENT_CAPTURE_YES);
         }
 
         if (context == null) {
@@ -636,7 +654,7 @@ public class WebView extends AbsoluteLayout
      *         method fails.
      */
     @Nullable
-    public WebBackForwardList saveState(Bundle outState) {
+    public WebBackForwardList saveState(@NonNull Bundle outState) {
         checkThread();
         return mProvider.saveState(outState);
     }
@@ -689,25 +707,27 @@ public class WebView extends AbsoluteLayout
      * @return the restored back/forward list or {@code null} if restoreState failed
      */
     @Nullable
-    public WebBackForwardList restoreState(Bundle inState) {
+    public WebBackForwardList restoreState(@NonNull Bundle inState) {
         checkThread();
         return mProvider.restoreState(inState);
     }
 
-    /**
-     * Loads the given URL with the specified additional HTTP headers.
+   /**
+     * Loads the given URL with additional HTTP headers, specified as a map from
+     * name to value. Note that if this map contains any of the headers that are
+     * set by default by this WebView, such as those controlling caching, accept
+     * types or the User-Agent, their values may be overridden by this WebView's
+     * defaults.
+     * <p>
+     * Some older WebView implementations require {@code additionalHttpHeaders}
+     * to be mutable.
      * <p>
      * Also see compatibility note on {@link #evaluateJavascript}.
      *
      * @param url the URL of the resource to load
-     * @param additionalHttpHeaders the additional headers to be used in the
-     *            HTTP request for this URL, specified as a map from name to
-     *            value. Note that if this map contains any of the headers
-     *            that are set by default by this WebView, such as those
-     *            controlling caching, accept types or the User-Agent, their
-     *            values may be overridden by this WebView's defaults.
+     * @param additionalHttpHeaders map with additional headers
      */
-    public void loadUrl(String url, Map<String, String> additionalHttpHeaders) {
+    public void loadUrl(@NonNull String url, @NonNull Map<String, String> additionalHttpHeaders) {
         checkThread();
         mProvider.loadUrl(url, additionalHttpHeaders);
     }
@@ -719,7 +739,7 @@ public class WebView extends AbsoluteLayout
      *
      * @param url the URL of the resource to load
      */
-    public void loadUrl(String url) {
+    public void loadUrl(@NonNull String url) {
         checkThread();
         mProvider.loadUrl(url);
     }
@@ -733,7 +753,7 @@ public class WebView extends AbsoluteLayout
      * @param postData the data will be passed to "POST" request, which must be
      *     be "application/x-www-form-urlencoded" encoded.
      */
-    public void postUrl(String url, byte[] postData) {
+    public void postUrl(@NonNull String url, @NonNull byte[] postData) {
         checkThread();
         if (URLUtil.isNetworkUrl(url)) {
             mProvider.postUrl(url, postData);
@@ -754,19 +774,23 @@ public class WebView extends AbsoluteLayout
      * <p>
      * The {@code encoding} parameter specifies whether the data is base64 or URL
      * encoded. If the data is base64 encoded, the value of the encoding
-     * parameter must be 'base64'. HTML can be encoded with {@link
+     * parameter must be {@code "base64"}. HTML can be encoded with {@link
      * android.util.Base64#encodeToString(byte[],int)} like so:
-     * <pre>
+     * <pre class="prettyprint">
      * String unencodedHtml =
      *     "&lt;html&gt;&lt;body&gt;'%28' is the code for '('&lt;/body&gt;&lt;/html&gt;";
      * String encodedHtml = Base64.encodeToString(unencodedHtml.getBytes(), Base64.NO_PADDING);
      * webView.loadData(encodedHtml, "text/html", "base64");
      * </pre>
-     * <p>
+     * <p class="note">
      * For all other values of {@code encoding} (including {@code null}) it is assumed that the
      * data uses ASCII encoding for octets inside the range of safe URL characters and use the
      * standard %xx hex encoding of URLs for octets outside that range. See <a
      * href="https://tools.ietf.org/html/rfc3986#section-2.2">RFC 3986</a> for more information.
+     * Applications targeting {@link android.os.Build.VERSION_CODES#Q} or later must either use
+     * base64 or encode any {@code #} characters in the content as {@code %23}, otherwise they
+     * will be treated as the end of the content and the remaining text used as a document
+     * fragment identifier.
      * <p>
      * The {@code mimeType} parameter specifies the format of the data.
      * If WebView can't handle the specified MIME type, it will download the data.
@@ -793,7 +817,8 @@ public class WebView extends AbsoluteLayout
      * @param mimeType the MIME type of the data, e.g. 'text/html'.
      * @param encoding the encoding of the data
      */
-    public void loadData(String data, @Nullable String mimeType, @Nullable String encoding) {
+    public void loadData(@NonNull String data, @Nullable String mimeType,
+            @Nullable String encoding) {
         checkThread();
         mProvider.loadData(data, mimeType, encoding);
     }
@@ -814,7 +839,8 @@ public class WebView extends AbsoluteLayout
      * <p>
      * If the base URL uses the data scheme, this method is equivalent to
      * calling {@link #loadData(String,String,String) loadData()} and the
-     * historyUrl is ignored, and the data will be treated as part of a data: URL.
+     * historyUrl is ignored, and the data will be treated as part of a data: URL,
+     * including the requirement that the content be URL-encoded or base64 encoded.
      * If the base URL uses any other scheme, then the data will be loaded into
      * the WebView as a plain string (i.e. not part of a data URL) and any URL-encoded
      * entities in the string will not be decoded.
@@ -839,7 +865,7 @@ public class WebView extends AbsoluteLayout
      * @param historyUrl the URL to use as the history entry. If {@code null} defaults
      *                   to 'about:blank'. If non-null, this must be a valid URL.
      */
-    public void loadDataWithBaseURL(@Nullable String baseUrl, String data,
+    public void loadDataWithBaseURL(@Nullable String baseUrl, @NonNull String data,
             @Nullable String mimeType, @Nullable String encoding, @Nullable String historyUrl) {
         checkThread();
         mProvider.loadDataWithBaseURL(baseUrl, data, mimeType, encoding, historyUrl);
@@ -862,7 +888,8 @@ public class WebView extends AbsoluteLayout
      *                       completes with the result of the execution (if any).
      *                       May be {@code null} if no notification of the result is required.
      */
-    public void evaluateJavascript(String script, @Nullable ValueCallback<String> resultCallback) {
+    public void evaluateJavascript(@NonNull String script, @Nullable ValueCallback<String>
+            resultCallback) {
         checkThread();
         mProvider.evaluateJavaScript(script, resultCallback);
     }
@@ -872,7 +899,7 @@ public class WebView extends AbsoluteLayout
      *
      * @param filename the filename where the archive should be placed
      */
-    public void saveWebArchive(String filename) {
+    public void saveWebArchive(@NonNull String filename) {
         checkThread();
         mProvider.saveWebArchive(filename);
     }
@@ -889,8 +916,8 @@ public class WebView extends AbsoluteLayout
      *                 under which the file was saved, or {@code null} if saving the
      *                 file failed.
      */
-    public void saveWebArchive(String basename, boolean autoname, @Nullable ValueCallback<String>
-            callback) {
+    public void saveWebArchive(@NonNull String basename, boolean autoname,
+            @Nullable ValueCallback<String> callback) {
         checkThread();
         mProvider.saveWebArchive(basename, autoname, callback);
     }
@@ -1053,7 +1080,7 @@ public class WebView extends AbsoluteLayout
      *                  requests with callbacks.
      * @param callback  The callback to be invoked.
      */
-    public void postVisualStateCallback(long requestId, VisualStateCallback callback) {
+    public void postVisualStateCallback(long requestId, @NonNull VisualStateCallback callback) {
         checkThread();
         mProvider.insertVisualStateCallback(requestId, callback);
     }
@@ -1084,10 +1111,7 @@ public class WebView extends AbsoluteLayout
      * <p>
      * Note that from {@link android.os.Build.VERSION_CODES#JELLY_BEAN_MR1} the returned picture
      * should only be drawn into bitmap-backed Canvas - using any other type of Canvas will involve
-     * additional conversion at a cost in memory and performance. Also the
-     * {@link android.graphics.Picture#createFromStream} and
-     * {@link android.graphics.Picture#writeToStream} methods are not supported on the
-     * returned object.
+     * additional conversion at a cost in memory and performance.
      *
      * @deprecated Use {@link #onDraw} to obtain a bitmap snapshot of the WebView, or
      * {@link #saveWebArchive} to save the content to a file.
@@ -1123,7 +1147,8 @@ public class WebView extends AbsoluteLayout
      * @param documentName  The user-facing name of the printed document. See
      *                      {@link android.print.PrintDocumentInfo}
      */
-    public PrintDocumentAdapter createPrintDocumentAdapter(String documentName) {
+    @NonNull
+    public PrintDocumentAdapter createPrintDocumentAdapter(@NonNull String documentName) {
         checkThread();
         return mProvider.createPrintDocumentAdapter(documentName);
     }
@@ -1195,6 +1220,7 @@ public class WebView extends AbsoluteLayout
      * and the email is set in the "extra" field of HitTestResult. Otherwise,
      * HitTestResult type is set to UNKNOWN_TYPE.
      */
+    @NonNull
     public HitTestResult getHitTestResult() {
         checkThread();
         return mProvider.getHitTestResult();
@@ -1225,7 +1251,7 @@ public class WebView extends AbsoluteLayout
      * @param msg the message to be dispatched with the result of the request
      *            as the data member with "url" as key. The result can be {@code null}.
      */
-    public void requestImageRef(Message msg) {
+    public void requestImageRef(@NonNull Message msg) {
         checkThread();
         mProvider.requestImageRef(msg);
     }
@@ -1235,9 +1261,11 @@ public class WebView extends AbsoluteLayout
      * passed to WebViewClient.onPageStarted because although the load for
      * that URL has begun, the current page may not have changed.
      *
-     * @return the URL for the current page
+     * @return the URL for the current page or {@code null} if no page has been loaded
      */
+    @InspectableProperty(hasAttributeId = false)
     @ViewDebug.ExportedProperty(category = "webview")
+    @Nullable
     public String getUrl() {
         checkThread();
         return mProvider.getUrl();
@@ -1250,9 +1278,12 @@ public class WebView extends AbsoluteLayout
      * Also, there may have been redirects resulting in a different URL to that
      * originally requested.
      *
-     * @return the URL that was originally requested for the current page
+     * @return the URL that was originally requested for the current page or
+     * {@code null} if no page has been loaded
      */
+    @InspectableProperty(hasAttributeId = false)
     @ViewDebug.ExportedProperty(category = "webview")
+    @Nullable
     public String getOriginalUrl() {
         checkThread();
         return mProvider.getOriginalUrl();
@@ -1262,9 +1293,11 @@ public class WebView extends AbsoluteLayout
      * Gets the title for the current page. This is the title of the current page
      * until WebViewClient.onReceivedTitle is called.
      *
-     * @return the title for the current page
+     * @return the title for the current page or {@code null} if no page has been loaded
      */
+    @InspectableProperty(hasAttributeId = false)
     @ViewDebug.ExportedProperty(category = "webview")
+    @Nullable
     public String getTitle() {
         checkThread();
         return mProvider.getTitle();
@@ -1274,8 +1307,11 @@ public class WebView extends AbsoluteLayout
      * Gets the favicon for the current page. This is the favicon of the current
      * page until WebViewClient.onReceivedIcon is called.
      *
-     * @return the favicon for the current page
+     * @return the favicon for the current page or {@code null} if the page doesn't
+     * have one or if no page has been loaded
      */
+    @InspectableProperty(hasAttributeId = false)
+    @Nullable
     public Bitmap getFavicon() {
         checkThread();
         return mProvider.getFavicon();
@@ -1298,6 +1334,7 @@ public class WebView extends AbsoluteLayout
      *
      * @return the progress for the current page between 0 and 100
      */
+    @InspectableProperty(hasAttributeId = false)
     public int getProgress() {
         checkThread();
         return mProvider.getProgress();
@@ -1308,6 +1345,7 @@ public class WebView extends AbsoluteLayout
      *
      * @return the height of the HTML content
      */
+    @InspectableProperty(hasAttributeId = false)
     @ViewDebug.ExportedProperty(category = "webview")
     public int getContentHeight() {
         checkThread();
@@ -1483,7 +1521,7 @@ public class WebView extends AbsoluteLayout
      *
      * @param hosts the list of hosts
      * @param callback will be called with {@code true} if hosts are successfully added to the
-     * whitelist. It will be called with {@code false} if any hosts are malformed. The callback
+     * allowlist. It will be called with {@code false} if any hosts are malformed. The callback
      * will be run on the UI thread
      */
     public static void setSafeBrowsingWhitelist(@NonNull List<String> hosts,
@@ -1509,6 +1547,7 @@ public class WebView extends AbsoluteLayout
      * different objects. The object returned from this method will not be
      * updated to reflect any new state.
      */
+    @NonNull
     public WebBackForwardList copyBackForwardList() {
         checkThread();
         return mProvider.copyBackForwardList();
@@ -1521,7 +1560,7 @@ public class WebView extends AbsoluteLayout
      *
      * @param listener an implementation of {@link FindListener}
      */
-    public void setFindListener(FindListener listener) {
+    public void setFindListener(@Nullable FindListener listener) {
         checkThread();
         setupFindListenerIfNeeded();
         mFindListener.mUserFindListener = listener;
@@ -1566,7 +1605,7 @@ public class WebView extends AbsoluteLayout
      * @param find the string to find.
      * @see #setFindListener
      */
-    public void findAllAsync(String find) {
+    public void findAllAsync(@NonNull String find) {
         checkThread();
         mProvider.findAllAsync(find);
     }
@@ -1592,9 +1631,9 @@ public class WebView extends AbsoluteLayout
     }
 
     /**
-     * Gets the first substring consisting of the address of a physical
-     * location. Currently, only addresses in the United States are detected,
-     * and consist of:
+     * Gets the first substring which appears to be the address of a physical
+     * location. Only addresses in the United States can be detected, which
+     * must consist of:
      * <ul>
      *   <li>a house number</li>
      *   <li>a street name</li>
@@ -1610,9 +1649,17 @@ public class WebView extends AbsoluteLayout
      * or abbreviated using USPS standards. The house number may not exceed
      * five digits.
      *
+     * <p class="note"><b>Note:</b> This function is deprecated and should be
+     * avoided on all API levels, as it cannot detect addresses outside of the
+     * United States and has a high rate of false positives. On API level
+     * {@link android.os.Build.VERSION_CODES#O_MR1} and earlier, it also causes
+     * the entire WebView implementation to be loaded and initialized, which
+     * can throw {@link android.util.AndroidRuntimeException} or other exceptions
+     * if the WebView implementation is currently being updated.
+     *
      * @param addr the string to search for addresses
      * @return the address, or if no address is found, {@code null}
-     * @deprecated this method is superseded by {@link TextClassifier#generateLinks(
+     * @deprecated This method is superseded by {@link TextClassifier#generateLinks(
      * android.view.textclassifier.TextLinks.Request)}. Avoid using this method even when targeting
      * API levels where no alternative is available.
      */
@@ -1660,7 +1707,7 @@ public class WebView extends AbsoluteLayout
      *
      * @param response the message that will be dispatched with the result
      */
-    public void documentHasImages(Message response) {
+    public void documentHasImages(@NonNull Message response) {
         checkThread();
         mProvider.documentHasImages(response);
     }
@@ -1672,7 +1719,7 @@ public class WebView extends AbsoluteLayout
      * @param client an implementation of WebViewClient
      * @see #getWebViewClient
      */
-    public void setWebViewClient(WebViewClient client) {
+    public void setWebViewClient(@NonNull WebViewClient client) {
         checkThread();
         mProvider.setWebViewClient(client);
     }
@@ -1683,9 +1730,91 @@ public class WebView extends AbsoluteLayout
      * @return the WebViewClient, or a default client if not yet set
      * @see #setWebViewClient
      */
+    @NonNull
     public WebViewClient getWebViewClient() {
         checkThread();
         return mProvider.getWebViewClient();
+    }
+
+
+    /**
+     * Gets a handle to the WebView renderer process associated with this WebView.
+     *
+     * <p>In {@link android.os.Build.VERSION_CODES#O} and above, WebView may
+     * run in "multiprocess" mode. In multiprocess mode, rendering of web
+     * content is performed by a sandboxed renderer process separate to the
+     * application process.  This renderer process may be shared with other
+     * WebViews in the application, but is not shared with other application
+     * processes.
+     *
+     * <p>If WebView is running in multiprocess mode, this method returns a
+     * handle to the renderer process associated with the WebView, which can
+     * be used to control the renderer process.
+     *
+     * @return the {@link WebViewRenderProcess} renderer handle associated
+     *         with this {@link WebView}, or {@code null} if
+     *         WebView is not runing in multiprocess mode.
+     */
+    @Nullable
+    public WebViewRenderProcess getWebViewRenderProcess() {
+        checkThread();
+        return mProvider.getWebViewRenderProcess();
+    }
+
+    /**
+     * Sets the renderer client object associated with this WebView.
+     *
+     * <p>The renderer client encapsulates callbacks relevant to WebView renderer
+     * state. See {@link WebViewRenderProcessClient} for details.
+     *
+     * <p>Although many WebView instances may share a single underlying
+     * renderer, and renderers may live either in the application
+     * process, or in a sandboxed process that is isolated from the
+     * application process, instances of {@link WebViewRenderProcessClient}
+     * are set per-WebView.  Callbacks represent renderer events from
+     * the perspective of this WebView, and may or may not be correlated
+     * with renderer events affecting other WebViews.
+     *
+     * @param executor the Executor on which {@link WebViewRenderProcessClient}
+     *                 callbacks will execute.
+     * @param webViewRenderProcessClient the {@link WebViewRenderProcessClient}
+     *                                   object.
+     */
+    public void setWebViewRenderProcessClient(
+            @NonNull @CallbackExecutor Executor executor,
+            @NonNull WebViewRenderProcessClient webViewRenderProcessClient) {
+        checkThread();
+        mProvider.setWebViewRenderProcessClient(
+                executor, webViewRenderProcessClient);
+    }
+
+    /**
+     * Sets the renderer client object associated with this WebView.
+     *
+     * See {@link #setWebViewRenderProcessClient(Executor,WebViewRenderProcessClient)} for details.
+     *
+     * <p> {@link WebViewRenderProcessClient} callbacks will run on the thread that this WebView was
+     * initialized on.
+     *
+     * @param webViewRenderProcessClient the {@link WebViewRenderProcessClient} object.
+     */
+    public void setWebViewRenderProcessClient(
+            @Nullable WebViewRenderProcessClient webViewRenderProcessClient) {
+        checkThread();
+        mProvider.setWebViewRenderProcessClient(null, webViewRenderProcessClient);
+    }
+
+    /**
+     * Gets the renderer client object associated with this WebView.
+     *
+     * @return the {@link WebViewRenderProcessClient} object associated with this WebView, if one
+     *         has been set via {@link #setWebViewRenderProcessClient(WebViewRenderProcessClient)}
+     *         or {@code null} otherwise.
+     */
+    @Nullable
+    public WebViewRenderProcessClient getWebViewRenderProcessClient() {
+        checkThread();
+        return mProvider.getWebViewRenderProcessClient();
     }
 
     /**
@@ -1695,7 +1824,7 @@ public class WebView extends AbsoluteLayout
      *
      * @param listener an implementation of DownloadListener
      */
-    public void setDownloadListener(DownloadListener listener) {
+    public void setDownloadListener(@Nullable DownloadListener listener) {
         checkThread();
         mProvider.setDownloadListener(listener);
     }
@@ -1708,7 +1837,7 @@ public class WebView extends AbsoluteLayout
      * @param client an implementation of WebChromeClient
      * @see #getWebChromeClient
      */
-    public void setWebChromeClient(WebChromeClient client) {
+    public void setWebChromeClient(@Nullable WebChromeClient client) {
         checkThread();
         mProvider.setWebChromeClient(client);
     }
@@ -1740,8 +1869,8 @@ public class WebView extends AbsoluteLayout
 
     /**
      * Injects the supplied Java object into this WebView. The object is
-     * injected into the JavaScript context of the main frame, using the
-     * supplied name. This allows the Java object's methods to be
+     * injected into all frames of the web page, including all the iframes,
+     * using the supplied name. This allows the Java object's methods to be
      * accessed from JavaScript. For applications targeted to API
      * level {@link android.os.Build.VERSION_CODES#JELLY_BEAN_MR1}
      * and above, only public methods that are annotated with
@@ -1751,7 +1880,7 @@ public class WebView extends AbsoluteLayout
      * important security note below for implications.
      * <p> Note that injected objects will not appear in JavaScript until the page is next
      * (re)loaded. JavaScript should be enabled before injecting the object. For example:
-     * <pre>
+     * <pre class="prettyprint">
      * class JsObject {
      *    {@literal @}JavascriptInterface
      *    public String toString() { return "injectedObject"; }
@@ -1780,6 +1909,11 @@ public class WebView extends AbsoluteLayout
      * thread of this WebView. Care is therefore required to maintain thread
      * safety.
      * </li>
+     * <li> Because the object is exposed to all the frames, any frame could
+     * obtain the object name and call methods on it. There is no way to tell the
+     * calling frame's origin from the app side, so the app must not assume that
+     * the caller is trustworthy unless the app can guarantee that no third party
+     * content is ever loaded into the WebView even inside an iframe.</li>
      * <li> The Java object's fields are not accessible.</li>
      * <li> For applications targeted to API level {@link android.os.Build.VERSION_CODES#LOLLIPOP}
      * and above, methods of injected Java objects are enumerable from
@@ -1790,7 +1924,7 @@ public class WebView extends AbsoluteLayout
      *               context. {@code null} values are ignored.
      * @param name the name used to expose the object in JavaScript
      */
-    public void addJavascriptInterface(Object object, String name) {
+    public void addJavascriptInterface(@NonNull Object object, @NonNull String name) {
         checkThread();
         mProvider.addJavascriptInterface(object, name);
     }
@@ -1818,6 +1952,7 @@ public class WebView extends AbsoluteLayout
      *
      * @return the two message ports that form the message channel.
      */
+    @NonNull
     public WebMessagePort[] createWebMessageChannel() {
         checkThread();
         return mProvider.createWebMessageChannel();
@@ -1842,7 +1977,7 @@ public class WebView extends AbsoluteLayout
      * @param message the WebMessage
      * @param targetOrigin the target origin.
      */
-    public void postWebMessage(WebMessage message, Uri targetOrigin) {
+    public void postWebMessage(@NonNull WebMessage message, @NonNull Uri targetOrigin) {
         checkThread();
         mProvider.postMessageToMainFrame(message, targetOrigin);
     }
@@ -1854,6 +1989,7 @@ public class WebView extends AbsoluteLayout
      * @return a WebSettings object that can be used to control this WebView's
      *         settings
      */
+    @NonNull
     public WebSettings getSettings() {
         checkThread();
         return mProvider.getSettings();
@@ -1865,8 +2001,19 @@ public class WebView extends AbsoluteLayout
      * in order to facilitate debugging of web layouts and JavaScript
      * code running inside WebViews. Please refer to WebView documentation
      * for the debugging guide.
-     *
-     * The default is {@code false}.
+     * <p>
+     * In WebView 113.0.5656.0 and later, this is enabled automatically if the
+     * app is declared as
+     * <a href="https://developer.android.com/guide/topics/manifest/application-element#debug">
+     * {@code android:debuggable="true"}</a> in its manifest; otherwise, the
+     * default is {@code false}.
+     * <p>
+     * Enabling web contents debugging allows the state of any WebView in the
+     * app to be inspected and modified by the user via adb. This is a security
+     * liability and should not be enabled in production builds of apps unless
+     * this is an explicitly intended use of the app. More info on
+     * <a href="https://developer.android.com/topic/security/risks/android-debuggable">
+     * secure debug settings</a>.
      *
      * @param enabled whether to enable web contents debugging
      */
@@ -1918,7 +2065,7 @@ public class WebView extends AbsoluteLayout
      *                               in the current process.
      * @throws IllegalArgumentException if the suffix contains a path separator.
      */
-    public static void setDataDirectorySuffix(String suffix) {
+    public static void setDataDirectorySuffix(@NonNull String suffix) {
         WebViewFactory.setDataDirectorySuffix(suffix);
     }
 
@@ -2196,6 +2343,11 @@ public class WebView extends AbsoluteLayout
      *
      * @return the requested renderer priority policy.
      */
+    @InspectableProperty(hasAttributeId = false, enumMapping = {
+            @InspectableProperty.EnumEntry(name = "waived", value = RENDERER_PRIORITY_WAIVED),
+            @InspectableProperty.EnumEntry(name = "bound", value = RENDERER_PRIORITY_BOUND),
+            @InspectableProperty.EnumEntry(name = "important", value = RENDERER_PRIORITY_IMPORTANT)
+    })
     @RendererPriority
     public int getRendererRequestedPriority() {
         return mProvider.getRendererRequestedPriority();
@@ -2208,6 +2360,7 @@ public class WebView extends AbsoluteLayout
      * @return whether this WebView requests a priority of
      * {@link #RENDERER_PRIORITY_WAIVED} when not visible.
      */
+    @InspectableProperty(hasAttributeId = false)
     public boolean getRendererPriorityWaivedWhenNotVisible() {
         return mProvider.getRendererPriorityWaivedWhenNotVisible();
     }
@@ -2316,6 +2469,14 @@ public class WebView extends AbsoluteLayout
 
         public void super_startActivityForResult(Intent intent, int requestCode) {
             WebView.super.startActivityForResult(intent, requestCode);
+        }
+
+        /**
+         * @see View#onApplyWindowInsets(WindowInsets)
+         */
+        @Nullable
+        public WindowInsets super_onApplyWindowInsets(@Nullable WindowInsets insets) {
+            return WebView.super.onApplyWindowInsets(insets);
         }
 
         // ---- Access to non-public methods ----
@@ -2445,7 +2606,7 @@ public class WebView extends AbsoluteLayout
         return WebViewFactory.getProvider();
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private final Looper mWebViewThread = Looper.myLooper();
 
     @UnsupportedAppUsage
@@ -2698,6 +2859,11 @@ public class WebView extends AbsoluteLayout
     }
 
     @Override
+    public void onProvideContentCaptureStructure(@NonNull ViewStructure structure, int flags) {
+        mProvider.getViewDelegate().onProvideContentCaptureStructure(structure, flags);
+    }
+
+    @Override
     public void autofill(SparseArray<AutofillValue>values) {
         mProvider.getViewDelegate().autofill(values);
     }
@@ -2705,6 +2871,31 @@ public class WebView extends AbsoluteLayout
     @Override
     public boolean isVisibleToUserForAutofill(int virtualId) {
         return mProvider.getViewDelegate().isVisibleToUserForAutofill(virtualId);
+    }
+
+    @Override
+    @Nullable
+    public void onCreateVirtualViewTranslationRequests(@NonNull long[] virtualIds,
+            @NonNull @DataFormat int[] supportedFormats,
+            @NonNull Consumer<ViewTranslationRequest> requestsCollector) {
+        mProvider.getViewDelegate().onCreateVirtualViewTranslationRequests(virtualIds,
+                supportedFormats, requestsCollector);
+    }
+
+    @Override
+    public void dispatchCreateViewTranslationRequest(@NonNull Map<AutofillId, long[]> viewIds,
+            @NonNull @DataFormat int[] supportedFormats,
+            @Nullable TranslationCapability capability,
+            @NonNull List<ViewTranslationRequest> requests) {
+        super.dispatchCreateViewTranslationRequest(viewIds, supportedFormats, capability, requests);
+        mProvider.getViewDelegate().dispatchCreateViewTranslationRequest(viewIds, supportedFormats,
+                capability, requests);
+    }
+
+    @Override
+    public void onVirtualViewTranslationResponses(
+            @NonNull LongSparseArray<ViewTranslationResponse> response) {
+        mProvider.getViewDelegate().onVirtualViewTranslationResponses(response);
     }
 
     /** @hide */
@@ -2896,14 +3087,22 @@ public class WebView extends AbsoluteLayout
             return webviewPackage;
         }
 
-        IWebViewUpdateService service = WebViewFactory.getUpdateService();
-        if (service == null) {
-            return null;
-        }
-        try {
-            return service.getCurrentWebViewPackage();
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
+        if (Flags.updateServiceIpcWrapper()) {
+            if (WebViewFactory.isWebViewSupported()) {
+                return WebViewUpdateManager.getInstance().getCurrentWebViewPackage();
+            } else {
+                return null;
+            }
+        } else {
+            IWebViewUpdateService service = WebViewFactory.getUpdateService();
+            if (service == null) {
+                return null;
+            }
+            try {
+                return service.getCurrentWebViewPackage();
+            } catch (RemoteException e) {
+                throw e.rethrowFromSystemServer();
+            }
         }
     }
 
@@ -2941,5 +3140,23 @@ public class WebView extends AbsoluteLayout
         encoder.addProperty("webview:title", mProvider.getTitle());
         encoder.addProperty("webview:url", mProvider.getUrl());
         encoder.addProperty("webview:originalUrl", mProvider.getOriginalUrl());
+    }
+
+    @Override
+    public WindowInsets onApplyWindowInsets(WindowInsets insets) {
+        WindowInsets result = mProvider.getViewDelegate().onApplyWindowInsets(insets);
+        if (result == null) return super.onApplyWindowInsets(insets);
+        return result;
+    }
+
+    @Override
+    @Nullable
+    public PointerIcon onResolvePointerIcon(@NonNull MotionEvent event, int pointerIndex) {
+        PointerIcon icon =
+                mProvider.getViewDelegate().onResolvePointerIcon(event, pointerIndex);
+        if (icon != null) {
+            return icon;
+        }
+        return super.onResolvePointerIcon(event, pointerIndex);
     }
 }

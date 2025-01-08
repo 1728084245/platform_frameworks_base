@@ -15,22 +15,50 @@
  */
 
 #define LOG_TAG "SELinuxJNI"
-#include <utils/Log.h>
 
-#include <nativehelper/JNIHelp.h>
-#include "jni.h"
-#include "core_jni_helpers.h"
-#include "selinux/selinux.h"
-#include "selinux/android.h"
 #include <errno.h>
-#include <memory>
+#include <fcntl.h>
+#include <genfslabelsversion.h>
+#include <nativehelper/JNIPlatformHelp.h>
 #include <nativehelper/ScopedLocalRef.h>
 #include <nativehelper/ScopedUtfChars.h>
+#include <utils/Log.h>
+
+#include <atomic>
+#include <memory>
+
+#include "core_jni_helpers.h"
+#include "jni.h"
+#include "selinux/android.h"
+#include "selinux/selinux.h"
 
 namespace android {
+namespace {
+std::atomic<selabel_handle *> file_sehandle{nullptr};
+
+selabel_handle *GetSELabelHandle_impl(selabel_handle *(*handle_func)(),
+                                      std::atomic<selabel_handle *> *handle_cache) {
+    selabel_handle *h = handle_cache->load();
+    if (h != nullptr) {
+        return h;
+    }
+
+    h = handle_func();
+    selabel_handle* expected = nullptr;
+    if (!handle_cache->compare_exchange_strong(expected, h)) {
+        selabel_close(h);
+        return handle_cache->load();
+    }
+    return h;
+}
+
+selabel_handle *GetSELabelFileBackendHandle() {
+    return GetSELabelHandle_impl(selinux_android_file_context_handle, &file_sehandle);
+}
+}
 
 struct SecurityContext_Delete {
-    void operator()(security_context_t p) const {
+    void operator()(char* p) const {
         freecon(p);
     }
 };
@@ -60,6 +88,44 @@ static jboolean isSELinuxEnforced(JNIEnv *env, jobject) {
     return (security_getenforce() == 1) ? true : false;
 }
 
+static jstring fileSelabelLookup(JNIEnv* env, jobject, jstring pathStr) {
+    if (isSELinuxDisabled) {
+        ALOGE("fileSelabelLookup => SELinux is disabled");
+        return NULL;
+    }
+
+    if (pathStr == NULL) {
+      ALOGE("fileSelabelLookup => got null path.");
+      jniThrowNullPointerException(
+          env, "Trying to get security context of a null path.");
+      return NULL;
+    }
+
+    ScopedUtfChars path(env, pathStr);
+    const char* path_c_str = path.c_str();
+    if (path_c_str == NULL) {
+        ALOGE("fileSelabelLookup => Got null path");
+        jniThrowNullPointerException(
+            env, "Trying to get security context of a null path.");
+        return NULL;
+    }
+
+    auto *selabel_handle = GetSELabelFileBackendHandle();
+    if (selabel_handle == NULL) {
+        ALOGE("fileSelabelLookup => Failed to get SEHandle");
+        return NULL;
+    }
+
+    char* tmp = NULL;
+    if (selabel_lookup(selabel_handle, &tmp, path_c_str, S_IFREG) != 0) {
+      ALOGE("fileSelabelLookup => selabel_lookup for %s failed: %d", path_c_str, errno);
+      return NULL;
+    }
+
+    Unique_SecurityContext context(tmp);
+    return env->NewStringUTF(context.get());
+}
+
 static jstring getFdConInner(JNIEnv *env, jobject fileDescriptor, bool isSocket) {
     if (isSELinuxDisabled) {
         return NULL;
@@ -77,7 +143,7 @@ static jstring getFdConInner(JNIEnv *env, jobject fileDescriptor, bool isSocket)
         return NULL;
     }
 
-    security_context_t tmp = NULL;
+    char* tmp = NULL;
     int ret;
     if (isSocket) {
         ret = getpeercon(fd, &tmp);
@@ -123,7 +189,7 @@ static jstring getFdCon(JNIEnv *env, jobject, jobject fileDescriptor) {
  * Function: setFSCreateCon
  * Purpose: set security context used for creating a new file system object
  * Parameters:
- *       context: security_context_t representing the new context of a file system object,
+ *       context: char* representing the new context of a file system object,
  *                set to NULL to return to the default policy behavior
  * Returns: true on success, false on error
  * Exception: none
@@ -178,8 +244,12 @@ static jboolean setFileCon(JNIEnv *env, jobject, jstring pathStr, jstring contex
     char *tmp = const_cast<char *>(context.c_str());
     int ret = setfilecon(path.c_str(), tmp);
 
-    ALOGV("setFileCon(%s, %s) => %d", path.c_str(), context.c_str(), ret);
-    return (ret == 0) ? true : false;
+    if (ret == 0) {
+        ALOGV("setFileCon(%s, %s) => %d", path.c_str(), context.c_str(), ret);
+        return true;
+    }
+    ALOGE("setFileCon(%s, %s) => %d, err: %s", path.c_str(), context.c_str(), ret, strerror(errno));
+    return false;
 }
 
 /*
@@ -202,7 +272,7 @@ static jstring getFileCon(JNIEnv *env, jobject, jstring pathStr) {
         return NULL;
     }
 
-    security_context_t tmp = NULL;
+    char* tmp = NULL;
     int ret = getfilecon(path.c_str(), &tmp);
     Unique_SecurityContext context(tmp);
 
@@ -228,7 +298,7 @@ static jstring getCon(JNIEnv *env, jobject) {
         return NULL;
     }
 
-    security_context_t tmp = NULL;
+    char* tmp = NULL;
     int ret = getcon(&tmp);
     Unique_SecurityContext context(tmp);
 
@@ -255,7 +325,7 @@ static jstring getPidCon(JNIEnv *env, jobject, jint pid) {
         return NULL;
     }
 
-    security_context_t tmp = NULL;
+    char* tmp = NULL;
     int ret = getpidcon(static_cast<pid_t>(pid), &tmp);
     Unique_SecurityContext context(tmp);
 
@@ -339,8 +409,19 @@ static jboolean native_restorecon(JNIEnv *env, jobject, jstring pathnameStr, jin
 }
 
 /*
+ * Function: getGenfsLabelsVersion
+ * Purpose: get which genfs labels version /vendor uses
+ * Returns: int: genfs labels version of /vendor
+ * Exceptions: none
+ */
+static jint getGenfsLabelsVersion(JNIEnv *, jclass) {
+    return get_genfs_labels_version();
+}
+
+/*
  * JNI registration.
  */
+// clang-format off
 static const JNINativeMethod method_table[] = {
     /* name,                     signature,                    funcPtr */
     { "checkSELinuxAccess"       , "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z" , (void*)checkSELinuxAccess },
@@ -354,7 +435,10 @@ static const JNINativeMethod method_table[] = {
     { "native_restorecon"        , "(Ljava/lang/String;I)Z"                       , (void*)native_restorecon},
     { "setFileContext"           , "(Ljava/lang/String;Ljava/lang/String;)Z"      , (void*)setFileCon       },
     { "setFSCreateContext"       , "(Ljava/lang/String;)Z"                        , (void*)setFSCreateCon   },
+    { "fileSelabelLookup"        , "(Ljava/lang/String;)Ljava/lang/String;"       , (void*)fileSelabelLookup},
+    { "getGenfsLabelsVersion"    , "()I"                                          , (void *)getGenfsLabelsVersion},
 };
+// clang-format on
 
 static int log_callback(int type, const char *fmt, ...) {
     va_list ap;

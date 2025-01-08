@@ -18,6 +18,7 @@ package com.android.internal.telephony;
 
 import android.app.PendingIntent;
 import android.net.Uri;
+import android.os.Bundle;
 
 import java.util.List;
 
@@ -44,38 +45,26 @@ public class ISmsImplBase extends ISms.Stub {
     }
 
     @Override
-    public void sendDataForSubscriber(int subId, String callingPkg, String destAddr,
-            String scAddr, int destPort, byte[] data, PendingIntent sentIntent,
-            PendingIntent deliveryIntent) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void sendDataForSubscriberWithSelfPermissions(int subId, String callingPkg,
+    public void sendDataForSubscriber(int subId, String callingPkg, String callingAttributionTag,
             String destAddr, String scAddr, int destPort, byte[] data, PendingIntent sentIntent,
             PendingIntent deliveryIntent) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public void sendTextForSubscriber(int subId, String callingPkg, String destAddr,
-            String scAddr, String text, PendingIntent sentIntent,
-            PendingIntent deliveryIntent, boolean persistMessageForNonDefaultSmsApp) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void sendTextForSubscriberWithSelfPermissions(int subId, String callingPkg,
+    public void sendTextForSubscriber(int subId, String callingPkg, String callingAttributionTag,
             String destAddr, String scAddr, String text, PendingIntent sentIntent,
-            PendingIntent deliveryIntent, boolean persistMessage) {
+            PendingIntent deliveryIntent, boolean persistMessageForNonDefaultSmsApp,
+            long messageId) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public void sendTextForSubscriberWithOptions(int subId, String callingPkg, String destAddr,
-            String scAddr, String text, PendingIntent sentIntent,
-            PendingIntent deliveryIntent, boolean persistMessageForNonDefaultSmsApp,
-            int priority, boolean expectMore, int validityPeriod) {
+    public void sendTextForSubscriberWithOptions(int subId, String callingPkg,
+            String callingAttributionTag, String destAddr, String scAddr, String text,
+            PendingIntent sentIntent, PendingIntent deliveryIntent,
+            boolean persistMessageForNonDefaultSmsApp, int priority, boolean expectMore,
+            int validityPeriod) {
         throw new UnsupportedOperationException();
     }
 
@@ -87,15 +76,16 @@ public class ISmsImplBase extends ISms.Stub {
 
     @Override
     public void sendMultipartTextForSubscriber(int subId, String callingPkg,
-            String destinationAddress, String scAddress,
+            String callingAttributionTag, String destinationAddress, String scAddress,
             List<String> parts, List<PendingIntent> sentIntents,
-            List<PendingIntent> deliveryIntents, boolean persistMessageForNonDefaultSmsApp) {
+            List<PendingIntent> deliveryIntents, boolean persistMessageForNonDefaultSmsApp,
+            long messageId) {
         throw new UnsupportedOperationException();
     }
 
     @Override
     public void sendMultipartTextForSubscriberWithOptions(int subId, String callingPkg,
-            String destinationAddress, String scAddress,
+            String callingAttributionTag, String destinationAddress, String scAddress,
             List<String> parts, List<PendingIntent> sentIntents,
             List<PendingIntent> deliveryIntents, boolean persistMessageForNonDefaultSmsApp,
             int priority, boolean expectMore, int validityPeriod) {
@@ -172,15 +162,21 @@ public class ISmsImplBase extends ISms.Stub {
     }
 
     @Override
-    public void sendStoredText(int subId, String callingPkg, Uri messageUri, String scAddress,
-            PendingIntent sentIntent, PendingIntent deliveryIntent) {
+    public void sendStoredText(int subId, String callingPkg, String callingAttributionTag,
+            Uri messageUri, String scAddress, PendingIntent sentIntent,
+            PendingIntent deliveryIntent) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public void sendStoredMultipartText(int subId, String callingPkg, Uri messageUri,
-            String scAddress, List<PendingIntent> sentIntents,
+    public void sendStoredMultipartText(int subId, String callingPkg, String callingAttributionTag,
+            Uri messageUri, String scAddress, List<PendingIntent> sentIntents,
             List<PendingIntent> deliveryIntents) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Bundle getCarrierConfigValuesForSubscriber(int subId) {
         throw new UnsupportedOperationException();
     }
 
@@ -190,8 +186,51 @@ public class ISmsImplBase extends ISms.Stub {
     }
 
     @Override
-    public int checkSmsShortCodeDestination(
-            int subid, String callingApk, String destAddress, String countryIso) {
+    public String createAppSpecificSmsTokenWithPackageInfo(
+            int subId, String callingPkg, String prefixes, PendingIntent intent) {
         throw new UnsupportedOperationException();
     }
+
+    @Override
+    public void setStorageMonitorMemoryStatusOverride(int subId, boolean storageAvailable) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void clearStorageMonitorMemoryStatusOverride(int subId) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public int checkSmsShortCodeDestination(int subid, String callingPackage,
+            String callingFeatureId, String destAddress, String countryIso) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public String getSmscAddressFromIccEfForSubscriber(int subId, String callingPackage) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean setSmscAddressOnIccEfForSubscriber(
+            String smsc, int subId, String callingPackage) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public int getSmsCapacityOnIccForSubscriber(int subId) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean resetAllCellBroadcastRanges(int subId) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public long getWapMessageSize(String locationUrl) {
+        throw new UnsupportedOperationException();
+    }
+
 }

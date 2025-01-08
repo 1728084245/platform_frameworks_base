@@ -37,7 +37,7 @@ constexpr const uint32_t TYPE_STRING = android::ResTable_map::TYPE_STRING;
 }  // namespace
 
 TEST(ResourceValuesTest, PluralEquals) {
-  StringPool pool;
+  android::StringPool pool;
 
   Plural a;
   a.values[Plural::One] = util::make_unique<String>(pool.MakeRef("one"));
@@ -56,18 +56,19 @@ TEST(ResourceValuesTest, PluralEquals) {
 }
 
 TEST(ResourceValuesTest, PluralClone) {
-  StringPool pool;
+  android::StringPool pool;
 
   Plural a;
   a.values[Plural::One] = util::make_unique<String>(pool.MakeRef("one"));
   a.values[Plural::Other] = util::make_unique<String>(pool.MakeRef("other"));
 
-  std::unique_ptr<Plural> b(a.Clone(&pool));
+  CloningValueTransformer cloner(&pool);
+  std::unique_ptr<Plural> b(a.Transform(cloner));
   EXPECT_TRUE(a.Equals(b.get()));
 }
 
 TEST(ResourceValuesTest, ArrayEquals) {
-  StringPool pool;
+  android::StringPool pool;
 
   Array a;
   a.elements.push_back(util::make_unique<String>(pool.MakeRef("one")));
@@ -91,18 +92,19 @@ TEST(ResourceValuesTest, ArrayEquals) {
 }
 
 TEST(ResourceValuesTest, ArrayClone) {
-  StringPool pool;
+  android::StringPool pool;
 
   Array a;
   a.elements.push_back(util::make_unique<String>(pool.MakeRef("one")));
   a.elements.push_back(util::make_unique<String>(pool.MakeRef("two")));
 
-  std::unique_ptr<Array> b(a.Clone(&pool));
+  CloningValueTransformer cloner(&pool);
+  std::unique_ptr<Array> b(a.Transform(cloner));
   EXPECT_TRUE(a.Equals(b.get()));
 }
 
 TEST(ResourceValuesTest, StyleEquals) {
-  StringPool pool;
+  android::StringPool pool;
 
   std::unique_ptr<Style> a = test::StyleBuilder()
       .SetParent("android:style/Parent")
@@ -160,29 +162,60 @@ TEST(ResourceValuesTest, StyleClone) {
       .AddItem("android:attr/bar", ResourceUtils::TryParseInt("2"))
       .Build();
 
-  std::unique_ptr<Style> b(a->Clone(nullptr));
+  CloningValueTransformer cloner(nullptr);
+  std::unique_ptr<Style> b(a->Transform(cloner));
   EXPECT_TRUE(a->Equals(b.get()));
 }
 
 TEST(ResourcesValuesTest, StringClones) {
-  StringPool pool_a;
-  StringPool pool_b;
+  android::StringPool pool_a;
+  android::StringPool pool_b;
 
-  String str_a(pool_a.MakeRef("hello", StringPool::Context(test::ParseConfigOrDie("en"))));
+  String str_a(pool_a.MakeRef("hello", android::StringPool::Context(test::ParseConfigOrDie("en"))));
 
   ASSERT_THAT(pool_a, SizeIs(1u));
   EXPECT_THAT(pool_a.strings()[0]->context.config, Eq(test::ParseConfigOrDie("en")));
   EXPECT_THAT(pool_a.strings()[0]->value, StrEq("hello"));
 
-  std::unique_ptr<String> str_b(str_a.Clone(&pool_b));
+  CloningValueTransformer cloner(&pool_b);
+  str_a.Transform(cloner);
   ASSERT_THAT(pool_b, SizeIs(1u));
   EXPECT_THAT(pool_b.strings()[0]->context.config, Eq(test::ParseConfigOrDie("en")));
   EXPECT_THAT(pool_b.strings()[0]->value, StrEq("hello"));
 }
 
+TEST(ResourcesValuesTest, StringEquals) {
+  android::StringPool pool;
+
+  String str(pool.MakeRef("hello", android::StringPool::Context(test::ParseConfigOrDie("en"))));
+  String str2(pool.MakeRef("hello"));
+  EXPECT_TRUE(str.Equals(&str2));
+  EXPECT_TRUE(str2.Equals(&str));
+
+  String str3(pool.MakeRef("how are you"));
+  EXPECT_FALSE(str.Equals(&str3));
+}
+
+TEST(ResourcesValuesTest, StyledStringEquals) {
+  android::StringPool pool;
+
+  StyledString ss(pool.MakeRef(android::StyleString{"hello", {{"b", 0, 1}, {"u", 2, 4}}}));
+  StyledString ss2(pool.MakeRef(android::StyleString{"hello", {{"b", 0, 1}, {"u", 2, 4}}}));
+  StyledString ss3(pool.MakeRef(android::StyleString{"hi", {{"b", 0, 1}, {"u", 2, 4}}}));
+  StyledString ss4(pool.MakeRef(android::StyleString{"hello", {{"b", 0, 1}}}));
+  StyledString ss5(pool.MakeRef(android::StyleString{"hello", {{"b", 0, 1}, {"u", 3, 4}}}));
+  StyledString ss6(pool.MakeRef(android::StyleString{"hello", {{"b", 0, 1}, {"s", 2, 4}}}));
+  EXPECT_TRUE(ss.Equals(&ss2));
+  EXPECT_TRUE(ss2.Equals(&ss));
+  EXPECT_FALSE(ss.Equals(&ss3));
+  EXPECT_FALSE(ss.Equals(&ss4));
+  EXPECT_FALSE(ss.Equals(&ss5));
+  EXPECT_FALSE(ss.Equals(&ss6));
+}
+
 TEST(ResourceValuesTest, StyleMerges) {
-  StringPool pool_a;
-  StringPool pool_b;
+  android::StringPool pool_a;
+  android::StringPool pool_b;
 
   std::unique_ptr<Style> a =
       test::StyleBuilder()
@@ -200,7 +233,7 @@ TEST(ResourceValuesTest, StyleMerges) {
 
   a->MergeWith(b.get(), &pool_a);
 
-  StringPool pool;
+  android::StringPool pool;
   std::unique_ptr<Style> expected =
       test::StyleBuilder()
           .SetParent("android:style/OverlayParent")

@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
 android_test {
     name: "FrameworkTestRunnerTests",
 
@@ -25,11 +29,14 @@ android_test {
     //
 
     libs: [
-        "android.test.runner",
-        "android.test.base",
-        "android.test.mock",
+        "android.test.runner.impl",
+        "android.test.base.stubs.system",
+        "android.test.mock.stubs.system",
     ],
-    static_libs: ["junit"],
+    static_libs: [
+        "junit",
+        "androidx.test.rules",
+    ],
 
     // Include all test java files.
     srcs: ["src/**/*.java"],

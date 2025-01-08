@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 
+#include <android-base/macros.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
-
-#include "protos/graphicsstats.pb.h"
-#include "service/GraphicsStatsService.h"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#include "protos/graphicsstats.pb.h"
+#include "service/GraphicsStatsService.h"
 
 using namespace android;
 using namespace android::uirenderer;
@@ -49,16 +50,19 @@ std::string findRootPath() {
 
 // No code left untested
 TEST(GraphicsStats, findRootPath) {
-#ifdef __LP64__
-    std::string expected = "/data/nativetest64/hwui_unit_tests";
-#else
-    std::string expected = "/data/nativetest/hwui_unit_tests";
-#endif
-    EXPECT_EQ(expected, findRootPath());
+    // Different tools/infrastructure seem to push this to different locations. It shouldn't really
+    // matter where the binary is, so add new locations here as needed. This test still seems good
+    // as it's nice to understand the possibility space, and ensure findRootPath continues working
+    // as expected.
+    std::string acceptableLocations[] = {"/data/nativetest/hwui_unit_tests",
+                                         "/data/nativetest64/hwui_unit_tests",
+                                         "/data/local/tmp/nativetest/hwui_unit_tests/" ABI_STRING};
+    EXPECT_THAT(acceptableLocations, ::testing::Contains(findRootPath()));
 }
 
 TEST(GraphicsStats, saveLoad) {
     std::string path = findRootPath() + "/test_saveLoad";
+    uid_t uid = 123;
     std::string packageName = "com.test.saveLoad";
     MockProfileData mockData;
     mockData.editJankFrameCount() = 20;
@@ -72,12 +76,13 @@ TEST(GraphicsStats, saveLoad) {
     for (size_t i = 0; i < mockData.editSlowFrameCounts().size(); i++) {
         mockData.editSlowFrameCounts()[i] = (i % 5) + 1;
     }
-    GraphicsStatsService::saveBuffer(path, packageName, 5, 3000, 7000, &mockData);
+    GraphicsStatsService::saveBuffer(path, uid, packageName, 5, 3000, 7000, &mockData);
     protos::GraphicsStatsProto loadedProto;
     EXPECT_TRUE(GraphicsStatsService::parseFromFile(path, &loadedProto));
     // Clean up the file
     unlink(path.c_str());
 
+    EXPECT_EQ(uid, loadedProto.uid());
     EXPECT_EQ(packageName, loadedProto.package_name());
     EXPECT_EQ(5, loadedProto.version_code());
     EXPECT_EQ(3000, loadedProto.stats_start());
@@ -106,6 +111,7 @@ TEST(GraphicsStats, saveLoad) {
 TEST(GraphicsStats, merge) {
     std::string path = findRootPath() + "/test_merge";
     std::string packageName = "com.test.merge";
+    uid_t uid = 123;
     MockProfileData mockData;
     mockData.editJankFrameCount() = 20;
     mockData.editTotalFrameCount() = 100;
@@ -118,7 +124,7 @@ TEST(GraphicsStats, merge) {
     for (size_t i = 0; i < mockData.editSlowFrameCounts().size(); i++) {
         mockData.editSlowFrameCounts()[i] = (i % 5) + 1;
     }
-    GraphicsStatsService::saveBuffer(path, packageName, 5, 3000, 7000, &mockData);
+    GraphicsStatsService::saveBuffer(path, uid, packageName, 5, 3000, 7000, &mockData);
     mockData.editJankFrameCount() = 50;
     mockData.editTotalFrameCount() = 500;
     for (size_t i = 0; i < mockData.editFrameCounts().size(); i++) {
@@ -127,13 +133,15 @@ TEST(GraphicsStats, merge) {
     for (size_t i = 0; i < mockData.editSlowFrameCounts().size(); i++) {
         mockData.editSlowFrameCounts()[i] = ((i % 10) + 1) * 2;
     }
-    GraphicsStatsService::saveBuffer(path, packageName, 5, 7050, 10000, &mockData);
+
+    GraphicsStatsService::saveBuffer(path, uid, packageName, 5, 7050, 10000, &mockData);
 
     protos::GraphicsStatsProto loadedProto;
     EXPECT_TRUE(GraphicsStatsService::parseFromFile(path, &loadedProto));
     // Clean up the file
     unlink(path.c_str());
 
+    EXPECT_EQ(uid, loadedProto.uid());
     EXPECT_EQ(packageName, loadedProto.package_name());
     EXPECT_EQ(5, loadedProto.version_code());
     EXPECT_EQ(3000, loadedProto.stats_start());

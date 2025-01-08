@@ -16,11 +16,16 @@
 
 #pragma once
 
-#include "utils/Macros.h"
-
 #include <utils/Timers.h>
 
+#include <optional>
 #include <string>
+
+#include "Properties.h"
+#include "SkSize.h"
+#include "SkippedFrameInfo.h"
+#include "utils/ForceDark.h"
+#include "utils/Macros.h"
 
 namespace android {
 namespace uirenderer {
@@ -38,8 +43,7 @@ class ErrorHandler {
 public:
     virtual void onError(const std::string& message) = 0;
 
-protected:
-    virtual ~ErrorHandler() {}
+    virtual ~ErrorHandler() = default;
 };
 
 class TreeObserver {
@@ -51,7 +55,7 @@ public:
     virtual void onMaybeRemovedFromTree(RenderNode* node) = 0;
 
 protected:
-    virtual ~TreeObserver() {}
+    virtual ~TreeObserver() = default;
 };
 
 // This would be a struct, but we want to PREVENT_COPY_AND_ASSIGN
@@ -70,8 +74,7 @@ public:
         MODE_RT_ONLY,
     };
 
-    TreeInfo(TraversalMode mode, renderthread::CanvasContext& canvasContext)
-            : mode(mode), prepareTextures(mode == MODE_FULL), canvasContext(canvasContext) {}
+    TreeInfo(TraversalMode mode, renderthread::CanvasContext& canvasContext);
 
     TraversalMode mode;
     // TODO: Remove this? Currently this is used to signal to stop preparing
@@ -87,11 +90,21 @@ public:
 
     // Must not be null during actual usage
     DamageAccumulator* damageAccumulator = nullptr;
+    int64_t damageGenerationId = 0;
 
     LayerUpdateQueue* layerUpdateQueue = nullptr;
     ErrorHandler* errorHandler = nullptr;
 
     bool updateWindowPositions = false;
+
+    int disableForceDark;
+    ForceDarkType forceDarkType = ForceDarkType::NONE;
+
+    const SkISize screenSize;
+
+    int stretchEffectCount = 0;
+
+    bool forceDrawFrame = false;
 
     struct Out {
         bool hasFunctors = false;
@@ -101,19 +114,23 @@ public:
         // animate itself, such as if hasFunctors is true
         // This is only set if hasAnimations is true
         bool requiresUiRedraw = false;
-        // This is set to true if draw() can be called this frame
-        // false means that we must delay until the next vsync pulse as frame
+        // This is set to nullopt if draw() can be called this frame
+        // A value means that we must delay until the next vsync pulse as frame
         // production is outrunning consumption
-        // NOTE that if this is false CanvasContext will set either requiresUiRedraw
+        // NOTE that if this has a value CanvasContext will set either requiresUiRedraw
         // *OR* will post itself for the next vsync automatically, use this
         // only to avoid calling draw()
-        bool canDrawThisFrame = true;
+        std::optional<SkippedFrameReason> skippedFrameReason;
         // Sentinel for animatedImageDelay meaning there is no need to post such
         // a message.
         static constexpr nsecs_t kNoAnimatedImageDelay = -1;
         // This is used to post a message to redraw when it is time to draw the
         // next frame of an AnimatedImageDrawable.
         nsecs_t animatedImageDelay = kNoAnimatedImageDelay;
+        // This is used to determine if there were only TextureView updates in this frame.
+        // This info is passed to SurfaceFlinger to determine whether it should use vsyncIds
+        // for refresh rate selection.
+        bool solelyTextureViewUpdates = true;
     } out;
 
     // This flag helps to disable projection for receiver nodes that do not have any backward

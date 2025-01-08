@@ -18,7 +18,6 @@ package android.os;
 
 import android.app.Activity;
 import android.hardware.display.DisplayManager;
-import android.os.Bundle;
 import android.provider.Settings;
 import android.view.View;
 import android.view.View.OnClickListener;
@@ -43,7 +42,8 @@ public class BrightnessLimit extends Activity implements OnClickListener {
 
     public void onClick(View v) {
         DisplayManager dm = getSystemService(DisplayManager.class);
-        dm.setTemporaryBrightness(0);
+        final int displayId = getBaseContext().getDisplay().getDisplayId();
+        dm.setTemporaryBrightness(displayId, 0.0f);
         Settings.System.putInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS, 0);
     }
 }

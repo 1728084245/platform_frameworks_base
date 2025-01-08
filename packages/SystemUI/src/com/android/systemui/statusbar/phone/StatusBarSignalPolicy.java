@@ -16,100 +16,159 @@
 
 package com.android.systemui.statusbar.phone;
 
+import static com.android.systemui.Flags.statusBarSignalPolicyRefactor;
+
+import android.annotation.NonNull;
 import android.content.Context;
-import android.content.res.ColorStateList;
-import android.graphics.Rect;
 import android.os.Handler;
-import android.os.Looper;
-import android.telephony.SubscriptionInfo;
 import android.util.ArraySet;
 import android.util.Log;
-import android.view.LayoutInflater;
-import android.view.View;
-import android.view.ViewGroup;
-import android.view.accessibility.AccessibilityEvent;
-import android.widget.ImageView;
-import com.android.settingslib.graph.SignalDrawable;
-import com.android.systemui.Dependency;
-import com.android.systemui.R;
-import com.android.systemui.statusbar.phone.StatusBarIconController;
-import com.android.systemui.statusbar.policy.DarkIconDispatcher;
-import com.android.systemui.statusbar.policy.NetworkController;
-import com.android.systemui.statusbar.policy.NetworkController.IconState;
-import com.android.systemui.statusbar.policy.NetworkControllerImpl;
+
+import com.android.settingslib.mobile.TelephonyIcons;
+import com.android.systemui.CoreStartable;
+import com.android.systemui.dagger.SysUISingleton;
+import com.android.systemui.res.R;
+import com.android.systemui.statusbar.connectivity.IconState;
+import com.android.systemui.statusbar.connectivity.NetworkController;
+import com.android.systemui.statusbar.connectivity.SignalCallback;
+import com.android.systemui.statusbar.phone.ui.StatusBarIconController;
+import com.android.systemui.statusbar.pipeline.airplane.domain.interactor.AirplaneModeInteractor;
 import com.android.systemui.statusbar.policy.SecurityController;
 import com.android.systemui.tuner.TunerService;
 import com.android.systemui.tuner.TunerService.Tunable;
+import com.android.systemui.util.CarrierConfigTracker;
+import com.android.systemui.util.kotlin.JavaAdapter;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import javax.inject.Inject;
 
-public class StatusBarSignalPolicy implements NetworkControllerImpl.SignalCallback,
-        SecurityController.SecurityControllerCallback, Tunable {
+/** Controls the signal policies for icons shown in the statusbar. */
+@SysUISingleton
+public class StatusBarSignalPolicy
+        implements SignalCallback,
+                SecurityController.SecurityControllerCallback,
+                Tunable,
+                CoreStartable {
     private static final String TAG = "StatusBarSignalPolicy";
+    private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
 
     private final String mSlotAirplane;
     private final String mSlotMobile;
-    private final String mSlotWifi;
     private final String mSlotEthernet;
     private final String mSlotVpn;
+    private final String mSlotNoCalling;
+    private final String mSlotCallStrength;
 
     private final Context mContext;
     private final StatusBarIconController mIconController;
     private final NetworkController mNetworkController;
     private final SecurityController mSecurityController;
     private final Handler mHandler = Handler.getMain();
+    private final CarrierConfigTracker mCarrierConfigTracker;
+    private final TunerService mTunerService;
+    private final JavaAdapter mJavaAdapter;
+    private final AirplaneModeInteractor mAirplaneModeInteractor;
 
-    private boolean mBlockAirplane;
-    private boolean mBlockMobile;
-    private boolean mBlockWifi;
-    private boolean mBlockEthernet;
-    private boolean mActivityEnabled;
-    private boolean mForceBlockWifi;
+    private boolean mHideAirplane;
+    private boolean mHideMobile;
+    private boolean mHideEthernet;
+    private final boolean mActivityEnabled;
 
-    // Track as little state as possible, and only for padding purposes
-    private boolean mIsAirplaneMode = false;
-    private boolean mWifiVisible = false;
+    private final ArrayList<CallIndicatorIconState> mCallIndicatorStates = new ArrayList<>();
+    private boolean mInitialized;
 
-    private ArrayList<MobileIconState> mMobileStates = new ArrayList<MobileIconState>();
-    private WifiIconState mWifiIconState = new WifiIconState();
-
-    public StatusBarSignalPolicy(Context context, StatusBarIconController iconController) {
+    @Inject
+    public StatusBarSignalPolicy(
+            Context context,
+            StatusBarIconController iconController,
+            CarrierConfigTracker carrierConfigTracker,
+            NetworkController networkController,
+            SecurityController securityController,
+            TunerService tunerService,
+            JavaAdapter javaAdapter,
+            AirplaneModeInteractor airplaneModeInteractor
+    ) {
         mContext = context;
+
+        mIconController = iconController;
+        mCarrierConfigTracker = carrierConfigTracker;
+        mJavaAdapter = javaAdapter;
+        mNetworkController = networkController;
+        mSecurityController = securityController;
+        mTunerService = tunerService;
+        mAirplaneModeInteractor = airplaneModeInteractor;
 
         mSlotAirplane = mContext.getString(com.android.internal.R.string.status_bar_airplane);
         mSlotMobile   = mContext.getString(com.android.internal.R.string.status_bar_mobile);
-        mSlotWifi     = mContext.getString(com.android.internal.R.string.status_bar_wifi);
         mSlotEthernet = mContext.getString(com.android.internal.R.string.status_bar_ethernet);
         mSlotVpn      = mContext.getString(com.android.internal.R.string.status_bar_vpn);
+        mSlotNoCalling = mContext.getString(com.android.internal.R.string.status_bar_no_calling);
+        mSlotCallStrength =
+                mContext.getString(com.android.internal.R.string.status_bar_call_strength);
         mActivityEnabled = mContext.getResources().getBoolean(R.bool.config_showActivity);
+    }
 
-        mIconController = iconController;
-        mNetworkController = Dependency.get(NetworkController.class);
-        mSecurityController = Dependency.get(SecurityController.class);
+    @Override
+    public void start() {
+        if (!statusBarSignalPolicyRefactor()) {
+            return;
+        }
 
-        Dependency.get(TunerService.class).addTunable(this, StatusBarIconController.ICON_BLACKLIST);
+        mTunerService.addTunable(this, StatusBarIconController.ICON_HIDE_LIST);
         mNetworkController.addCallback(this);
         mSecurityController.addCallback(this);
+
+        mJavaAdapter.alwaysCollectFlow(
+                mAirplaneModeInteractor.isAirplaneMode(), this::updateAirplaneModeIcon);
+    }
+
+    /** Call to initialize and register this class with the system. */
+    public void init() {
+        if (mInitialized || statusBarSignalPolicyRefactor()) {
+            return;
+        }
+        mInitialized = true;
+        mTunerService.addTunable(this, StatusBarIconController.ICON_HIDE_LIST);
+        mNetworkController.addCallback(this);
+        mSecurityController.addCallback(this);
+
+        if (statusBarSignalPolicyRefactor()) {
+            mJavaAdapter.alwaysCollectFlow(
+                    mAirplaneModeInteractor.isAirplaneMode(),
+                    this::updateAirplaneModeIcon);
+        }
     }
 
     public void destroy() {
-        Dependency.get(TunerService.class).removeTunable(this);
+        mTunerService.removeTunable(this);
         mNetworkController.removeCallback(this);
         mSecurityController.removeCallback(this);
     }
 
     private void updateVpn() {
         boolean vpnVisible = mSecurityController.isVpnEnabled();
-        int vpnIconId = currentVpnIconId(mSecurityController.isVpnBranded());
+        int vpnIconId = currentVpnIconId(
+                mSecurityController.isVpnBranded(),
+                mSecurityController.isVpnValidated());
 
-        mIconController.setIcon(mSlotVpn, vpnIconId, null);
+        mIconController.setIcon(mSlotVpn, vpnIconId,
+                mContext.getResources().getString(R.string.accessibility_vpn_on));
         mIconController.setIconVisibility(mSlotVpn, vpnVisible);
     }
 
-    private int currentVpnIconId(boolean isBranded) {
-        return isBranded ? R.drawable.stat_sys_branded_vpn : R.drawable.stat_sys_vpn_ic;
+    private int currentVpnIconId(boolean isBranded, boolean isValidated) {
+        if (isBranded) {
+            return isValidated
+                    ? R.drawable.stat_sys_branded_vpn
+                    : R.drawable.stat_sys_no_internet_branded_vpn;
+        } else {
+            return isValidated
+                    ? R.drawable.stat_sys_vpn_ic
+                    : R.drawable.stat_sys_no_internet_vpn_ic;
+        }
     }
 
     /**
@@ -122,21 +181,19 @@ public class StatusBarSignalPolicy implements NetworkControllerImpl.SignalCallba
 
     @Override
     public void onTuningChanged(String key, String newValue) {
-        if (!StatusBarIconController.ICON_BLACKLIST.equals(key)) {
+        if (!StatusBarIconController.ICON_HIDE_LIST.equals(key)) {
             return;
         }
-        ArraySet<String> blockList = StatusBarIconController.getIconBlacklist(newValue);
-        boolean blockAirplane = blockList.contains(mSlotAirplane);
-        boolean blockMobile = blockList.contains(mSlotMobile);
-        boolean blockWifi = blockList.contains(mSlotWifi);
-        boolean blockEthernet = blockList.contains(mSlotEthernet);
+        ArraySet<String> hideList = StatusBarIconController.getIconHideList(mContext, newValue);
+        boolean hideAirplane = hideList.contains(mSlotAirplane);
+        boolean hideMobile = hideList.contains(mSlotMobile);
+        boolean hideEthernet = hideList.contains(mSlotEthernet);
 
-        if (blockAirplane != mBlockAirplane || blockMobile != mBlockMobile
-                || blockEthernet != mBlockEthernet || blockWifi != mBlockWifi) {
-            mBlockAirplane = blockAirplane;
-            mBlockMobile = blockMobile;
-            mBlockEthernet = blockEthernet;
-            mBlockWifi = blockWifi || mForceBlockWifi;
+        if (hideAirplane != mHideAirplane || hideMobile != mHideMobile
+                || hideEthernet != mHideEthernet) {
+            mHideAirplane = hideAirplane;
+            mHideMobile = hideMobile;
+            mHideEthernet = hideEthernet;
             // Re-register to get new callbacks.
             mNetworkController.removeCallback(this);
             mNetworkController.addCallback(this);
@@ -144,81 +201,35 @@ public class StatusBarSignalPolicy implements NetworkControllerImpl.SignalCallba
     }
 
     @Override
-    public void setWifiIndicators(boolean enabled, IconState statusIcon, IconState qsIcon,
-            boolean activityIn, boolean activityOut, String description, boolean isTransient,
-            String statusLabel) {
-
-        boolean visible = statusIcon.visible && !mBlockWifi;
-        boolean in = activityIn && mActivityEnabled && visible;
-        boolean out = activityOut && mActivityEnabled && visible;
-
-        WifiIconState newState = mWifiIconState.copy();
-
-        newState.visible = visible;
-        newState.resId = statusIcon.icon;
-        newState.activityIn = in;
-        newState.activityOut = out;
-        newState.slot = mSlotWifi;
-        newState.airplaneSpacerVisible = mIsAirplaneMode;
-        newState.contentDescription = statusIcon.contentDescription;
-
-        MobileIconState first = getFirstMobileState();
-        newState.signalSpacerVisible = first != null && first.typeId != 0;
-
-        updateWifiIconWithState(newState);
-        mWifiIconState = newState;
-    }
-
-    private void updateShowWifiSignalSpacer(WifiIconState state) {
-        MobileIconState first = getFirstMobileState();
-        state.signalSpacerVisible = first != null && first.typeId != 0;
-    }
-
-    private void updateWifiIconWithState(WifiIconState state) {
-        if (state.visible && state.resId > 0) {
-            mIconController.setSignalIcon(mSlotWifi, state);
-            mIconController.setIconVisibility(mSlotWifi, true);
-        } else {
-            mIconController.setIconVisibility(mSlotWifi, false);
+    public void setCallIndicator(@NonNull IconState statusIcon, int subId) {
+        if (DEBUG) {
+            Log.d(TAG, "setCallIndicator: "
+                    + "statusIcon = " + statusIcon + ","
+                    + "subId = " + subId);
         }
-    }
-
-    @Override
-    public void setMobileDataIndicators(IconState statusIcon, IconState qsIcon, int statusType,
-            int qsType, boolean activityIn, boolean activityOut, String typeContentDescription,
-            String description, boolean isWide, int subId, boolean roaming) {
-        MobileIconState state = getState(subId);
+        CallIndicatorIconState state = getNoCallingState(subId);
         if (state == null) {
             return;
         }
-
-        // Visibility of the data type indicator changed
-        boolean typeChanged = statusType != state.typeId && (statusType == 0 || state.typeId == 0);
-
-        state.visible = statusIcon.visible && !mBlockMobile;
-        state.strengthId = statusIcon.icon;
-        state.typeId = statusType;
-        state.contentDescription = statusIcon.contentDescription;
-        state.typeContentDescription = typeContentDescription;
-        state.roaming = roaming;
-        state.activityIn = activityIn && mActivityEnabled;
-        state.activityOut = activityOut && mActivityEnabled;
-
-        // Always send a copy to maintain value type semantics
-        mIconController.setMobileIcons(mSlotMobile, MobileIconState.copyStates(mMobileStates));
-
-        if (typeChanged) {
-            WifiIconState wifiCopy = mWifiIconState.copy();
-            updateShowWifiSignalSpacer(wifiCopy);
-            if (!Objects.equals(wifiCopy, mWifiIconState)) {
-                updateWifiIconWithState(wifiCopy);
-                mWifiIconState = wifiCopy;
-            }
+        if (statusIcon.icon == R.drawable.ic_shade_no_calling_sms) {
+            state.isNoCalling = statusIcon.visible;
+            state.noCallingDescription = statusIcon.contentDescription;
+        } else {
+            state.callStrengthResId = statusIcon.icon;
+            state.callStrengthDescription = statusIcon.contentDescription;
         }
+        if (mCarrierConfigTracker.getCallStrengthConfig(subId)) {
+            mIconController.setCallStrengthIcons(mSlotCallStrength,
+                    CallIndicatorIconState.copyStates(mCallIndicatorStates));
+        } else {
+            mIconController.removeIcon(mSlotCallStrength, subId);
+        }
+        mIconController.setNoCallingIcons(mSlotNoCalling,
+                CallIndicatorIconState.copyStates(mCallIndicatorStates));
     }
 
-    private MobileIconState getState(int subId) {
-        for (MobileIconState state : mMobileStates) {
+    private CallIndicatorIconState getNoCallingState(int subId) {
+        for (CallIndicatorIconState state : mCallIndicatorStates) {
             if (state.subId == subId) {
                 return state;
             }
@@ -227,56 +238,8 @@ public class StatusBarSignalPolicy implements NetworkControllerImpl.SignalCallba
         return null;
     }
 
-    private MobileIconState getFirstMobileState() {
-        if (mMobileStates.size() > 0) {
-            return mMobileStates.get(0);
-        }
-
-        return null;
-    }
-
-
-    /**
-     * It is expected that a call to setSubs will be immediately followed by setMobileDataIndicators
-     * so we don't have to update the icon manager at this point, just remove the old ones
-     * @param subs list of mobile subscriptions, displayed as mobile data indicators (max 8)
-     */
-    @Override
-    public void setSubs(List<SubscriptionInfo> subs) {
-        if (hasCorrectSubs(subs)) {
-            return;
-        }
-
-        mIconController.removeAllIconsForSlot(mSlotMobile);
-        mMobileStates.clear();
-        final int n = subs.size();
-        for (int i = 0; i < n; i++) {
-            mMobileStates.add(new MobileIconState(subs.get(i).getSubscriptionId()));
-        }
-    }
-
-    private boolean hasCorrectSubs(List<SubscriptionInfo> subs) {
-        final int N = subs.size();
-        if (N != mMobileStates.size()) {
-            return false;
-        }
-        for (int i = 0; i < N; i++) {
-            if (mMobileStates.get(i).subId != subs.get(i).getSubscriptionId()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    @Override
-    public void setNoSims(boolean show, boolean simDetected) {
-        // Noop yay!
-    }
-
-
     @Override
     public void setEthernetIndicators(IconState state) {
-        boolean visible = state.visible && !mBlockEthernet;
         int resId = state.icon;
         String description = state.contentDescription;
 
@@ -290,11 +253,19 @@ public class StatusBarSignalPolicy implements NetworkControllerImpl.SignalCallba
 
     @Override
     public void setIsAirplaneMode(IconState icon) {
-        mIsAirplaneMode = icon.visible && !mBlockAirplane;
+        if (statusBarSignalPolicyRefactor()) {
+            return;
+        }
+
+        if (DEBUG) {
+            Log.d(TAG, "setIsAirplaneMode: "
+                    + "icon = " + (icon == null ? "" : icon.toString()));
+        }
+        boolean isAirplaneMode = icon.visible && !mHideAirplane;
         int resId = icon.icon;
         String description = icon.contentDescription;
 
-        if (mIsAirplaneMode && resId > 0) {
+        if (isAirplaneMode && resId > 0) {
             mIconController.setIcon(mSlotAirplane, resId, description);
             mIconController.setIconVisibility(mSlotAirplane, true);
         } else {
@@ -302,161 +273,78 @@ public class StatusBarSignalPolicy implements NetworkControllerImpl.SignalCallba
         }
     }
 
-    @Override
-    public void setMobileDataEnabled(boolean enabled) {
-        // Don't care.
-    }
-
-    private static abstract class SignalIconState {
-        public boolean visible;
-        public boolean activityOut;
-        public boolean activityIn;
-        public String slot;
-        public String contentDescription;
-
-        @Override
-        public boolean equals(Object o) {
-            // Skipping reference equality bc this should be more of a value type
-            if (o == null || getClass() != o.getClass()) {
-                return false;
-            }
-            SignalIconState that = (SignalIconState) o;
-            return visible == that.visible &&
-                    activityOut == that.activityOut &&
-                    activityIn == that.activityIn &&
-                    Objects.equals(contentDescription, that.contentDescription) &&
-                    Objects.equals(slot, that.slot);
+    public void updateAirplaneModeIcon(boolean isAirplaneModeOn) {
+        if (StatusBarSignalPolicyRefactor.isUnexpectedlyInLegacyMode()) {
+            return;
         }
 
-        @Override
-        public int hashCode() {
-            return Objects.hash(visible, activityOut, slot);
-        }
-
-        protected void copyTo(SignalIconState other) {
-            other.visible = visible;
-            other.activityIn = activityIn;
-            other.activityOut = activityOut;
-            other.slot = slot;
-            other.contentDescription = contentDescription;
-        }
-    }
-
-    public static class WifiIconState extends SignalIconState{
-        public int resId;
-        public boolean airplaneSpacerVisible;
-        public boolean signalSpacerVisible;
-
-        @Override
-        public boolean equals(Object o) {
-            // Skipping reference equality bc this should be more of a value type
-            if (o == null || getClass() != o.getClass()) {
-                return false;
-            }
-            if (!super.equals(o)) {
-                return false;
-            }
-            WifiIconState that = (WifiIconState) o;
-            return resId == that.resId &&
-                    airplaneSpacerVisible == that.airplaneSpacerVisible &&
-                    signalSpacerVisible == that.signalSpacerVisible;
-        }
-
-        public void copyTo(WifiIconState other) {
-            super.copyTo(other);
-            other.resId = resId;
-            other.airplaneSpacerVisible = airplaneSpacerVisible;
-            other.signalSpacerVisible = signalSpacerVisible;
-        }
-
-        public WifiIconState copy() {
-            WifiIconState newState = new WifiIconState();
-            copyTo(newState);
-            return newState;
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(super.hashCode(),
-                    resId, airplaneSpacerVisible, signalSpacerVisible);
-        }
-
-        @Override public String toString() {
-            return "WifiIconState(resId=" + resId + ", visible=" + visible + ")";
+        boolean isAirplaneMode = isAirplaneModeOn && !mHideAirplane;
+        mIconController.setIconVisibility(mSlotAirplane, isAirplaneMode);
+        if (isAirplaneMode) {
+            mIconController.setIcon(
+                    mSlotAirplane,
+                    TelephonyIcons.FLIGHT_MODE_ICON,
+                    mContext.getString(R.string.accessibility_airplane_mode));
         }
     }
 
     /**
-     * A little different. This one delegates to SignalDrawable instead of a specific resId
+     * Stores the statusbar state for no Calling & SMS.
      */
-    public static class MobileIconState extends SignalIconState {
+    public static class CallIndicatorIconState {
+        public boolean isNoCalling;
+        public int noCallingResId;
+        public int callStrengthResId;
         public int subId;
-        public int strengthId;
-        public int typeId;
-        public boolean roaming;
-        public boolean needsLeadingPadding;
-        public String typeContentDescription;
+        public String noCallingDescription;
+        public String callStrengthDescription;
 
-        private MobileIconState(int subId) {
-            super();
+        private CallIndicatorIconState(int subId) {
             this.subId = subId;
+            this.noCallingResId = R.drawable.ic_shade_no_calling_sms;
+            this.callStrengthResId = TelephonyIcons.MOBILE_CALL_STRENGTH_ICONS[0];
         }
 
         @Override
         public boolean equals(Object o) {
+            // Skipping reference equality bc this should be more of a value type
             if (o == null || getClass() != o.getClass()) {
                 return false;
             }
-            if (!super.equals(o)) {
-                return false;
-            }
-            MobileIconState that = (MobileIconState) o;
-            return subId == that.subId &&
-                    strengthId == that.strengthId &&
-                    typeId == that.typeId &&
-                    roaming == that.roaming &&
-                    needsLeadingPadding == that.needsLeadingPadding &&
-                    Objects.equals(typeContentDescription, that.typeContentDescription);
+            CallIndicatorIconState that = (CallIndicatorIconState) o;
+            return  isNoCalling == that.isNoCalling
+                    && noCallingResId == that.noCallingResId
+                    && callStrengthResId == that.callStrengthResId
+                    && subId == that.subId
+                    && noCallingDescription == that.noCallingDescription
+                    && callStrengthDescription == that.callStrengthDescription;
+
         }
 
         @Override
         public int hashCode() {
-
-            return Objects
-                    .hash(super.hashCode(), subId, strengthId, typeId, roaming, needsLeadingPadding,
-                            typeContentDescription);
+            return Objects.hash(isNoCalling, noCallingResId,
+                    callStrengthResId, subId, noCallingDescription, callStrengthDescription);
         }
 
-        public MobileIconState copy() {
-            MobileIconState copy = new MobileIconState(this.subId);
-            copyTo(copy);
-            return copy;
-        }
-
-        public void copyTo(MobileIconState other) {
-            super.copyTo(other);
+        private void copyTo(CallIndicatorIconState other) {
+            other.isNoCalling = isNoCalling;
+            other.noCallingResId = noCallingResId;
+            other.callStrengthResId = callStrengthResId;
             other.subId = subId;
-            other.strengthId = strengthId;
-            other.typeId = typeId;
-            other.roaming = roaming;
-            other.needsLeadingPadding = needsLeadingPadding;
-            other.typeContentDescription = typeContentDescription;
+            other.noCallingDescription = noCallingDescription;
+            other.callStrengthDescription = callStrengthDescription;
         }
 
-        private static List<MobileIconState> copyStates(List<MobileIconState> inStates) {
-            ArrayList<MobileIconState> outStates = new ArrayList<>();
-            for (MobileIconState state : inStates) {
-                MobileIconState copy = new MobileIconState(state.subId);
+        private static List<CallIndicatorIconState> copyStates(
+                List<CallIndicatorIconState> inStates) {
+            ArrayList<CallIndicatorIconState> outStates = new ArrayList<>();
+            for (CallIndicatorIconState state : inStates) {
+                CallIndicatorIconState copy = new CallIndicatorIconState(state.subId);
                 state.copyTo(copy);
                 outStates.add(copy);
             }
-
             return outStates;
-        }
-
-        @Override public String toString() {
-            return "MobileIconState(subId=" + subId + ", strengthId=" + strengthId + ", roaming="
-                    + roaming + ", typeId=" + typeId + ", visible=" + visible + ")";
         }
     }
 }

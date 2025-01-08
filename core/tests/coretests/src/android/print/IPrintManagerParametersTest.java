@@ -41,9 +41,11 @@ import android.print.test.services.PrintServiceCallbacks;
 import android.print.test.services.PrinterDiscoverySessionCallbacks;
 import android.print.test.services.StubbablePrinterDiscoverySession;
 import android.printservice.recommendation.IRecommendationsChangeListener;
-import android.support.test.filters.LargeTest;
-import android.support.test.filters.MediumTest;
-import android.support.test.runner.AndroidJUnit4;
+
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.LargeTest;
+import androidx.test.filters.MediumTest;
+import androidx.test.uiautomator.UiDevice;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -69,6 +71,10 @@ public class IPrintManagerParametersTest extends BasePrintTest {
     private ComponentName mBadComponentName;
 
     private IPrintManager mIPrintManager;
+
+    public static UiDevice getUiDevice() {
+        return UiDevice.getInstance(getInstrumentation());
+    }
 
     /**
      * Create a new IPrintManagerParametersTest and setup basic fields.
@@ -477,6 +483,20 @@ public class IPrintManagerParametersTest extends BasePrintTest {
                 SecurityException.class);
 
         // Cannot test bad user Id as these tests are allowed to call across users
+    }
+
+    /**
+     * test IPrintManager.isPrintServiceEnabled
+     */
+    @MediumTest
+    @Test
+    @NoActivity
+    public void testIsPrintServiceEnabled() throws Throwable {
+        assertException(() -> mIPrintManager.isPrintServiceEnabled(new ComponentName("bad", "name"),
+                mUserId), SecurityException.class);
+
+        assertException(() -> mIPrintManager.isPrintServiceEnabled(null, mUserId),
+                SecurityException.class);
     }
 
     /**

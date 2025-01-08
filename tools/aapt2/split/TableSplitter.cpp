@@ -27,6 +27,7 @@
 #include "androidfw/ConfigDescription.h"
 
 #include "ResourceTable.h"
+#include "trace/TraceBuffer.h"
 #include "util/Util.h"
 
 using ::android::ConfigDescription;
@@ -154,15 +155,20 @@ static void MarkNonPreferredDensitiesAsClaimed(
   }
 }
 bool TableSplitter::VerifySplitConstraints(IAaptContext* context) {
+  TRACE_CALL();
   bool error = false;
   for (size_t i = 0; i < split_constraints_.size(); i++) {
+    if (split_constraints_[i].configs.size() == 0) {
+      // For now, treat this as a warning. We may consider aborting processing.
+      context->GetDiagnostics()->Warn(android::DiagMessage() << "no configurations for constraint '"
+                                                             << split_constraints_[i].name << "'");
+    }
     for (size_t j = i + 1; j < split_constraints_.size(); j++) {
       for (const ConfigDescription& config : split_constraints_[i].configs) {
         if (split_constraints_[j].configs.find(config) != split_constraints_[j].configs.end()) {
-          context->GetDiagnostics()->Error(DiagMessage()
-                                           << "config '" << config
-                                           << "' appears in multiple splits, "
-                                           << "target split ambiguous");
+          context->GetDiagnostics()->Error(
+              android::DiagMessage() << "config '" << config << "' appears in multiple splits, "
+                                     << "target split ambiguous");
           error = true;
         }
       }
@@ -177,11 +183,11 @@ void TableSplitter::SplitTable(ResourceTable* original_table) {
     // Initialize all packages for splits.
     for (size_t idx = 0; idx < split_count; idx++) {
       ResourceTable* split_table = splits_[idx].get();
-      split_table->CreatePackage(pkg->name, pkg->id);
+      split_table->FindOrCreatePackage(pkg->name);
     }
 
     for (auto& type : pkg->types) {
-      if (type->type == ResourceType::kMipmap) {
+      if (type->named_type.type == ResourceType::kMipmap) {
         // Always keep mipmaps.
         continue;
       }
@@ -221,6 +227,7 @@ void TableSplitter::SplitTable(ResourceTable* original_table) {
         for (size_t idx = 0; idx < split_count; idx++) {
           const SplitConstraints& split_constraint = split_constraints_[idx];
           ResourceTable* split_table = splits_[idx].get();
+          CloningValueTransformer cloner(&split_table->string_pool);
 
           // Select the values we want from this entry for this split.
           SplitValueSelector selector(split_constraint);
@@ -232,24 +239,21 @@ void TableSplitter::SplitTable(ResourceTable* original_table) {
             // Create the same resource structure in the split. We do this lazily because we might
             // not have actual values for each type/entry.
             ResourceTablePackage* split_pkg = split_table->FindPackage(pkg->name);
-            ResourceTableType* split_type = split_pkg->FindOrCreateType(type->type);
-            if (!split_type->id) {
-              split_type->id = type->id;
-              split_type->visibility_level = type->visibility_level;
-            }
+            ResourceTableType* split_type = split_pkg->FindOrCreateType(type->named_type);
+            split_type->visibility_level = type->visibility_level;
 
             ResourceEntry* split_entry = split_type->FindOrCreateEntry(entry->name);
             if (!split_entry->id) {
               split_entry->id = entry->id;
               split_entry->visibility = entry->visibility;
+              split_entry->overlayable_item = entry->overlayable_item;
             }
 
             // Copy the selected values into the new Split Entry.
             for (ResourceConfigValue* config_value : selected_values) {
               ResourceConfigValue* new_config_value =
                   split_entry->FindOrCreateValue(config_value->config, config_value->product);
-              new_config_value->value = std::unique_ptr<Value>(
-                  config_value->value->Clone(&split_table->string_pool));
+              new_config_value->value = config_value->value->Transform(cloner);
             }
           }
         }

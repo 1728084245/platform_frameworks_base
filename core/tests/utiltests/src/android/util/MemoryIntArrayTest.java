@@ -23,9 +23,14 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import android.os.Parcel;
-import android.os.ParcelFileDescriptor;
-import android.support.test.runner.AndroidJUnit4;
+import android.platform.test.annotations.IgnoreUnderRavenwood;
+import android.platform.test.ravenwood.RavenwoodRule;
+
+import androidx.test.runner.AndroidJUnit4;
+
 import libcore.io.IoUtils;
+
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -34,10 +39,16 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 @RunWith(AndroidJUnit4.class)
+@IgnoreUnderRavenwood(blockedBy = MemoryIntArray.class)
 public class MemoryIntArrayTest {
+    @Rule
+    public final RavenwoodRule mRavenwood = new RavenwoodRule();
+
     static {
-        System.loadLibrary("cutils");
-        System.loadLibrary("memoryintarraytest");
+        if (!RavenwoodRule.isUnderRavenwood()) {
+            System.loadLibrary("cutils");
+            System.loadLibrary("memoryintarraytest");
+        }
     }
 
     @Test
@@ -112,7 +123,7 @@ public class MemoryIntArrayTest {
             parcel.recycle();
 
             assertNotNull("Should marshall file descriptor", secondArray);
-
+            assertEquals("Marshalled size must be three", 3, secondArray.size());
             assertEquals("First element should be 1", 1, secondArray.get(0));
             assertEquals("First element should be 2", 2, secondArray.get(1));
             assertEquals("First element should be 3", 3, secondArray.get(2));
@@ -252,11 +263,13 @@ public class MemoryIntArrayTest {
                 // Create a MemoryIntArray to muck with
                 MemoryIntArray array = new MemoryIntArray(1);
 
-                // Grab the internal ashmem fd.
-                Field fdField = MemoryIntArray.class.getDeclaredField("mFd");
-                fdField.setAccessible(true);
-                int fd = ((ParcelFileDescriptor)fdField.get(array)).getFd();
-                assertTrue("fd must be valid", fd != -1);
+                // Create the fd to stuff in the MemoryIntArray
+                final int fd = nativeCreateAshmem("foo", 1);
+
+                // Replace the fd with our ahsmem region
+                Field fdFiled = MemoryIntArray.class.getDeclaredField("mFd");
+                fdFiled.setAccessible(true);
+                fdFiled.set(array, fd);
 
                 CountDownLatch countDownLatch = new CountDownLatch(2);
 
@@ -291,9 +304,10 @@ public class MemoryIntArrayTest {
         }
 
         if (!success) {
-            fail("MemoryIntArray should catch ashmem size changing under it");
+            fail("MemoryIntArray should catch ahshmem size changing under it");
         }
     }
 
+    private native int nativeCreateAshmem(String name, int size);
     private native void nativeSetAshmemSize(int fd, int size);
 }

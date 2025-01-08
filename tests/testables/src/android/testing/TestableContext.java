@@ -33,10 +33,14 @@ import android.provider.Settings;
 import android.util.ArrayMap;
 import android.view.LayoutInflater;
 
+import androidx.annotation.Nullable;
+
 import org.junit.rules.TestRule;
 import org.junit.rules.TestWatcher;
 import org.junit.runner.Description;
 import org.junit.runners.model.Statement;
+
+import java.util.ArrayList;
 
 /**
  * A ContextWrapper with utilities specifically designed to make Testing easier.
@@ -53,14 +57,16 @@ import org.junit.runners.model.Statement;
  * Like the following:</p>
  * <pre class="prettyprint">
  * &#064;Rule
- * private final TestableContext mContext = new TestableContext(InstrumentationRegister.getContext());
+ * public final TestableContext mContext = new TestableContext(InstrumentationRegister.getContext());
  * </pre>
  */
 public class TestableContext extends ContextWrapper implements TestRule {
 
-    private final TestableContentResolver mTestableContentResolver;
-    private final TestableSettingsProvider mSettingsProvider;
+    private TestableContentResolver mTestableContentResolver;
+    private TestableSettingsProvider mSettingsProvider;
+    private RuntimeException mSettingsProviderFailure;
 
+    private ArrayList<MockServiceResolver> mMockServiceResolvers;
     private ArrayMap<String, Object> mMockSystemServices;
     private ArrayMap<ComponentName, IBinder> mMockServices;
     private ArrayMap<ServiceConnection, ComponentName> mActiveServices;
@@ -78,12 +84,24 @@ public class TestableContext extends ContextWrapper implements TestRule {
 
     public TestableContext(Context base, LeakCheck check) {
         super(base);
-        mTestableContentResolver = new TestableContentResolver(base);
-        ContentProviderClient settings = base.getContentResolver()
-                .acquireContentProviderClient(Settings.AUTHORITY);
-        mSettingsProvider = TestableSettingsProvider.getFakeSettingsProvider(settings);
-        mTestableContentResolver.addProvider(Settings.AUTHORITY, mSettingsProvider);
-        mSettingsProvider.clearValuesAndCheck(TestableContext.this);
+
+        // Configure TestableSettingsProvider when possible; if we fail to initialize some
+        // underlying infrastructure then remember the error and report it later when a test
+        // attempts to interact with it
+        try {
+            ContentProviderClient settings = base.getContentResolver()
+                    .acquireContentProviderClient(Settings.AUTHORITY);
+            mSettingsProvider = TestableSettingsProvider.getFakeSettingsProvider(settings);
+            mTestableContentResolver = new TestableContentResolver(base);
+            mTestableContentResolver.addProvider(Settings.AUTHORITY, mSettingsProvider);
+            mSettingsProvider.clearValuesAndCheck(TestableContext.this);
+            mSettingsProviderFailure = null;
+        } catch (Throwable t) {
+            mTestableContentResolver = null;
+            mSettingsProvider = null;
+            mSettingsProviderFailure = new RuntimeException(
+                    "Failed to initialize TestableSettingsProvider", t);
+        }
         mReceiver = check != null ? check.getTracker("receiver") : null;
         mService = check != null ? check.getTracker("service") : null;
         mComponent = check != null ? check.getTracker("component") : null;
@@ -166,11 +184,17 @@ public class TestableContext extends ContextWrapper implements TestRule {
     }
 
     TestableSettingsProvider getSettingsProvider() {
+        if (mSettingsProviderFailure != null) {
+            throw mSettingsProviderFailure;
+        }
         return mSettingsProvider;
     }
 
     @Override
     public TestableContentResolver getContentResolver() {
+        if (mSettingsProviderFailure != null) {
+            throw mSettingsProviderFailure;
+        }
         return mTestableContentResolver;
     }
 
@@ -214,16 +238,45 @@ public class TestableContext extends ContextWrapper implements TestRule {
     /**
      * Adds a mock service to be connected to by a bindService call.
      * <p>
-     *     Normally a TestableContext will pass through all bind requests to the base context
-     *     but when addMockService has been called for a ComponentName being bound, then
-     *     TestableContext will immediately trigger a {@link ServiceConnection#onServiceConnected}
-     *     with the specified service, and will call {@link ServiceConnection#onServiceDisconnected}
-     *     when the service is unbound.
+     * Normally a TestableContext will pass through all bind requests to the base context
+     * but when addMockService has been called for a ComponentName being bound, then
+     * TestableContext will immediately trigger a {@link ServiceConnection#onServiceConnected}
+     * with the specified service, and will call {@link ServiceConnection#onServiceDisconnected}
+     * when the service is unbound.
      * </p>
+     *
+     * @see #addMockServiceResolver(MockServiceResolver) for custom resolution of service Intents to
+     * ComponentNames
      */
     public void addMockService(ComponentName component, IBinder service) {
         if (mMockServices == null) mMockServices = new ArrayMap<>();
         mMockServices.put(component, service);
+    }
+
+    /**
+     * Strategy to resolve a service {@link Intent} to a mock service {@link ComponentName}.
+     */
+    public interface MockServiceResolver {
+        @Nullable
+        ComponentName resolve(Intent service);
+    }
+
+    /**
+     * Registers a strategy to resolve service intents to registered mock services.
+     * <p>
+     * The result of the first {@link MockServiceResolver} to return a non-null
+     * {@link ComponentName} is used to look up a mock service. The mock service must be registered
+     * via {@link #addMockService(ComponentName, IBinder)} separately, using the same component
+     * name.
+     *
+     * If none of the resolvers return a non-null value, or the first returned component name
+     * does not link to a registered mock service, the bind requests are passed to the base context
+     *
+     * The resolvers are queried in order of registration.
+     */
+    public void addMockServiceResolver(MockServiceResolver resolver) {
+        if (mMockServiceResolvers == null) mMockServiceResolvers = new ArrayList<>();
+        mMockServiceResolvers.add(resolver);
     }
 
     /**
@@ -232,7 +285,7 @@ public class TestableContext extends ContextWrapper implements TestRule {
     @Override
     public boolean bindService(Intent service, ServiceConnection conn, int flags) {
         if (mService != null) mService.getLeakInfo(conn).addAllocation(new Throwable());
-        if (checkMocks(service.getComponent(), conn)) return true;
+        if (checkMocks(service, conn)) return true;
         return super.bindService(service, conn, flags);
     }
 
@@ -243,7 +296,7 @@ public class TestableContext extends ContextWrapper implements TestRule {
     public boolean bindServiceAsUser(Intent service, ServiceConnection conn, int flags,
             Handler handler, UserHandle user) {
         if (mService != null) mService.getLeakInfo(conn).addAllocation(new Throwable());
-        if (checkMocks(service.getComponent(), conn)) return true;
+        if (checkMocks(service, conn)) return true;
         return super.bindServiceAsUser(service, conn, flags, handler, user);
     }
 
@@ -254,18 +307,36 @@ public class TestableContext extends ContextWrapper implements TestRule {
     public boolean bindServiceAsUser(Intent service, ServiceConnection conn, int flags,
             UserHandle user) {
         if (mService != null) mService.getLeakInfo(conn).addAllocation(new Throwable());
-        if (checkMocks(service.getComponent(), conn)) return true;
+        if (checkMocks(service, conn)) return true;
         return super.bindServiceAsUser(service, conn, flags, user);
     }
 
-    private boolean checkMocks(ComponentName component, ServiceConnection conn) {
-        if (mMockServices != null && component != null && mMockServices.containsKey(component)) {
-            if (mActiveServices == null) mActiveServices = new ArrayMap<>();
-            mActiveServices.put(conn, component);
-            conn.onServiceConnected(component, mMockServices.get(component));
-            return true;
+    private boolean checkMocks(Intent service, ServiceConnection conn) {
+        if (mMockServices == null) return false;
+
+        ComponentName serviceComponent = resolveMockServiceComponent(service);
+        if (serviceComponent == null) return false;
+
+        IBinder serviceImpl = mMockServices.get(serviceComponent);
+        if (serviceImpl == null) return false;
+
+        if (mActiveServices == null) mActiveServices = new ArrayMap<>();
+        mActiveServices.put(conn, serviceComponent);
+        conn.onServiceConnected(serviceComponent, serviceImpl);
+        return true;
+    }
+
+    private ComponentName resolveMockServiceComponent(Intent service) {
+        ComponentName specifiedComponentName = service.getComponent();
+        if (specifiedComponentName != null) return specifiedComponentName;
+
+        if (mMockServiceResolvers == null) return null;
+
+        for (MockServiceResolver resolver : mMockServiceResolvers) {
+            ComponentName resolvedComponent = resolver.resolve(service);
+            if (resolvedComponent != null) return resolvedComponent;
         }
-        return false;
+        return null;
     }
 
     /**
@@ -296,13 +367,13 @@ public class TestableContext extends ContextWrapper implements TestRule {
     @Override
     public void registerComponentCallbacks(ComponentCallbacks callback) {
         if (mComponent != null) mComponent.getLeakInfo(callback).addAllocation(new Throwable());
-        super.registerComponentCallbacks(callback);
+        getBaseContext().registerComponentCallbacks(callback);
     }
 
     @Override
     public void unregisterComponentCallbacks(ComponentCallbacks callback) {
         if (mComponent != null) mComponent.getLeakInfo(callback).clearAllocations();
-        super.unregisterComponentCallbacks(callback);
+        getBaseContext().unregisterComponentCallbacks(callback);
     }
 
     public TestablePermissions getTestablePermissions() {
@@ -463,12 +534,16 @@ public class TestableContext extends ContextWrapper implements TestRule {
         return new TestWatcher() {
             @Override
             protected void succeeded(Description description) {
-                mSettingsProvider.clearValuesAndCheck(TestableContext.this);
+                if (mSettingsProvider != null) {
+                    mSettingsProvider.clearValuesAndCheck(TestableContext.this);
+                }
             }
 
             @Override
             protected void failed(Throwable e, Description description) {
-                mSettingsProvider.clearValuesAndCheck(TestableContext.this);
+                if (mSettingsProvider != null) {
+                    mSettingsProvider.clearValuesAndCheck(TestableContext.this);
+                }
             }
         }.apply(base, description);
     }

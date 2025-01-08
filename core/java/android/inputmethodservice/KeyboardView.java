@@ -16,7 +16,7 @@
 
 package android.inputmethodservice;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Bitmap;
@@ -65,7 +65,13 @@ import java.util.Map;
  * @attr ref android.R.styleable#KeyboardView_keyTextColor
  * @attr ref android.R.styleable#KeyboardView_verticalCorrection
  * @attr ref android.R.styleable#KeyboardView_popupLayout
+ *
+ * @deprecated This class is deprecated because this is just a convenient UI widget class that
+ *             application developers can re-implement on top of existing public APIs.  If you have
+ *             already depended on this class, consider copying the implementation from AOSP into
+ *             your project or re-implementing a similar widget by yourselves
  */
+@Deprecated
 public class KeyboardView extends View implements View.OnClickListener {
 
     /**
@@ -320,9 +326,11 @@ public class KeyboardView extends View implements View.OnClickListener {
             }
         }
 
+        a.recycle();
         a = mContext.obtainStyledAttributes(
                 com.android.internal.R.styleable.Theme);
         mBackgroundDimAmount = a.getFloat(android.R.styleable.Theme_backgroundDimAmount, 0.5f);
+        a.recycle();
 
         mPreviewPopup = new PopupWindow(context);
         if (previewLayout != 0) {

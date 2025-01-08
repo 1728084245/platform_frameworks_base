@@ -16,6 +16,9 @@
 
 package com.android.server.trust;
 
+import static android.service.trust.TrustAgentService.FLAG_GRANT_TRUST_DISPLAY_MESSAGE;
+import static android.service.trust.TrustAgentService.FLAG_GRANT_TRUST_TEMPORARY_AND_RENEWABLE;
+
 import android.annotation.TargetApi;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
@@ -37,13 +40,16 @@ import android.os.PersistableBundle;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import android.os.UserHandle;
+import android.service.trust.GrantTrustResult;
 import android.service.trust.ITrustAgentService;
 import android.service.trust.ITrustAgentServiceCallback;
 import android.service.trust.TrustAgentService;
 import android.util.Log;
+import android.util.Pair;
 import android.util.Slog;
 
-import com.android.internal.policy.IKeyguardDismissCallback;
+import com.android.internal.infra.AndroidFuture;
+import com.android.server.utils.Slogf;
 
 import java.util.Collections;
 import java.util.List;
@@ -71,6 +77,7 @@ public class TrustAgentWrapper {
     private static final int MSG_ESCROW_TOKEN_STATE = 9;
     private static final int MSG_UNLOCK_USER = 10;
     private static final int MSG_SHOW_KEYGUARD_ERROR_MESSAGE = 11;
+    private static final int MSG_LOCK_USER = 12;
 
     /**
      * Time in uptime millis that we wait for the service connection, both when starting
@@ -100,18 +107,31 @@ public class TrustAgentWrapper {
 
     // Trust state
     private boolean mTrusted;
+    private boolean mWaitingForTrustableDowngrade = false;
+    private boolean mWithinSecurityLockdownWindow = false;
+    private boolean mTrustable;
     private CharSequence mMessage;
+    private boolean mDisplayTrustGrantedMessage;
     private boolean mTrustDisabledByDpm;
     private boolean mManagingTrust;
     private IBinder mSetTrustAgentFeaturesToken;
     private AlarmManager mAlarmManager;
     private final Intent mAlarmIntent;
     private PendingIntent mAlarmPendingIntent;
+    private final BroadcastReceiver mTrustableDowngradeReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            // are these the broadcasts we want to listen to
+            if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
+                downgradeToTrustable();
+            }
+        }
+    };
 
     private final BroadcastReceiver mBroadcastReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            ComponentName component = intent.getParcelableExtra(EXTRA_COMPONENT_NAME);
+            ComponentName component = intent.getParcelableExtra(EXTRA_COMPONENT_NAME, android.content.ComponentName.class);
             if (TRUST_EXPIRED_ACTION.equals(intent.getAction())
                     && mName.equals(component)) {
                 mHandler.removeMessages(MSG_TRUST_TIMEOUT);
@@ -131,8 +151,24 @@ public class TrustAgentWrapper {
                         return;
                     }
                     mTrusted = true;
-                    mMessage = (CharSequence) msg.obj;
+                    mTrustable = false;
+                    Pair<CharSequence, AndroidFuture<GrantTrustResult>> pair = (Pair) msg.obj;
+                    mMessage = pair.first;
+                    AndroidFuture<GrantTrustResult> resultCallback = pair.second;
                     int flags = msg.arg1;
+                    mDisplayTrustGrantedMessage = (flags & FLAG_GRANT_TRUST_DISPLAY_MESSAGE) != 0;
+                    if ((flags & FLAG_GRANT_TRUST_TEMPORARY_AND_RENEWABLE) != 0) {
+                        mWaitingForTrustableDowngrade = true;
+                        resultCallback.thenAccept(result -> {
+                            if (result.getStatus() == GrantTrustResult.STATUS_UNLOCKED_BY_GRANT) {
+                                // if we are not unlocked by grantTrust, then we don't need to
+                                // have the timer for the security window
+                                setSecurityWindowTimer();
+                            }
+                        });
+                    } else {
+                        mWaitingForTrustableDowngrade = false;
+                    }
                     long durationMs = msg.getData().getLong(DATA_DURATION);
                     if (durationMs > 0) {
                         final long duration;
@@ -151,14 +187,14 @@ public class TrustAgentWrapper {
                         }
                         long expiration = SystemClock.elapsedRealtime() + duration;
                         mAlarmPendingIntent = PendingIntent.getBroadcast(mContext, 0, mAlarmIntent,
-                                PendingIntent.FLAG_CANCEL_CURRENT);
+                                PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_MUTABLE_UNAUDITED);
                         mAlarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, expiration,
                                 mAlarmPendingIntent);
                     }
                     mTrustManagerService.mArchive.logGrantTrust(mUserId, mName,
                             (mMessage != null ? mMessage.toString() : null),
                             durationMs, flags);
-                    mTrustManagerService.updateTrust(mUserId, flags);
+                    mTrustManagerService.updateTrust(mUserId, flags, resultCallback);
                     break;
                 case MSG_TRUST_TIMEOUT:
                     if (DEBUG) Slog.d(TAG, "Trust timed out : " + mName.flattenToShortString());
@@ -167,6 +203,9 @@ public class TrustAgentWrapper {
                     // Fall through.
                 case MSG_REVOKE_TRUST:
                     mTrusted = false;
+                    mTrustable = false;
+                    mWaitingForTrustableDowngrade = false;
+                    mDisplayTrustGrantedMessage = false;
                     mMessage = null;
                     mHandler.removeMessages(MSG_TRUST_TIMEOUT);
                     if (msg.what == MSG_REVOKE_TRUST) {
@@ -200,6 +239,7 @@ public class TrustAgentWrapper {
                     mManagingTrust = msg.arg1 != 0;
                     if (!mManagingTrust) {
                         mTrusted = false;
+                        mDisplayTrustGrantedMessage = false;
                         mMessage = null;
                     }
                     mTrustManagerService.mArchive.logManagingTrust(mUserId, mName, mManagingTrust);
@@ -265,6 +305,13 @@ public class TrustAgentWrapper {
                     mTrustManagerService.showKeyguardErrorMessage(message);
                     break;
                 }
+                case MSG_LOCK_USER: {
+                    mTrusted = false;
+                    mTrustable = false;
+                    mTrustManagerService.updateTrust(mUserId, 0 /* flags */);
+                    mTrustManagerService.lockUser(mUserId);
+                    break;
+                }
             }
         }
     };
@@ -272,12 +319,18 @@ public class TrustAgentWrapper {
     private ITrustAgentServiceCallback mCallback = new ITrustAgentServiceCallback.Stub() {
 
         @Override
-        public void grantTrust(CharSequence userMessage, long durationMs, int flags) {
-            if (DEBUG) Slog.d(TAG, "enableTrust(" + userMessage + ", durationMs = " + durationMs
-                        + ", flags = " + flags + ")");
+        public void grantTrust(
+                CharSequence message,
+                long durationMs,
+                int flags,
+                AndroidFuture resultCallback) {
+            if (DEBUG) {
+                Slogf.d(TAG, "grantTrust(message=\"%s\", durationMs=%d, flags=0x%x)",
+                        message, durationMs, flags);
+            }
 
             Message msg = mHandler.obtainMessage(
-                    MSG_GRANT_TRUST, flags, 0, userMessage);
+                    MSG_GRANT_TRUST, flags, 0, Pair.create(message, resultCallback));
             msg.getData().putLong(DATA_DURATION, durationMs);
             msg.sendToTarget();
         }
@@ -289,26 +342,33 @@ public class TrustAgentWrapper {
         }
 
         @Override
+        public void lockUser() {
+            if (DEBUG) Slog.d(TAG, "lockUser()");
+            mHandler.sendEmptyMessage(MSG_LOCK_USER);
+        }
+
+        @Override
         public void setManagingTrust(boolean managingTrust) {
-            if (DEBUG) Slog.d(TAG, "managingTrust()");
+            if (DEBUG) Slogf.d(TAG, "setManagingTrust(%s)", managingTrust);
             mHandler.obtainMessage(MSG_MANAGING_TRUST, managingTrust ? 1 : 0, 0).sendToTarget();
         }
 
         @Override
         public void onConfigureCompleted(boolean result, IBinder token) {
-            if (DEBUG) Slog.d(TAG, "onSetTrustAgentFeaturesEnabledCompleted(result=" + result);
+            if (DEBUG) Slogf.d(TAG, "onConfigureCompleted(result=%s)", result);
             mHandler.obtainMessage(MSG_SET_TRUST_AGENT_FEATURES_COMPLETED,
                     result ? 1 : 0, 0, token).sendToTarget();
         }
 
         @Override
         public void addEscrowToken(byte[] token, int userId) {
+            // 'token' is secret; never log it.
+            if (DEBUG) Slogf.d(TAG, "addEscrowToken(userId=%d)", userId);
+
             if (mContext.getResources()
                     .getBoolean(com.android.internal.R.bool.config_allowEscrowTokenForTrustAgent)) {
-                throw  new SecurityException("Escrow token API is not allowed.");
+                throw new SecurityException("Escrow token API is not allowed.");
             }
-
-            if (DEBUG) Slog.d(TAG, "adding escrow token for user " + userId);
             Message msg = mHandler.obtainMessage(MSG_ADD_ESCROW_TOKEN);
             msg.getData().putByteArray(DATA_ESCROW_TOKEN, token);
             msg.getData().putInt(DATA_USER_ID, userId);
@@ -317,12 +377,12 @@ public class TrustAgentWrapper {
 
         @Override
         public void isEscrowTokenActive(long handle, int userId) {
+            if (DEBUG) Slogf.d(TAG, "isEscrowTokenActive(handle=%016x, userId=%d)", handle, userId);
+
             if (mContext.getResources()
                     .getBoolean(com.android.internal.R.bool.config_allowEscrowTokenForTrustAgent)) {
                 throw new SecurityException("Escrow token API is not allowed.");
             }
-
-            if (DEBUG) Slog.d(TAG, "checking the state of escrow token on user " + userId);
             Message msg = mHandler.obtainMessage(MSG_ESCROW_TOKEN_STATE);
             msg.getData().putLong(DATA_HANDLE, handle);
             msg.getData().putInt(DATA_USER_ID, userId);
@@ -331,12 +391,12 @@ public class TrustAgentWrapper {
 
         @Override
         public void removeEscrowToken(long handle, int userId) {
+            if (DEBUG) Slogf.d(TAG, "removeEscrowToken(handle=%016x, userId=%d)", handle, userId);
+
             if (mContext.getResources()
                     .getBoolean(com.android.internal.R.bool.config_allowEscrowTokenForTrustAgent)) {
                 throw new SecurityException("Escrow token API is not allowed.");
             }
-
-            if (DEBUG) Slog.d(TAG, "removing escrow token on user " + userId);
             Message msg = mHandler.obtainMessage(MSG_REMOVE_ESCROW_TOKEN);
             msg.getData().putLong(DATA_HANDLE, handle);
             msg.getData().putInt(DATA_USER_ID, userId);
@@ -345,12 +405,13 @@ public class TrustAgentWrapper {
 
         @Override
         public void unlockUserWithToken(long handle, byte[] token, int userId) {
+            // 'token' is secret; never log it.
+            if (DEBUG) Slogf.d(TAG, "unlockUserWithToken(handle=%016x, userId=%d)", handle, userId);
+
             if (mContext.getResources()
                     .getBoolean(com.android.internal.R.bool.config_allowEscrowTokenForTrustAgent)) {
                 throw new SecurityException("Escrow token API is not allowed.");
             }
-
-            if (DEBUG) Slog.d(TAG, "unlocking user " + userId);
             Message msg = mHandler.obtainMessage(MSG_UNLOCK_USER);
             msg.getData().putInt(DATA_USER_ID, userId);
             msg.getData().putLong(DATA_HANDLE, handle);
@@ -360,7 +421,7 @@ public class TrustAgentWrapper {
 
         @Override
         public void showKeyguardErrorMessage(CharSequence message) {
-            if (DEBUG) Slog.d(TAG, "Showing keyguard error message: " + message);
+            if (DEBUG) Slogf.d(TAG, "showKeyguardErrorMessage(\"%s\")", message);
             Message msg = mHandler.obtainMessage(MSG_SHOW_KEYGUARD_ERROR_MESSAGE);
             msg.getData().putCharSequence(DATA_MESSAGE, message);
             msg.sendToTarget();
@@ -382,6 +443,8 @@ public class TrustAgentWrapper {
                 mPendingSuccessfulUnlock = false;
             }
 
+            // It's okay to use the "Inner" version of isDeviceLocked since they differ only for
+            // profiles, which cannot be switched to and thus don't support trust agents anyway.
             if (mTrustManagerService.isDeviceLockedInner(mUserId)) {
                 onDeviceLocked();
             } else {
@@ -399,6 +462,9 @@ public class TrustAgentWrapper {
             mHandler.sendEmptyMessage(MSG_REVOKE_TRUST);
             if (mBound) {
                 scheduleRestart();
+            }
+            if (mWithinSecurityLockdownWindow) {
+                mTrustManagerService.lockUser(mUserId);
             }
             // mTrustDisabledByDpm maintains state
         }
@@ -421,13 +487,17 @@ public class TrustAgentWrapper {
         final String pathUri = mAlarmIntent.toUri(Intent.URI_INTENT_SCHEME);
         alarmFilter.addDataPath(pathUri, PatternMatcher.PATTERN_LITERAL);
 
+        IntentFilter trustableFilter = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+
         // Schedules a restart for when connecting times out. If the connection succeeds,
         // the restart is canceled in mCallback's onConnected.
         scheduleRestart();
         mBound = context.bindServiceAsUser(intent, mConnection,
                 Context.BIND_AUTO_CREATE | Context.BIND_FOREGROUND_SERVICE, user);
         if (mBound) {
-            mContext.registerReceiver(mBroadcastReceiver, alarmFilter, PERMISSION, null);
+            mContext.registerReceiver(mBroadcastReceiver, alarmFilter, PERMISSION, null,
+                    Context.RECEIVER_EXPORTED);
+            mContext.registerReceiver(mTrustableDowngradeReceiver, trustableFilter);
         } else {
             Log.e(TAG, "Can't bind to TrustAgent " + mName.flattenToShortString());
         }
@@ -461,6 +531,30 @@ public class TrustAgentWrapper {
     }
 
     /**
+     * @see android.service.trust.TrustAgentService#onUserRequestedUnlock(boolean)
+     */
+    public void onUserRequestedUnlock(boolean dismissKeyguard) {
+        try {
+            if (mTrustAgentService != null) {
+                mTrustAgentService.onUserRequestedUnlock(dismissKeyguard);
+            }
+        } catch (RemoteException e) {
+            onError(e);
+        }
+    }
+
+    /** @see android.service.trust.TrustAgentService#onUserMayRequestUnlock() */
+    public void onUserMayRequestUnlock() {
+        try {
+            if (mTrustAgentService != null) {
+                mTrustAgentService.onUserMayRequestUnlock();
+            }
+        } catch (RemoteException e) {
+            onError(e);
+        }
+    }
+
+    /**
      * @see android.service.trust.TrustAgentService#onUnlockLockout(int)
      */
     public void onUnlockLockout(int timeoutMs) {
@@ -477,6 +571,7 @@ public class TrustAgentWrapper {
      * @see android.service.trust.TrustAgentService#onDeviceLocked()
      */
     public void onDeviceLocked() {
+        mWithinSecurityLockdownWindow = false;
         try {
             if (mTrustAgentService != null) mTrustAgentService.onDeviceLocked();
         } catch (RemoteException e) {
@@ -495,6 +590,21 @@ public class TrustAgentWrapper {
         }
     }
 
+    /**
+     * @see android.service.trust.TrustAgentService#onTokenStateReceived()
+     *
+     */
+    public void onEscrowTokenActivated(long handle, int userId) {
+        if (DEBUG) Slog.d(TAG, "onEscrowTokenActivated: " + handle + " user: " + userId);
+        if (mTrustAgentService != null) {
+            try {
+                mTrustAgentService.onTokenStateReceived(handle,
+                        TrustAgentService.TOKEN_STATE_ACTIVE);
+            } catch (RemoteException e) {
+                onError(e);
+            }
+        }
+    }
     private void setCallback(ITrustAgentServiceCallback callback) {
         try {
             if (mTrustAgentService != null) {
@@ -556,6 +666,48 @@ public class TrustAgentWrapper {
         return mTrusted && mManagingTrust && !mTrustDisabledByDpm;
     }
 
+    public boolean isTrustable() {
+        return mTrustable && mManagingTrust && !mTrustDisabledByDpm;
+    }
+
+    public boolean isTrustableOrWaitingForDowngrade() {
+        return mWaitingForTrustableDowngrade || isTrustable();
+    }
+
+    /** Set the trustagent as not trustable */
+    public void setUntrustable() {
+        mTrustable = false;
+    }
+
+    /**
+     * Downgrades the trustagent to trustable as a result of a keyguard or screen related event, and
+     * then updates the trust state of the phone to reflect the change.
+     */
+    public void downgradeToTrustable() {
+        if (mWaitingForTrustableDowngrade) {
+            mWaitingForTrustableDowngrade = false;
+            mTrusted = false;
+            mTrustable = true;
+            mTrustManagerService.updateTrust(mUserId, 0);
+        }
+    }
+
+    private void setSecurityWindowTimer() {
+        mWithinSecurityLockdownWindow = true;
+        long expiration = SystemClock.elapsedRealtime() + (15 * 1000); // timer for 15 seconds
+        mAlarmManager.setExact(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                expiration,
+                TAG,
+                new AlarmManager.OnAlarmListener() {
+                    @Override
+                    public void onAlarm() {
+                        mWithinSecurityLockdownWindow = false;
+                    }
+                },
+                Handler.getMain());
+    }
+
     public boolean isManagingTrust() {
         return mManagingTrust && !mTrustDisabledByDpm;
     }
@@ -564,9 +716,16 @@ public class TrustAgentWrapper {
         return mMessage;
     }
 
+    /**
+     * Whether the trust agent would like to display {@link #getMessage()} to the user when trust
+     * is granted.
+     */
+    public boolean shouldDisplayTrustGrantedMessage() {
+        return mDisplayTrustGrantedMessage;
+    }
+
     public void destroy() {
         mHandler.removeMessages(MSG_RESTART_TIMEOUT);
-
         if (!mBound) {
             return;
         }
@@ -575,6 +734,7 @@ public class TrustAgentWrapper {
         mContext.unbindService(mConnection);
         mBound = false;
         mContext.unregisterReceiver(mBroadcastReceiver);
+        mContext.unregisterReceiver(mTrustableDowngradeReceiver);
         mTrustAgentService = null;
         mSetTrustAgentFeaturesToken = null;
         mHandler.sendEmptyMessage(MSG_REVOKE_TRUST);

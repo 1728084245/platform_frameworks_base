@@ -30,10 +30,10 @@ import android.content.Context;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteStatement;
 import android.os.Build;
-import android.test.suitebuilder.annotation.SmallTest;
 import android.util.Pair;
 
 import androidx.test.InstrumentationRegistry;
+import androidx.test.filters.SmallTest;
 import androidx.test.runner.AndroidJUnit4;
 
 import org.junit.After;
@@ -71,7 +71,7 @@ public class AccountsDbTest {
     private File deDb;
     private File ceDb;
 
-    @Mock private PrintWriter mMockWriter;
+    @Mock private PrintWriter mockWriter;
 
     @Before
     public void setUp() {
@@ -470,9 +470,9 @@ public class AccountsDbTest {
         logStatement.bindLong(6, insertionPoint);
         logStatement.execute();
 
-        mAccountsDb.dumpDebugTable(mMockWriter);
+        mAccountsDb.dumpDebugTable(mockWriter);
 
-        verify(mMockWriter, times(3)).println(anyString());
+        verify(mockWriter, times(3)).println(anyString());
     }
 
     @Test

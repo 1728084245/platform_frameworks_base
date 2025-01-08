@@ -16,6 +16,8 @@
 
 #include "TestSceneBase.h"
 
+#include <SkBlendMode.h>
+
 class ShadowShaderAnimation;
 
 static TestScene::Registrar _ShadowShader(TestScene::Info{
@@ -29,7 +31,7 @@ public:
     std::vector<sp<RenderNode> > cards;
     void createContent(int width, int height, Canvas& canvas) override {
         canvas.drawColor(0xFFFFFFFF, SkBlendMode::kSrcOver);
-        canvas.insertReorderBarrier(true);
+        canvas.enableZ(true);
 
         int outset = 50;
         for (int i = 0; i < 10; i++) {
@@ -39,7 +41,7 @@ public:
             cards.push_back(card);
         }
 
-        canvas.insertReorderBarrier(false);
+        canvas.enableZ(false);
     }
     void doFrame(int frameNr) override {
         int curFrame = frameNr % 10;

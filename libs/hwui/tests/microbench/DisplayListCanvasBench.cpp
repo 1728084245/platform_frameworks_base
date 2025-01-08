@@ -17,45 +17,50 @@
 #include <benchmark/benchmark.h>
 
 #include "DisplayList.h"
-#include "RecordingCanvas.h"
+#include "hwui/Canvas.h"
+#include "hwui/Paint.h"
+#include "pipeline/skia/SkiaDisplayList.h"
 #include "tests/common/TestUtils.h"
+
+#include <SkBlendMode.h>
 
 using namespace android;
 using namespace android::uirenderer;
+using namespace android::uirenderer::skiapipeline;
 
-void BM_DisplayList_alloc(benchmark::State& benchState) {
+void BM_SkiaDisplayList_alloc(benchmark::State& benchState) {
     while (benchState.KeepRunning()) {
-        auto displayList = new DisplayList();
+        auto displayList = new skiapipeline::SkiaDisplayList();
         benchmark::DoNotOptimize(displayList);
         delete displayList;
     }
 }
-BENCHMARK(BM_DisplayList_alloc);
+BENCHMARK(BM_SkiaDisplayList_alloc);
 
-void BM_DisplayList_alloc_theoretical(benchmark::State& benchState) {
+void BM_SkiaDisplayList_alloc_theoretical(benchmark::State& benchState) {
     while (benchState.KeepRunning()) {
-        auto displayList = new char[sizeof(DisplayList)];
+        auto displayList = new char[sizeof(skiapipeline::SkiaDisplayList)];
         benchmark::DoNotOptimize(displayList);
         delete[] displayList;
     }
 }
-BENCHMARK(BM_DisplayList_alloc_theoretical);
+BENCHMARK(BM_SkiaDisplayList_alloc_theoretical);
 
-void BM_DisplayListCanvas_record_empty(benchmark::State& benchState) {
-    std::unique_ptr<Canvas> canvas(Canvas::create_recording_canvas(100, 100));
-    delete canvas->finishRecording();
+void BM_SkiaDisplayListCanvas_record_empty(benchmark::State& benchState) {
+    auto canvas = std::make_unique<SkiaRecordingCanvas>(nullptr, 100, 100);
+    static_cast<void>(canvas->finishRecording());
 
     while (benchState.KeepRunning()) {
         canvas->resetRecording(100, 100);
         benchmark::DoNotOptimize(canvas.get());
-        delete canvas->finishRecording();
+        static_cast<void>(canvas->finishRecording());
     }
 }
-BENCHMARK(BM_DisplayListCanvas_record_empty);
+BENCHMARK(BM_SkiaDisplayListCanvas_record_empty);
 
-void BM_DisplayListCanvas_record_saverestore(benchmark::State& benchState) {
-    std::unique_ptr<Canvas> canvas(Canvas::create_recording_canvas(100, 100));
-    delete canvas->finishRecording();
+void BM_SkiaDisplayListCanvas_record_saverestore(benchmark::State& benchState) {
+    auto canvas = std::make_unique<SkiaRecordingCanvas>(nullptr, 100, 100);
+    static_cast<void>(canvas->finishRecording());
 
     while (benchState.KeepRunning()) {
         canvas->resetRecording(100, 100);
@@ -64,23 +69,23 @@ void BM_DisplayListCanvas_record_saverestore(benchmark::State& benchState) {
         benchmark::DoNotOptimize(canvas.get());
         canvas->restore();
         canvas->restore();
-        delete canvas->finishRecording();
+        static_cast<void>(canvas->finishRecording());
     }
 }
-BENCHMARK(BM_DisplayListCanvas_record_saverestore);
+BENCHMARK(BM_SkiaDisplayListCanvas_record_saverestore);
 
-void BM_DisplayListCanvas_record_translate(benchmark::State& benchState) {
-    std::unique_ptr<Canvas> canvas(Canvas::create_recording_canvas(100, 100));
-    delete canvas->finishRecording();
+void BM_SkiaDisplayListCanvas_record_translate(benchmark::State& benchState) {
+    auto canvas = std::make_unique<SkiaRecordingCanvas>(nullptr, 100, 100);
+    static_cast<void>(canvas->finishRecording());
 
     while (benchState.KeepRunning()) {
         canvas->resetRecording(100, 100);
         canvas->scale(10, 10);
         benchmark::DoNotOptimize(canvas.get());
-        delete canvas->finishRecording();
+        static_cast<void>(canvas->finishRecording());
     }
 }
-BENCHMARK(BM_DisplayListCanvas_record_translate);
+BENCHMARK(BM_SkiaDisplayListCanvas_record_translate);
 
 /**
  * Simulate a simple view drawing a background, overlapped by an image.
@@ -88,11 +93,11 @@ BENCHMARK(BM_DisplayListCanvas_record_translate);
  * Note that the recording commands are intentionally not perfectly efficient, as the
  * View system frequently produces unneeded save/restores.
  */
-void BM_DisplayListCanvas_record_simpleBitmapView(benchmark::State& benchState) {
-    std::unique_ptr<Canvas> canvas(Canvas::create_recording_canvas(100, 100));
-    delete canvas->finishRecording();
+void BM_SkiaDisplayListCanvas_record_simpleBitmapView(benchmark::State& benchState) {
+    auto canvas = std::make_unique<SkiaRecordingCanvas>(nullptr, 100, 100);
+    static_cast<void>(canvas->finishRecording());
 
-    SkPaint rectPaint;
+    Paint rectPaint;
     sk_sp<Bitmap> iconBitmap(TestUtils::createBitmap(80, 80));
 
     while (benchState.KeepRunning()) {
@@ -109,64 +114,18 @@ void BM_DisplayListCanvas_record_simpleBitmapView(benchmark::State& benchState) 
             canvas->restore();
         }
         benchmark::DoNotOptimize(canvas.get());
-        delete canvas->finishRecording();
+        static_cast<void>(canvas->finishRecording());
     }
 }
-BENCHMARK(BM_DisplayListCanvas_record_simpleBitmapView);
+BENCHMARK(BM_SkiaDisplayListCanvas_record_simpleBitmapView);
 
-class NullClient : public CanvasStateClient {
-    void onViewportInitialized() override {}
-    void onSnapshotRestored(const Snapshot& removed, const Snapshot& restored) {}
-    GLuint getTargetFbo() const override { return 0; }
-};
-
-void BM_CanvasState_saverestore(benchmark::State& benchState) {
-    NullClient client;
-    CanvasState state(client);
-    state.initializeSaveStack(100, 100, 0, 0, 100, 100, Vector3());
-
-    while (benchState.KeepRunning()) {
-        state.save(SaveFlags::MatrixClip);
-        state.save(SaveFlags::MatrixClip);
-        benchmark::DoNotOptimize(&state);
-        state.restore();
-        state.restore();
-    }
-}
-BENCHMARK(BM_CanvasState_saverestore);
-
-void BM_CanvasState_init(benchmark::State& benchState) {
-    NullClient client;
-    CanvasState state(client);
-    state.initializeSaveStack(100, 100, 0, 0, 100, 100, Vector3());
-
-    while (benchState.KeepRunning()) {
-        state.initializeSaveStack(100, 100, 0, 0, 100, 100, Vector3());
-        benchmark::DoNotOptimize(&state);
-    }
-}
-BENCHMARK(BM_CanvasState_init);
-
-void BM_CanvasState_translate(benchmark::State& benchState) {
-    NullClient client;
-    CanvasState state(client);
-    state.initializeSaveStack(100, 100, 0, 0, 100, 100, Vector3());
-
-    while (benchState.KeepRunning()) {
-        state.translate(5, 5, 0);
-        benchmark::DoNotOptimize(&state);
-        state.translate(-5, -5, 0);
-    }
-}
-BENCHMARK(BM_CanvasState_translate);
-
-void BM_DisplayListCanvas_basicViewGroupDraw(benchmark::State& benchState) {
+void BM_SkiaDisplayListCanvas_basicViewGroupDraw(benchmark::State& benchState) {
     sp<RenderNode> child = TestUtils::createNode(50, 50, 100, 100, [](auto& props, auto& canvas) {
         canvas.drawColor(0xFFFFFFFF, SkBlendMode::kSrcOver);
     });
 
-    std::unique_ptr<Canvas> canvas(Canvas::create_recording_canvas(100, 100));
-    delete canvas->finishRecording();
+    auto canvas = std::make_unique<SkiaRecordingCanvas>(nullptr, 100, 100);
+    static_cast<void>(canvas->finishRecording());
 
     while (benchState.KeepRunning()) {
         canvas->resetRecording(200, 200);
@@ -177,17 +136,17 @@ void BM_DisplayListCanvas_basicViewGroupDraw(benchmark::State& benchState) {
         int clipRestoreCount = canvas->save(SaveFlags::MatrixClip);
         canvas->clipRect(1, 1, 199, 199, SkClipOp::kIntersect);
 
-        canvas->insertReorderBarrier(true);
+        canvas->enableZ(true);
 
         // Draw child loop
         for (int i = 0; i < benchState.range(0); i++) {
             canvas->drawRenderNode(child.get());
         }
 
-        canvas->insertReorderBarrier(false);
+        canvas->enableZ(false);
         canvas->restoreToCount(clipRestoreCount);
 
-        delete canvas->finishRecording();
+        static_cast<void>(canvas->finishRecording());
     }
 }
-BENCHMARK(BM_DisplayListCanvas_basicViewGroupDraw)->Arg(1)->Arg(5)->Arg(10);
+BENCHMARK(BM_SkiaDisplayListCanvas_basicViewGroupDraw)->Arg(1)->Arg(5)->Arg(10);

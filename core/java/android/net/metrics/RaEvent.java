@@ -17,17 +17,20 @@
 package android.net.metrics;
 
 import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.annotation.TestApi;
 import android.os.Parcel;
 import android.os.Parcelable;
 
 /**
  * An event logged when the APF packet socket receives an RA packet.
  * {@hide}
+ * @deprecated The event may not be sent in Android S and above. The events
+ * are logged by a single caller in the system using signature permissions
+ * and that caller is migrating to statsd.
  */
+@Deprecated
 @SystemApi
-@TestApi
 public final class RaEvent implements IpConnectivityLog.Event {
 
     private static final long NO_LIFETIME = -1L;
@@ -85,6 +88,7 @@ public final class RaEvent implements IpConnectivityLog.Event {
         return 0;
     }
 
+    @NonNull
     @Override
     public String toString() {
         return new StringBuilder("RaEvent(lifetimes: ")
@@ -98,7 +102,7 @@ public final class RaEvent implements IpConnectivityLog.Event {
     }
 
     @Override
-    public boolean equals(Object obj) {
+    public boolean equals(@Nullable Object obj) {
         if (obj == null || !(obj.getClass().equals(RaEvent.class))) return false;
         final RaEvent other = (RaEvent) obj;
         return routerLifetime == other.routerLifetime
@@ -110,7 +114,7 @@ public final class RaEvent implements IpConnectivityLog.Event {
     }
 
     /** @hide */
-    public static final Parcelable.Creator<RaEvent> CREATOR = new Parcelable.Creator<RaEvent>() {
+    public static final @android.annotation.NonNull Parcelable.Creator<RaEvent> CREATOR = new Parcelable.Creator<RaEvent>() {
         public RaEvent createFromParcel(Parcel in) {
             return new RaEvent(in);
         }

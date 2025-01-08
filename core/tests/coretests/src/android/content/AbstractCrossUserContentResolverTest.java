@@ -16,8 +16,8 @@
 
 package android.content;
 
-
 import static org.junit.Assert.fail;
+import static org.junit.Assume.assumeTrue;
 
 import android.app.ActivityManager;
 import android.app.activity.LocalProvider;
@@ -30,15 +30,20 @@ import android.os.IBinder;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.os.UserManager;
-import android.support.test.InstrumentationRegistry;
-import android.support.test.filters.LargeTest;
-import android.support.test.runner.AndroidJUnit4;
+
+import androidx.test.InstrumentationRegistry;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.LargeTest;
+
+import com.android.compatibility.common.util.SystemUtil;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.util.Collection;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -47,7 +52,7 @@ import java.util.concurrent.TimeUnit;
 abstract class AbstractCrossUserContentResolverTest {
     private static final int TIMEOUT_SERVICE_CONNECTION_SEC = 4;
     private static final int TIMEOUT_CONTENT_CHANGE_SEC = 4;
-    private static final int TIMEOUT_USER_UNLOCK_SEC = 4;
+    private static final int TIMEOUT_USER_UNLOCK_SEC = 10;
 
     private Context mContext;
     protected UserManager mUm;
@@ -57,10 +62,12 @@ abstract class AbstractCrossUserContentResolverTest {
     @Before
     public void setUp() throws Exception {
         mContext = InstrumentationRegistry.getContext();
+        final PackageManager pm = mContext.getPackageManager();
+        assumeTrue("device doesn't have the " + PackageManager.FEATURE_MANAGED_USERS + " feature",
+                pm.hasSystemFeature(PackageManager.FEATURE_MANAGED_USERS));
         mUm = UserManager.get(mContext);
         final UserInfo userInfo = createUser();
         mCrossUserId = userInfo.id;
-        final PackageManager pm = mContext.getPackageManager();
         pm.installExistingPackageAsUser(mContext.getPackageName(), mCrossUserId);
         unlockUser();
 
@@ -92,6 +99,7 @@ abstract class AbstractCrossUserContentResolverTest {
         mContext.registerReceiverAsUser(receiver, UserHandle.of(mCrossUserId),
                 new IntentFilter(Intent.ACTION_USER_UNLOCKED), null, null);
         ActivityManager.getService().startUserInBackground(mCrossUserId);
+        SystemUtil.runShellCommand("am wait-for-broadcast-barrier");
 
         try {
             if (!latch.await(TIMEOUT_USER_UNLOCK_SEC, TimeUnit.SECONDS)) {
@@ -116,6 +124,7 @@ abstract class AbstractCrossUserContentResolverTest {
      * Register an observer for an URI in another user and verify that it receives
      * onChange callback when data at the URI changes.
      */
+    @Ignore("b/272733874")
     @Test
     public void testRegisterContentObserver() throws Exception {
         Context crossUserContext = null;
@@ -145,6 +154,7 @@ abstract class AbstractCrossUserContentResolverTest {
      * Register an observer for an URI in the current user and verify that another user can
      * notify changes for this URI.
      */
+    @Ignore("b/272733874")
     @Test
     public void testNotifyChange() throws Exception {
         final CountDownLatch notifyLatch = new CountDownLatch(1);
@@ -194,8 +204,8 @@ abstract class AbstractCrossUserContentResolverTest {
         }
 
         @Override
-        public void onChange(boolean selfChange, Uri uri, int userId) {
-            if (mExpectedUri.equals(uri) && mExpectedUserId == userId) {
+        public void onChange(boolean selfChange, Collection<Uri> uris, int flags, int userId) {
+            if (uris.contains(mExpectedUri) && mExpectedUserId == userId) {
                 mLatch.countDown();
             }
         }

@@ -16,8 +16,11 @@
 
 package com.android.server.accessibility;
 
+import static android.view.KeyCharacterMap.VIRTUAL_KEYBOARD;
 import static android.view.MotionEvent.ACTION_DOWN;
+import static android.view.MotionEvent.ACTION_HOVER_MOVE;
 import static android.view.MotionEvent.ACTION_UP;
+import static android.view.WindowManagerPolicyConstants.FLAG_INJECTED_FROM_ACCESSIBILITY;
 import static android.view.WindowManagerPolicyConstants.FLAG_PASS_TO_USER;
 
 import static org.hamcrest.CoreMatchers.allOf;
@@ -43,10 +46,9 @@ import android.accessibilityservice.GestureDescription.TouchPoint;
 import android.accessibilityservice.IAccessibilityServiceClient;
 import android.graphics.Point;
 import android.os.Handler;
-import android.os.Looper;
 import android.os.Message;
 import android.os.RemoteException;
-import android.util.Log;
+import android.view.Display;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -54,11 +56,14 @@ import android.view.accessibility.AccessibilityEvent;
 
 import androidx.test.runner.AndroidJUnit4;
 
+import com.android.server.accessibility.test.MessageCapturingHandler;
+import com.android.server.accessibility.utils.MotionEventMatcher;
+
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;
 import org.hamcrest.TypeSafeMatcher;
+import org.junit.After;
 import org.junit.Before;
-import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
@@ -108,8 +113,16 @@ public class MotionEventInjectorTest {
     private static final int CONTINUED_LINE_SEQUENCE_1 = 52;
     private static final int CONTINUED_LINE_SEQUENCE_2 = 53;
 
+    private static final float PRESSURE = 1;
+    private static final float X_PRECISION = 1;
+    private static final float Y_PRECISION = 1;
+    private static final int EDGEFLAGS = 0;
+    private static final float POINTER_SIZE = 1;
+    private static final int METASTATE = 0;
+
     MotionEventInjector mMotionEventInjector;
     IAccessibilityServiceClient mServiceInterface;
+    AccessibilityTraceManager mTrace;
     List<GestureStep> mLineList = new ArrayList<>();
     List<GestureStep> mClickList = new ArrayList<>();
     List<GestureStep> mContinuedLineList1 = new ArrayList<>();
@@ -117,6 +130,7 @@ public class MotionEventInjectorTest {
 
     MotionEvent mClickDownEvent;
     MotionEvent mClickUpEvent;
+    MotionEvent mHoverMoveEvent;
 
     ArgumentCaptor<MotionEvent> mCaptor1 = ArgumentCaptor.forClass(MotionEvent.class);
     ArgumentCaptor<MotionEvent> mCaptor2 = ArgumentCaptor.forClass(MotionEvent.class);
@@ -127,13 +141,6 @@ public class MotionEventInjectorTest {
     Matcher<MotionEvent> mIsClickDown;
     Matcher<MotionEvent> mIsClickUp;
 
-    @BeforeClass
-    public static void oneTimeInitialization() {
-        if (Looper.myLooper() == null) {
-            Looper.prepare();
-        }
-    }
-
     @Before
     public void setUp() {
         mMessageCapturingHandler = new MessageCapturingHandler(new Handler.Callback() {
@@ -142,7 +149,8 @@ public class MotionEventInjectorTest {
                 return mMotionEventInjector.handleMessage(msg);
             }
         });
-        mMotionEventInjector = new MotionEventInjector(mMessageCapturingHandler);
+        mTrace = mock(AccessibilityTraceManager.class);
+        mMotionEventInjector = new MotionEventInjector(mMessageCapturingHandler, mTrace);
         mServiceInterface = mock(IAccessibilityServiceClient.class);
 
         mLineList = createSimpleGestureFromPoints(0, 0, false, LINE_DURATION, LINE_START, LINE_END);
@@ -154,11 +162,19 @@ public class MotionEventInjectorTest {
                 CONTINUED_LINE_STROKE_ID_1, false, CONTINUED_LINE_INTERVAL, CONTINUED_LINE_MID1,
                 CONTINUED_LINE_MID2, CONTINUED_LINE_END);
 
-        mClickDownEvent = MotionEvent.obtain(0, 0, ACTION_DOWN, CLICK_POINT.x, CLICK_POINT.y, 0);
+        mClickDownEvent = MotionEvent.obtain(0, 0, ACTION_DOWN, CLICK_POINT.x, CLICK_POINT.y,
+                 PRESSURE, POINTER_SIZE, METASTATE, X_PRECISION, Y_PRECISION, VIRTUAL_KEYBOARD,
+                 EDGEFLAGS);
         mClickDownEvent.setSource(InputDevice.SOURCE_TOUCHSCREEN);
         mClickUpEvent = MotionEvent.obtain(0, CLICK_DURATION, ACTION_UP, CLICK_POINT.x,
-                CLICK_POINT.y, 0);
+                CLICK_POINT.y, PRESSURE, POINTER_SIZE, METASTATE, X_PRECISION, Y_PRECISION,
+                VIRTUAL_KEYBOARD, EDGEFLAGS);
         mClickUpEvent.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+
+        mHoverMoveEvent = MotionEvent.obtain(0, 0, ACTION_HOVER_MOVE, CLICK_POINT.x, CLICK_POINT.y,
+                PRESSURE, POINTER_SIZE, METASTATE, X_PRECISION, Y_PRECISION, VIRTUAL_KEYBOARD,
+                EDGEFLAGS);
+        mHoverMoveEvent.setSource(InputDevice.SOURCE_MOUSE);
 
         mIsLineStart = allOf(IS_ACTION_DOWN, isAtPoint(LINE_START), hasStandardInitialization(),
                 hasTimeFromDown(0));
@@ -172,6 +188,12 @@ public class MotionEventInjectorTest {
                 hasTimeFromDown(CLICK_DURATION));
     }
 
+    @After
+    public void tearDown() {
+        mMessageCapturingHandler.removeAllMessages();
+    }
+
+
     @Test
     public void testInjectEvents_shouldEmergeInOrderWithCorrectTiming() throws RemoteException {
         EventStreamTransformation next = attachMockNext(mMotionEventInjector);
@@ -179,9 +201,9 @@ public class MotionEventInjectorTest {
         verifyNoMoreInteractions(next);
         mMessageCapturingHandler.sendOneMessage(); // Send a motion event
 
-        verify(next).onMotionEvent(mCaptor1.capture(), mCaptor2.capture(), eq(FLAG_PASS_TO_USER));
-        verify(next).onMotionEvent(argThat(mIsLineStart), argThat(mIsLineStart),
-                eq(FLAG_PASS_TO_USER));
+        final int expectedFlags = FLAG_PASS_TO_USER | FLAG_INJECTED_FROM_ACCESSIBILITY;
+        verify(next).onMotionEvent(mCaptor1.capture(), mCaptor2.capture(), eq(expectedFlags));
+        verify(next).onMotionEvent(argThat(mIsLineStart), argThat(mIsLineStart), eq(expectedFlags));
         verifyNoMoreInteractions(next);
         reset(next);
 
@@ -189,7 +211,7 @@ public class MotionEventInjectorTest {
 
         mMessageCapturingHandler.sendOneMessage(); // Send a motion event
         verify(next).onMotionEvent(argThat(allOf(mIsLineMiddle, hasRightDownTime)),
-                argThat(allOf(mIsLineMiddle, hasRightDownTime)), eq(FLAG_PASS_TO_USER));
+                argThat(allOf(mIsLineMiddle, hasRightDownTime)), eq(expectedFlags));
         verifyNoMoreInteractions(next);
         reset(next);
 
@@ -197,7 +219,7 @@ public class MotionEventInjectorTest {
 
         mMessageCapturingHandler.sendOneMessage(); // Send a motion event
         verify(next).onMotionEvent(argThat(allOf(mIsLineEnd, hasRightDownTime)),
-                argThat(allOf(mIsLineEnd, hasRightDownTime)), eq(FLAG_PASS_TO_USER));
+                argThat(allOf(mIsLineEnd, hasRightDownTime)), eq(expectedFlags));
         verifyNoMoreInteractions(next);
 
         verify(mServiceInterface).onPerformGestureResult(LINE_SEQUENCE, true);
@@ -235,7 +257,8 @@ public class MotionEventInjectorTest {
         mMessageCapturingHandler.sendAllMessages(); // Send all motion events
         reset(next);
         mMotionEventInjector.onMotionEvent(mClickDownEvent, mClickDownEvent, 0);
-        verify(next).onMotionEvent(argThat(mIsClickDown), argThat(mIsClickDown), eq(0));
+        verify(next).onMotionEvent(argThat(mIsClickDown), argThat(mIsClickDown),
+                eq(FLAG_INJECTED_FROM_ACCESSIBILITY));
     }
 
     @Test
@@ -251,7 +274,8 @@ public class MotionEventInjectorTest {
 
         mMessageCapturingHandler.sendOneMessage(); // Send a motion event
         verify(next).onMotionEvent(
-                argThat(mIsLineStart), argThat(mIsLineStart), eq(FLAG_PASS_TO_USER));
+                argThat(mIsLineStart), argThat(mIsLineStart),
+                eq(FLAG_PASS_TO_USER | FLAG_INJECTED_FROM_ACCESSIBILITY));
     }
 
     @Test
@@ -282,9 +306,11 @@ public class MotionEventInjectorTest {
         reset(next);
 
         mMessageCapturingHandler.sendOneMessage(); // Send a motion event
-        verify(next).onMotionEvent(mCaptor1.capture(), mCaptor2.capture(), eq(FLAG_PASS_TO_USER));
+        verify(next).onMotionEvent(mCaptor1.capture(), mCaptor2.capture(),
+                eq(FLAG_PASS_TO_USER | FLAG_INJECTED_FROM_ACCESSIBILITY));
         verify(next).onMotionEvent(
-                argThat(mIsLineStart), argThat(mIsLineStart), eq(FLAG_PASS_TO_USER));
+                argThat(mIsLineStart), argThat(mIsLineStart),
+                eq(FLAG_PASS_TO_USER | FLAG_INJECTED_FROM_ACCESSIBILITY));
     }
 
     @Test
@@ -300,6 +326,23 @@ public class MotionEventInjectorTest {
         assertThat(mCaptor1.getAllValues().get(1), IS_ACTION_CANCEL);
         assertThat(mCaptor1.getAllValues().get(2), mIsClickDown);
         verify(mServiceInterface).onPerformGestureResult(LINE_SEQUENCE, false);
+    }
+
+    @Test
+    public void
+            testOnMotionEvents_fromMouseWithInjectedGestureInProgress_shouldNotCancelAndPassReal()
+            throws RemoteException {
+        EventStreamTransformation next = attachMockNext(mMotionEventInjector);
+        injectEventsSync(mLineList, mServiceInterface, LINE_SEQUENCE);
+        mMessageCapturingHandler.sendOneMessage(); // Send a motion event
+        mMotionEventInjector.onMotionEvent(mHoverMoveEvent, mHoverMoveEvent, 0);
+        mMessageCapturingHandler.sendAllMessages();
+
+        verify(next, times(3)).onMotionEvent(mCaptor1.capture(), mCaptor2.capture(), anyInt());
+        assertThat(mCaptor1.getAllValues().get(0), mIsLineStart);
+        assertThat(mCaptor1.getAllValues().get(1), mIsLineMiddle);
+        assertThat(mCaptor1.getAllValues().get(2), mIsLineEnd);
+        verify(mServiceInterface).onPerformGestureResult(LINE_SEQUENCE, true);
     }
 
     @Test
@@ -688,7 +731,8 @@ public class MotionEventInjectorTest {
 
     private void injectEventsSync(List<GestureStep> gestureSteps,
             IAccessibilityServiceClient serviceInterface, int sequence) {
-        mMotionEventInjector.injectEvents(gestureSteps, serviceInterface, sequence);
+        mMotionEventInjector.injectEvents(gestureSteps, serviceInterface, sequence,
+                Display.DEFAULT_DISPLAY);
         // Dispatch the message sent by the injector. Our simple handler doesn't guarantee stuff
         // happens in order.
         mMessageCapturingHandler.sendLastMessage();
@@ -736,56 +780,6 @@ public class MotionEventInjectorTest {
         EventStreamTransformation next = mock(EventStreamTransformation.class);
         motionEventInjector.setNext(next);
         return next;
-    }
-
-    static class MotionEventMatcher extends TypeSafeMatcher<MotionEvent> {
-        long mDownTime;
-        long mEventTime;
-        long mActionMasked;
-        int mX;
-        int mY;
-
-        MotionEventMatcher(long downTime, long eventTime, int actionMasked, int x, int y) {
-            mDownTime = downTime;
-            mEventTime = eventTime;
-            mActionMasked = actionMasked;
-            mX = x;
-            mY = y;
-        }
-
-        MotionEventMatcher(MotionEvent event) {
-            this(event.getDownTime(), event.getEventTime(), event.getActionMasked(),
-                    (int) event.getX(), (int) event.getY());
-        }
-
-        void offsetTimesBy(long timeOffset) {
-            mDownTime += timeOffset;
-            mEventTime += timeOffset;
-        }
-
-        @Override
-        public boolean matchesSafely(MotionEvent event) {
-            if ((event.getDownTime() == mDownTime) && (event.getEventTime() == mEventTime)
-                    && (event.getActionMasked() == mActionMasked) && ((int) event.getX() == mX)
-                    && ((int) event.getY() == mY)) {
-                return true;
-            }
-            Log.e(LOG_TAG, "MotionEvent match failed");
-            Log.e(LOG_TAG, "event.getDownTime() = " + event.getDownTime()
-                    + ", expected " + mDownTime);
-            Log.e(LOG_TAG, "event.getEventTime() = " + event.getEventTime()
-                    + ", expected " + mEventTime);
-            Log.e(LOG_TAG, "event.getActionMasked() = " + event.getActionMasked()
-                    + ", expected " + mActionMasked);
-            Log.e(LOG_TAG, "event.getX() = " + event.getX() + ", expected " + mX);
-            Log.e(LOG_TAG, "event.getY() = " + event.getY() + ", expected " + mY);
-            return false;
-        }
-
-        @Override
-        public void describeTo(Description description) {
-            description.appendText("Motion event matcher");
-        }
     }
 
     private static class MotionEventActionMatcher extends TypeSafeMatcher<MotionEvent> {
@@ -843,7 +837,7 @@ public class MotionEventInjectorTest {
 
             @Override
             public void describeTo(Description description) {
-                description.appendText("Contains points " + points);
+                description.appendText("Contains points " + Arrays.toString(points));
             }
         };
     }
@@ -894,12 +888,14 @@ public class MotionEventInjectorTest {
         return new TypeSafeMatcher<MotionEvent>() {
             @Override
             protected boolean matchesSafely(MotionEvent event) {
-                return (0 == event.getActionIndex()) && (0 == event.getDeviceId())
-                        && (0 == event.getEdgeFlags()) && (0 == event.getFlags())
-                        && (0 == event.getMetaState()) && (0F == event.getOrientation())
+                return (0 == event.getActionIndex()) && (VIRTUAL_KEYBOARD == event.getDeviceId())
+                        && (EDGEFLAGS == event.getEdgeFlags()) && (0 == event.getFlags())
+                        && (METASTATE == event.getMetaState()) && (0F == event.getOrientation())
                         && (0F == event.getTouchMajor()) && (0F == event.getTouchMinor())
-                        && (1F == event.getXPrecision()) && (1F == event.getYPrecision())
-                        && (1 == event.getPointerCount()) && (1F == event.getPressure())
+                        && (X_PRECISION == event.getXPrecision())
+                        && (Y_PRECISION == event.getYPrecision())
+                        && (POINTER_SIZE == event.getSize())
+                        && (1 == event.getPointerCount()) && (PRESSURE == event.getPressure())
                         && (InputDevice.SOURCE_TOUCHSCREEN == event.getSource());
             }
 

@@ -25,11 +25,12 @@ import static com.android.internal.util.Preconditions.checkState;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanRecord;
 import android.bluetooth.le.ScanResult;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 import android.os.Parcel;
 import android.provider.OneTimeUseBuilder;
 import android.text.TextUtils;
@@ -37,7 +38,6 @@ import android.util.Log;
 
 import com.android.internal.util.BitUtils;
 import com.android.internal.util.ObjectUtils;
-import com.android.internal.util.Preconditions;
 
 import libcore.util.HexEncoding;
 
@@ -54,7 +54,7 @@ import java.util.regex.Pattern;
 public final class BluetoothLeDeviceFilter implements DeviceFilter<ScanResult> {
 
     private static final boolean DEBUG = false;
-    private static final String LOG_TAG = "BluetoothLeDeviceFilter";
+    private static final String LOG_TAG = "CDM_BluetoothLeDeviceFilter";
 
     private static final int RENAME_PREFIX_LENGTH_LIMIT = 10;
 
@@ -75,7 +75,7 @@ public final class BluetoothLeDeviceFilter implements DeviceFilter<ScanResult> {
             String renameSuffix, int renameBytesFrom, int renameBytesLength,
             int renameNameFrom, int renameNameLength, boolean renameBytesReverseOrder) {
         mNamePattern = namePattern;
-        mScanFilter = ObjectUtils.firstNotNull(scanFilter, ScanFilter.EMPTY);
+        mScanFilter = ObjectUtils.firstNotNull(scanFilter, new ScanFilter.Builder().build());
         mRawDataFilter = rawDataFilter;
         mRawDataFilterMask = rawDataFilterMask;
         mRenamePrefix = renamePrefix;
@@ -95,7 +95,7 @@ public final class BluetoothLeDeviceFilter implements DeviceFilter<ScanResult> {
 
     /** @hide */
     @NonNull
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public ScanFilter getScanFilter() {
         return mScanFilter;
     }
@@ -166,19 +166,16 @@ public final class BluetoothLeDeviceFilter implements DeviceFilter<ScanResult> {
 
     /** @hide */
     @Override
-    public boolean matches(ScanResult device) {
-        boolean result = matches(device.getDevice())
+    public boolean matches(ScanResult scanResult) {
+        BluetoothDevice device = scanResult.getDevice();
+        boolean result = getScanFilter().matches(scanResult)
+                && BluetoothDeviceFilterUtils.matchesName(getNamePattern(), device)
                 && (mRawDataFilter == null
-                    || BitUtils.maskedEquals(device.getScanRecord().getBytes(),
+                    || BitUtils.maskedEquals(scanResult.getScanRecord().getBytes(),
                             mRawDataFilter, mRawDataFilterMask));
         if (DEBUG) Log.i(LOG_TAG, "matches(this = " + this + ", device = " + device +
                 ") -> " + result);
         return result;
-    }
-
-    private boolean matches(BluetoothDevice device) {
-        return BluetoothDeviceFilterUtils.matches(getScanFilter(), device)
-                && BluetoothDeviceFilterUtils.matchesName(getNamePattern(), device);
     }
 
     /** @hide */
@@ -188,7 +185,7 @@ public final class BluetoothLeDeviceFilter implements DeviceFilter<ScanResult> {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         BluetoothLeDeviceFilter that = (BluetoothLeDeviceFilter) o;
@@ -207,9 +204,10 @@ public final class BluetoothLeDeviceFilter implements DeviceFilter<ScanResult> {
 
     @Override
     public int hashCode() {
-        return Objects.hash(mNamePattern, mScanFilter, mRawDataFilter, mRawDataFilterMask,
-                mRenamePrefix, mRenameSuffix, mRenameBytesFrom, mRenameBytesLength,
-                mRenameNameFrom, mRenameNameLength, mRenameBytesReverseOrder);
+        return Objects.hash(mNamePattern, mScanFilter, Arrays.hashCode(mRawDataFilter),
+                Arrays.hashCode(mRawDataFilterMask), mRenamePrefix, mRenameSuffix,
+                mRenameBytesFrom, mRenameBytesLength, mRenameNameFrom, mRenameNameLength,
+                mRenameBytesReverseOrder);
     }
 
     @Override
@@ -249,13 +247,13 @@ public final class BluetoothLeDeviceFilter implements DeviceFilter<ScanResult> {
                 '}';
     }
 
-    public static final Creator<BluetoothLeDeviceFilter> CREATOR
+    public static final @android.annotation.NonNull Creator<BluetoothLeDeviceFilter> CREATOR
             = new Creator<BluetoothLeDeviceFilter>() {
         @Override
         public BluetoothLeDeviceFilter createFromParcel(Parcel in) {
             Builder builder = new Builder()
                     .setNamePattern(patternFromString(in.readString()))
-                    .setScanFilter(in.readParcelable(null));
+                    .setScanFilter(in.readParcelable(null, android.bluetooth.le.ScanFilter.class));
             byte[] rawDataFilter = in.createByteArray();
             byte[] rawDataFilterMask = in.createByteArray();
             if (rawDataFilter != null) {
@@ -340,7 +338,7 @@ public final class BluetoothLeDeviceFilter implements DeviceFilter<ScanResult> {
         public Builder setRawDataFilter(@NonNull byte[] rawDataFilter,
                 @Nullable byte[] rawDataFilterMask) {
             checkNotUsed();
-            Preconditions.checkNotNull(rawDataFilter);
+            Objects.requireNonNull(rawDataFilter);
             checkArgument(rawDataFilterMask == null ||
                     rawDataFilter.length == rawDataFilterMask.length,
                     "Mask and filter should be the same length");

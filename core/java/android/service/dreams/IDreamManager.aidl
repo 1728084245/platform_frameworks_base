@@ -17,6 +17,7 @@
 package android.service.dreams;
 
 import android.content.ComponentName;
+import android.content.Intent;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.os.IBinder;
@@ -27,15 +28,33 @@ interface IDreamManager {
     void dream();
     @UnsupportedAppUsage
     void awaken();
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = 30, trackingBug = 170729553)
     void setDreamComponents(in ComponentName[] componentNames);
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = 30, trackingBug = 170729553)
     ComponentName[] getDreamComponents();
-    ComponentName getDefaultDreamComponent();
-    void testDream(in ComponentName componentName);
+    ComponentName getDefaultDreamComponentForUser(int userId);
+    void testDream(int userId, in ComponentName componentName);
     @UnsupportedAppUsage
     boolean isDreaming();
+    @UnsupportedAppUsage
+    boolean isDreamingOrInPreview();
+    boolean canStartDreaming(boolean isScreenOn);
+    /** @deprecated Please use finishSelfOneway instead. */
     void finishSelf(in IBinder token, boolean immediate);
-    void startDozing(in IBinder token, int screenState, int screenBrightness);
+    /** @deprecated Please use startDozingOneway instead. */
+    void startDozing(in IBinder token, int screenState, int reason, float screenBrightnessFloat,
+            int screenBrightnessInt, boolean useNormalBrightnessForDoze);
     void stopDozing(in IBinder token);
+    void forceAmbientDisplayEnabled(boolean enabled);
+    ComponentName[] getDreamComponentsForUser(int userId);
+    void setDreamComponentsForUser(int userId, in ComponentName[] componentNames);
+    void setSystemDreamComponent(in ComponentName componentName);
+    void registerDreamOverlayService(in ComponentName componentName);
+    void startDreamActivity(in Intent intent);
+    @JavaPassthrough(annotation="@android.annotation.RequiresPermission(android.Manifest.permission.WRITE_DREAM_STATE)")
+    oneway void setDreamIsObscured(in boolean isObscured);
+    oneway void startDozingOneway(in IBinder token, int screenState, int reason,
+            float screenBrightnessFloat, int screenBrightnessInt,
+            boolean useNormalBrightnessForDoze);
+    oneway void finishSelfOneway(in IBinder token, boolean immediate);
 }

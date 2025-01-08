@@ -18,11 +18,13 @@ package android.telephony;
 
 import android.annotation.IntRange;
 import android.annotation.StringDef;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.PersistableBundle;
-import android.telephony.Rlog;
 import android.text.TextUtils;
+
+import com.android.telephony.Rlog;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -70,6 +72,8 @@ public final class CellSignalStrengthWcdma extends CellSignalStrength implements
     private static final String DEFAULT_LEVEL_CALCULATION_METHOD = LEVEL_CALCULATION_METHOD_RSSI;
 
     private int mRssi; // in dBm [-113, 51] or CellInfo.UNAVAILABLE if unknown
+
+    @UnsupportedAppUsage
     private int mBitErrorRate; // bit error rate (0-7, 99) as defined in TS 27.007 8.5 or
                                // CellInfo.UNAVAILABLE if unknown
     private int mRscp; // in dBm [-120, -24]
@@ -88,30 +92,6 @@ public final class CellSignalStrengthWcdma extends CellSignalStrength implements
         mRscp = inRangeOrUnavailable(rscp, -120, -24);
         mEcNo = inRangeOrUnavailable(ecno, -24, 1);
         updateLevel(null, null);
-    }
-
-    /** @hide */
-    public CellSignalStrengthWcdma(android.hardware.radio.V1_0.WcdmaSignalStrength wcdma) {
-        // Convert from HAL values as part of construction.
-        this(getRssiDbmFromAsu(wcdma.signalStrength), wcdma.bitErrorRate,
-                CellInfo.UNAVAILABLE, CellInfo.UNAVAILABLE);
-
-        if (mRssi == CellInfo.UNAVAILABLE && mRscp == CellInfo.UNAVAILABLE) {
-            setDefaultValues();
-        }
-    }
-
-    /** @hide */
-    public CellSignalStrengthWcdma(android.hardware.radio.V1_2.WcdmaSignalStrength wcdma) {
-        // Convert from HAL values as part of construction.
-        this(getRssiDbmFromAsu(wcdma.base.signalStrength),
-                    wcdma.base.bitErrorRate,
-                    getRscpDbmFromAsu(wcdma.rscp),
-                    getEcNoDbFromAsu(wcdma.ecno));
-
-        if (mRssi == CellInfo.UNAVAILABLE && mRscp == CellInfo.UNAVAILABLE) {
-            setDefaultValues();
-        }
     }
 
     /** @hide */
@@ -242,9 +222,12 @@ public final class CellSignalStrengthWcdma extends CellSignalStrength implements
     }
 
     /**
-     * Get the Ec/No as dB
+     * Get the Ec/No (Energy per chip over the noise spectral density) as dB.
      *
-     * @hide
+     * Reference: TS 25.133 Section 9.1.2.3
+     *
+     * @return the Ec/No of the measured cell in the range [-24, 1] or
+     * {@link android.telephony.CellInfo#UNAVAILABLE UNAVAILABLE} if unavailable
      */
     public int getEcNo() {
         return mEcNo;
@@ -330,7 +313,7 @@ public final class CellSignalStrengthWcdma extends CellSignalStrength implements
 
     /** Implement the Parcelable interface */
     @SuppressWarnings("hiding")
-    public static final Parcelable.Creator<CellSignalStrengthWcdma> CREATOR =
+    public static final @android.annotation.NonNull Parcelable.Creator<CellSignalStrengthWcdma> CREATOR =
             new Parcelable.Creator<CellSignalStrengthWcdma>() {
         @Override
         public CellSignalStrengthWcdma createFromParcel(Parcel in) {

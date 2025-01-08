@@ -16,28 +16,103 @@
 
 package com.android.internal.app;
 
+import static org.mockito.Mockito.when;
+
+import android.annotation.Nullable;
 import android.app.usage.UsageStatsManager;
+import android.content.ComponentName;
+import android.content.ContentResolver;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.content.res.Resources;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.UserHandle;
+import android.util.Pair;
+import android.util.Size;
 
-import java.util.function.Function;
+import com.android.internal.app.AbstractMultiProfilePagerAdapter.CrossProfileIntentsChecker;
+import com.android.internal.app.ResolverListAdapter.ResolveInfoPresentationGetter;
+import com.android.internal.app.chooser.DisplayResolveInfo;
+import com.android.internal.app.chooser.TargetInfo;
+import com.android.internal.logging.MetricsLogger;
+import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 
-import static org.mockito.Mockito.mock;
+import java.util.List;
 
-public class ChooserWrapperActivity extends ChooserActivity {
-    /*
-     * Simple wrapper around chooser activity to be able to initiate it under test
-     */
-    static final OverrideData sOverrides = new OverrideData();
+/**
+ * Simple wrapper around chooser activity to be able to initiate it under test with overrides
+ * specified in the {@code ChooserActivityOverrideData} singleton. This should be copy-and-pasted
+ * verbatim to test other {@code ChooserActivity} subclasses (updating only the `extends` to match
+ * the concrete activity under test).
+ */
+public class ChooserWrapperActivity extends ChooserActivity implements IChooserWrapper {
+    static final ChooserActivityOverrideData sOverrides = ChooserActivityOverrideData.getInstance();
     private UsageStatsManager mUsm;
 
-    ResolveListAdapter getAdapter() {
-        return mAdapter;
+    // ResolverActivity (the base class of ChooserActivity) inspects the launched-from UID at
+    // onCreate and needs to see some non-negative value in the test.
+    @Override
+    public int getLaunchedFromUid() {
+        return 1234;
     }
 
-    boolean getIsSelected() { return mIsSuccessfullySelected; }
+    @Override
+    public ChooserListAdapter createChooserListAdapter(Context context, List<Intent> payloadIntents,
+            Intent[] initialIntents, List<ResolveInfo> rList, boolean filterLastUsed,
+            UserHandle userHandle) {
+        PackageManager packageManager =
+                sOverrides.packageManager == null ? context.getPackageManager()
+                        : sOverrides.packageManager;
+        return new ChooserListAdapter(context, payloadIntents, initialIntents, rList,
+                filterLastUsed, createListController(userHandle),
+                this, this, packageManager,
+                getChooserActivityLogger(), userHandle);
+    }
 
-    UsageStatsManager getUsageStatsManager() {
+    @Override
+    public ChooserListAdapter getAdapter() {
+        return mChooserMultiProfilePagerAdapter.getActiveListAdapter();
+    }
+
+    @Override
+    public ChooserListAdapter getPersonalListAdapter() {
+        return ((ChooserGridAdapter) mMultiProfilePagerAdapter.getAdapterForIndex(0))
+                .getListAdapter();
+    }
+
+    @Override
+    public ChooserListAdapter getWorkListAdapter() {
+        if (mMultiProfilePagerAdapter.getInactiveListAdapter() == null) {
+            return null;
+        }
+        return ((ChooserGridAdapter) mMultiProfilePagerAdapter.getAdapterForIndex(1))
+                .getListAdapter();
+    }
+
+    @Override
+    public boolean getIsSelected() {
+        return mIsSuccessfullySelected;
+    }
+
+    @Override
+    protected ComponentName getNearbySharingComponent() {
+        // an arbitrary pre-installed activity that handles this type of intent
+        return ComponentName.unflattenFromString("com.google.android.apps.messaging/"
+                + "com.google.android.apps.messaging.ui.conversationlist.ShareIntentActivity");
+    }
+
+    @Override
+    protected TargetInfo getNearbySharingTarget(Intent originalIntent) {
+        return new ChooserWrapperActivity.EmptyTargetInfo();
+    }
+
+    @Override
+    public UsageStatsManager getUsageStatsManager() {
         if (mUsm == null) {
             mUsm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         }
@@ -53,17 +128,39 @@ public class ChooserWrapperActivity extends ChooserActivity {
     }
 
     @Override
-    public void safelyStartActivity(TargetInfo cti) {
-        if (sOverrides.onSafelyStartCallback != null &&
-                sOverrides.onSafelyStartCallback.apply(cti)) {
-            return;
+    protected CrossProfileIntentsChecker createCrossProfileIntentsChecker() {
+        if (sOverrides.mCrossProfileIntentsChecker != null) {
+            return sOverrides.mCrossProfileIntentsChecker;
         }
-        super.safelyStartActivity(cti);
+        return super.createCrossProfileIntentsChecker();
     }
 
     @Override
-    protected ResolverListController createListController() {
-        return sOverrides.resolverListController;
+    protected AbstractMultiProfilePagerAdapter.QuietModeManager createQuietModeManager() {
+        if (sOverrides.mQuietModeManager != null) {
+            return sOverrides.mQuietModeManager;
+        }
+        return super.createQuietModeManager();
+    }
+
+    @Override
+    public void safelyStartActivityInternal(TargetInfo cti, UserHandle user,
+            @Nullable Bundle options) {
+        if (sOverrides.onSafelyStartInternalCallback != null
+                && sOverrides.onSafelyStartInternalCallback.apply(cti)) {
+            return;
+        }
+        super.safelyStartActivityInternal(cti, user, options);
+    }
+
+    @Override
+    protected ResolverListController createListController(UserHandle userHandle) {
+        if (userHandle == UserHandle.SYSTEM) {
+            when(sOverrides.resolverListController.getUserHandle()).thenReturn(UserHandle.SYSTEM);
+            return sOverrides.resolverListController;
+        }
+        when(sOverrides.workResolverListController.getUserHandle()).thenReturn(userHandle);
+        return sOverrides.workResolverListController;
     }
 
     @Override
@@ -74,23 +171,123 @@ public class ChooserWrapperActivity extends ChooserActivity {
         return super.getPackageManager();
     }
 
-    /**
-     * We cannot directly mock the activity created since instrumentation creates it.
-     * <p>
-     * Instead, we use static instances of this object to modify behavior.
-     */
-    static class OverrideData {
-        @SuppressWarnings("Since15")
-        public Function<PackageManager, PackageManager> createPackageManager;
-        public Function<TargetInfo, Boolean> onSafelyStartCallback;
-        public ResolverListController resolverListController;
-        public Boolean isVoiceInteraction;
-
-        public void reset() {
-            onSafelyStartCallback = null;
-            isVoiceInteraction = null;
-            createPackageManager = null;
-            resolverListController = mock(ResolverListController.class);
+    @Override
+    public Resources getResources() {
+        if (sOverrides.resources != null) {
+            return sOverrides.resources;
         }
+        return super.getResources();
+    }
+
+    @Override
+    protected Bitmap loadThumbnail(Uri uri, Size size) {
+        if (sOverrides.previewThumbnail != null) {
+            return sOverrides.previewThumbnail;
+        }
+        return super.loadThumbnail(uri, size);
+    }
+
+    @Override
+    protected boolean isImageType(String mimeType) {
+        return sOverrides.isImageType;
+    }
+
+    @Override
+    protected MetricsLogger getMetricsLogger() {
+        return sOverrides.metricsLogger;
+    }
+
+    @Override
+    public ChooserActivityLogger getChooserActivityLogger() {
+        return sOverrides.chooserActivityLogger;
+    }
+
+    @Override
+    public Cursor queryResolver(ContentResolver resolver, Uri uri) {
+        if (sOverrides.resolverCursor != null) {
+            return sOverrides.resolverCursor;
+        }
+
+        if (sOverrides.resolverForceException) {
+            throw new SecurityException("Test exception handling");
+        }
+
+        return super.queryResolver(resolver, uri);
+    }
+
+    @Override
+    protected boolean isWorkProfile() {
+        if (sOverrides.alternateProfileSetting != 0) {
+            return sOverrides.alternateProfileSetting == MetricsEvent.MANAGED_PROFILE;
+        }
+        return super.isWorkProfile();
+    }
+
+    @Override
+    public DisplayResolveInfo createTestDisplayResolveInfo(Intent originalIntent, ResolveInfo pri,
+            CharSequence pLabel, CharSequence pInfo, Intent replacementIntent,
+            @Nullable ResolveInfoPresentationGetter resolveInfoPresentationGetter) {
+        return new DisplayResolveInfo(originalIntent, pri, pLabel, pInfo, replacementIntent,
+                resolveInfoPresentationGetter);
+    }
+
+    @Override
+    protected UserHandle getWorkProfileUserHandle() {
+        return sOverrides.workProfileUserHandle;
+    }
+
+    @Override
+    public UserHandle getCurrentUserHandle() {
+        return mMultiProfilePagerAdapter.getCurrentUserHandle();
+    }
+
+    @Override
+    protected UserHandle getTabOwnerUserHandleForLaunch() {
+        if (sOverrides.tabOwnerUserHandleForLaunch == null) {
+            return super.getTabOwnerUserHandleForLaunch();
+        }
+        return sOverrides.tabOwnerUserHandleForLaunch;
+    }
+
+    @Override
+    public Context createContextAsUser(UserHandle user, int flags) {
+        // return the current context as a work profile doesn't really exist in these tests
+        return getApplicationContext();
+    }
+
+    @Override
+    protected void queryDirectShareTargets(ChooserListAdapter adapter,
+            boolean skipAppPredictionService) {
+        if (sOverrides.directShareTargets != null) {
+            Pair<Integer, ServiceResultInfo[]> result =
+                    sOverrides.directShareTargets.apply(this, adapter);
+            sendShortcutManagerShareTargetResults(result.first, result.second);
+            return;
+        }
+        if (sOverrides.onQueryDirectShareTargets != null) {
+            sOverrides.onQueryDirectShareTargets.apply(adapter);
+        }
+        super.queryDirectShareTargets(adapter, skipAppPredictionService);
+    }
+
+    @Override
+    protected boolean isQuietModeEnabled(UserHandle userHandle) {
+        return sOverrides.isQuietModeEnabled;
+    }
+
+    @Override
+    protected boolean isUserRunning(UserHandle userHandle) {
+        if (userHandle.equals(UserHandle.SYSTEM)) {
+            return super.isUserRunning(userHandle);
+        }
+        return sOverrides.isWorkProfileUserRunning;
+    }
+
+    @Override
+    protected boolean isUserUnlocked(UserHandle userHandle) {
+        if (userHandle.equals(UserHandle.SYSTEM)) {
+            return super.isUserUnlocked(userHandle);
+        }
+        return sOverrides.isWorkProfileUserUnlocked;
     }
 }

@@ -27,8 +27,11 @@ import android.content.res.TypedArray;
 import android.content.res.XmlResourceParser;
 import android.os.Bundle;
 import android.test.AndroidTestCase;
-import android.test.suitebuilder.annotation.SmallTest;
+
+import androidx.test.filters.SmallTest;
+
 import com.android.frameworks.coretests.R;
+
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -122,7 +125,7 @@ public class MetaDataTest extends AndroidTestCase {
 
     @SmallTest
     public void testServiceWithData() throws Exception {
-        ComponentName cn = new ComponentName(mContext, LocalService.class);
+        ComponentName cn = new ComponentName(mContext, ServiceTest.RemoteService.class);
         ServiceInfo si = mContext.getPackageManager().getServiceInfo(
                 cn, PackageManager.GET_META_DATA);
 

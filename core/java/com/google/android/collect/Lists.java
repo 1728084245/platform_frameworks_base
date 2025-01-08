@@ -16,7 +16,8 @@
 
 package com.google.android.collect;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+
 import java.util.ArrayList;
 import java.util.Collections;
 
@@ -24,6 +25,7 @@ import java.util.Collections;
  * Provides static methods for creating {@code List} instances easily, and other
  * utility methods for working with lists. 
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public class Lists {
 
     /**

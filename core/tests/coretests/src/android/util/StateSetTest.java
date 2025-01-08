@@ -16,15 +16,27 @@
 
 package android.util;
 
-import junit.framework.TestCase;
-import android.test.suitebuilder.annotation.SmallTest;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import android.platform.test.ravenwood.RavenwoodRule;
+
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
+
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.runner.RunWith;
 
 /**
  * Tests for {@link StateSet}
  */
+@RunWith(AndroidJUnit4.class)
+public class StateSetTest {
+    @Rule
+    public final RavenwoodRule mRavenwood = new RavenwoodRule();
 
-public class StateSetTest extends TestCase {
-    
+    @Test
     @SmallTest
     public void testStateSetPositiveMatches() throws Exception {
          int[] stateSpec = new int[2];
@@ -47,6 +59,7 @@ public class StateSetTest extends TestCase {
          assertTrue(StateSet.stateSetMatches(stateSpec, stateSet));
      }
 
+     @Test
      @SmallTest
      public void testStatesSetMatchMixEmUp() throws Exception {
          int[] stateSpec = new int[2];
@@ -69,6 +82,7 @@ public class StateSetTest extends TestCase {
          assertTrue(StateSet.stateSetMatches(stateSpec, stateSet));
      }
 
+     @Test
      @SmallTest
      public void testStateSetNegativeMatches() throws Exception {
          int[] stateSpec = new int[2];
@@ -91,6 +105,7 @@ public class StateSetTest extends TestCase {
          assertFalse(StateSet.stateSetMatches(stateSpec, stateSet));
      }
 
+     @Test
      @SmallTest
      public void testEmptySetMatchesNegtives() throws Exception {
          int[] stateSpec = {-12345, -6789};
@@ -100,6 +115,7 @@ public class StateSetTest extends TestCase {
          assertTrue(StateSet.stateSetMatches(stateSpec, stateSet2));
      }
 
+     @Test
      @SmallTest
      public void testEmptySetFailsPositives() throws Exception {
          int[] stateSpec = {12345};
@@ -109,6 +125,7 @@ public class StateSetTest extends TestCase {
          assertFalse(StateSet.stateSetMatches(stateSpec, stateSet2));
      }
 
+     @Test
      @SmallTest
      public void testEmptySetMatchesWildcard() throws Exception {
          int[] stateSpec = StateSet.WILD_CARD;
@@ -118,6 +135,7 @@ public class StateSetTest extends TestCase {
          assertTrue(StateSet.stateSetMatches(stateSpec, stateSet2));
      }
 
+     @Test
      @SmallTest
      public void testSingleStatePositiveMatches() throws Exception {
          int[] stateSpec = new int[2];
@@ -134,6 +152,7 @@ public class StateSetTest extends TestCase {
          assertFalse(StateSet.stateSetMatches(stateSpec, state));
      }
 
+     @Test
      @SmallTest
      public void testSingleStateNegativeMatches() throws Exception {
          int[] stateSpec = new int[2];
@@ -150,6 +169,7 @@ public class StateSetTest extends TestCase {
          assertTrue(StateSet.stateSetMatches(stateSpec, state));
      }
 
+     @Test
      @SmallTest
      public void testZeroStateOnlyMatchesDefault() throws Exception {
          int[] stateSpec = new int[3];
@@ -165,6 +185,7 @@ public class StateSetTest extends TestCase {
          assertTrue(StateSet.stateSetMatches(stateSpec, state));
      }
 
+     @Test
      @SmallTest
      public void testNullStateOnlyMatchesDefault() throws Exception {
          int[] stateSpec = new int[3];

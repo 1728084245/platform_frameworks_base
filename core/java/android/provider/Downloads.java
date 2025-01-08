@@ -16,11 +16,12 @@
 
 package android.provider;
 
-import android.annotation.UnsupportedAppUsage;
 import android.app.DownloadManager;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.net.NetworkPolicyManager;
 import android.net.Uri;
+import android.os.Build;
 
 /**
  * The Download Manager
@@ -138,7 +139,7 @@ public final class Downloads {
          * <P>Type: TEXT</P>
          * <P>Owner can Init/Read</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_URI = "uri";
 
         /**
@@ -168,7 +169,7 @@ public final class Downloads {
          * <P>Type: TEXT</P>
          * <P>Owner can Init</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_FILE_NAME_HINT = "hint";
 
         /**
@@ -184,7 +185,7 @@ public final class Downloads {
          * <P>Type: TEXT</P>
          * <P>Owner can Init/Read</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_MIME_TYPE = "mimetype";
 
         /**
@@ -193,7 +194,7 @@ public final class Downloads {
          * <P>Type: INTEGER</P>
          * <P>Owner can Init</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_DESTINATION = "destination";
 
         /**
@@ -203,7 +204,7 @@ public final class Downloads {
          * <P>Type: INTEGER</P>
          * <P>Owner can Init/Read/Write</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_VISIBILITY = "visibility";
 
         /**
@@ -240,7 +241,7 @@ public final class Downloads {
          * <P>Type: TEXT</P>
          * <P>Owner can Init/Read</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_NOTIFICATION_PACKAGE = "notificationpackage";
 
         /**
@@ -251,7 +252,7 @@ public final class Downloads {
          * <P>Type: TEXT</P>
          * <P>Owner can Init/Read</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_NOTIFICATION_CLASS = "notificationclass";
 
         /**
@@ -260,7 +261,7 @@ public final class Downloads {
          * <P>Type: TEXT</P>
          * <P>Owner can Init</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_NOTIFICATION_EXTRAS = "notificationextras";
 
         /**
@@ -270,7 +271,7 @@ public final class Downloads {
          * <P>Type: TEXT</P>
          * <P>Owner can Init</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_COOKIE_DATA = "cookiedata";
 
         /**
@@ -287,7 +288,7 @@ public final class Downloads {
          * <P>Type: TEXT</P>
          * <P>Owner can Init</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_REFERER = "referer";
 
         /**
@@ -325,7 +326,7 @@ public final class Downloads {
          * <P>Type: TEXT</P>
          * <P>Owner can Init/Read/Write</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_TITLE = "title";
 
         /**
@@ -335,7 +336,7 @@ public final class Downloads {
          * <P>Type: TEXT</P>
          * <P>Owner can Init/Read/Write</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_DESCRIPTION = "description";
 
         /**
@@ -344,7 +345,7 @@ public final class Downloads {
          * <P>Type: BOOLEAN</P>
          * <P>Owner can Init/Read</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_IS_PUBLIC_API = "is_public_api";
 
         /**
@@ -353,7 +354,7 @@ public final class Downloads {
          * <P>Type: INTEGER</P>
          * <P>Owner can Init/Read</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_ALLOWED_NETWORK_TYPES = "allowed_network_types";
 
         /**
@@ -362,7 +363,7 @@ public final class Downloads {
          * <P>Type: BOOLEAN</P>
          * <P>Owner can Init/Read</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_ALLOW_ROAMING = "allow_roaming";
 
         /**
@@ -379,7 +380,7 @@ public final class Downloads {
          * <P>Type: INTEGER</P>
          * <P>Owner can Init/Read</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_IS_VISIBLE_IN_DOWNLOADS_UI = "is_visible_in_downloads_ui";
 
         /**
@@ -396,7 +397,7 @@ public final class Downloads {
          * <P>Type: BOOLEAN</P>
          * <P>Owner can Read</P>
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_DELETED = "deleted";
 
         /**
@@ -409,12 +410,29 @@ public final class Downloads {
         public static final String COLUMN_MEDIAPROVIDER_URI = "mediaprovider_uri";
 
         /**
-         * The column that is used to remember whether the media scanner was invoked.
-         * It can take the values: null or 0(not scanned), 1(scanned), 2 (not scannable).
+         * Similar to {@link #COLUMN_MEDIAPROVIDER_URI}, except this cannot be updated/queried
+         * by apps and will be the source of truth when updating/deleting download entries in
+         * MediaProvider database.
+         *
          * <P>Type: TEXT</P>
          */
-        @UnsupportedAppUsage
+        public static final String COLUMN_MEDIASTORE_URI = "mediastore_uri";
+
+        /**
+         * The column that is used to remember whether the media scanner was invoked.
+         * It can take the values: {@link #MEDIA_NOT_SCANNED}, {@link #MEDIA_SCANNED} or
+         * {@link #MEDIA_NOT_SCANNABLE} or {@code null}. If it's value is {@code null}, it will be
+         * treated as {@link #MEDIA_NOT_SCANNED}.
+         *
+         * <P>Type: TEXT</P>
+         */
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final String COLUMN_MEDIA_SCANNED = "scanned";
+
+        /** Possible values for column {@link #COLUMN_MEDIA_SCANNED} */
+        public static final int MEDIA_NOT_SCANNED = 0;
+        public static final int MEDIA_SCANNED = 1;
+        public static final int MEDIA_NOT_SCANNABLE = 2;
 
         /**
          * The column with errorMsg for a failed downloaded.
@@ -487,7 +505,7 @@ public final class Downloads {
          * immediately after they are used, and are kept around by the download
          * manager as long as space is available.
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final int DESTINATION_CACHE_PARTITION_PURGEABLE = 2;
 
         /**
@@ -501,7 +519,7 @@ public final class Downloads {
          * This download will be saved to the location given by the file URI in
          * {@link #COLUMN_FILE_NAME_HINT}.
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static final int DESTINATION_FILE_URI = 4;
 
         /**
@@ -582,7 +600,7 @@ public final class Downloads {
          * @param visibility the value of {@link #COLUMN_VISIBILITY}.
          * @return true if the notification should be displayed. false otherwise.
          */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public static boolean isNotificationToBeDisplayed(int visibility) {
             return visibility == DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED ||
                     visibility == DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_ONLY_COMPLETION;
@@ -823,10 +841,24 @@ public final class Downloads {
              * Prefix for ContentValues keys that contain HTTP header lines, to be passed to
              * DownloadProvider.insert().
              */
-            @UnsupportedAppUsage
+            @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
             public static final String INSERT_KEY_PREFIX = "http_header_";
         }
     }
+
+    /** @hide */
+    public static final String CALL_MEDIASTORE_DOWNLOADS_DELETED = "mediastore_downloads_deleted";
+    /** @hide */
+    public static final String CALL_CREATE_EXTERNAL_PUBLIC_DIR = "create_external_public_dir";
+    /** @hide */
+    public static final String CALL_REVOKE_MEDIASTORE_URI_PERMS = "revoke_mediastore_uri_perms";
+
+    /** @hide */
+    public static final String EXTRA_IDS = "ids";
+    /** @hide */
+    public static final String EXTRA_MIME_TYPES = "mime_types";
+    /** @hide */
+    public static final String DIR_TYPE = "dir_type";
 
     /**
      * Query where clause for general querying.

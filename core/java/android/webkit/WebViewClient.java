@@ -65,6 +65,14 @@ public class WebViewClient {
      * {@code true} causes the current WebView to abort loading the URL, while returning
      * {@code false} causes the WebView to continue loading the URL as usual.
      *
+     * <p>This callback is not called for all page navigations. In particular, this is not called
+     * for navigations which the app initiated with {@code loadUrl()}: this callback would not serve
+     * a purpose in this case, because the app already knows about the navigation. This callback
+     * lets the app know about navigations initiated by the web page (such as navigations initiated
+     * by JavaScript code), by the user (such as when the user taps on a link), or by an HTTP
+     * redirect (ex. if {@code loadUrl("foo.com")} redirects to {@code "bar.com"} because of HTTP
+     * 301).
+     *
      * <p class="note"><b>Note:</b> Do not call {@link WebView#loadUrl(String)} with the request's
      * URL and then return {@code true}. This unnecessarily cancels the current load and starts a
      * new load with the same URL. The correct way to continue loading a given URL is to simply
@@ -173,8 +181,9 @@ public class WebViewClient {
      * when accessing private data or the view system.
      *
      * <p class="note"><b>Note:</b> When Safe Browsing is enabled, these URLs still undergo Safe
-     * Browsing checks. If this is undesired, whitelist the URL with {@link
-     * WebView#setSafeBrowsingWhitelist} or ignore the warning with {@link #onSafeBrowsingHit}.
+     * Browsing checks. If this is undesired, you can use {@link WebView#setSafeBrowsingWhitelist}
+     * to skip Safe Browsing checks for that host or dismiss the warning in {@link
+     * #onSafeBrowsingHit} by calling {@link SafeBrowsingResponse#proceed}.
      *
      * @param view The {@link android.webkit.WebView} that is requesting the
      *             resource.
@@ -211,8 +220,9 @@ public class WebViewClient {
      * when accessing private data or the view system.
      *
      * <p class="note"><b>Note:</b> When Safe Browsing is enabled, these URLs still undergo Safe
-     * Browsing checks. If this is undesired, whitelist the URL with {@link
-     * WebView#setSafeBrowsingWhitelist} or ignore the warning with {@link #onSafeBrowsingHit}.
+     * Browsing checks. If this is undesired, you can use {@link WebView#setSafeBrowsingWhitelist}
+     * to skip Safe Browsing checks for that host or dismiss the warning in {@link
+     * #onSafeBrowsingHit} by calling {@link SafeBrowsingResponse#proceed}.
      *
      * @param view The {@link android.webkit.WebView} that is requesting the
      *             resource.
@@ -284,19 +294,28 @@ public class WebViewClient {
             SAFE_BROWSING_THREAT_UNKNOWN,
             SAFE_BROWSING_THREAT_MALWARE,
             SAFE_BROWSING_THREAT_PHISHING,
-            SAFE_BROWSING_THREAT_UNWANTED_SOFTWARE
+            SAFE_BROWSING_THREAT_UNWANTED_SOFTWARE,
+            SAFE_BROWSING_THREAT_BILLING,
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface SafeBrowsingThreat {}
 
-    /** The resource was blocked for an unknown reason */
+    /** The resource was blocked for an unknown reason. */
     public static final int SAFE_BROWSING_THREAT_UNKNOWN = 0;
-    /** The resource was blocked because it contains malware */
+    /** The resource was blocked because it contains malware. */
     public static final int SAFE_BROWSING_THREAT_MALWARE = 1;
-    /** The resource was blocked because it contains deceptive content */
+    /** The resource was blocked because it contains deceptive content. */
     public static final int SAFE_BROWSING_THREAT_PHISHING = 2;
-    /** The resource was blocked because it contains unwanted software */
+    /** The resource was blocked because it contains unwanted software. */
     public static final int SAFE_BROWSING_THREAT_UNWANTED_SOFTWARE = 3;
+    /**
+     * The resource was blocked because it may trick the user into a billing agreement.
+     *
+     * <p>This constant is only used when targetSdkVersion is at least {@link
+     * android.os.Build.VERSION_CODES#Q}. Otherwise, {@link #SAFE_BROWSING_THREAT_UNKNOWN} is used
+     * instead.
+     */
+    public static final int SAFE_BROWSING_THREAT_BILLING = 4;
 
     /**
      * Report an error to the host application. These errors are unrecoverable
@@ -371,30 +390,34 @@ public class WebViewClient {
     }
 
     /**
-     * Notify the host application that an SSL error occurred while loading a
-     * resource. The host application must call either {@link SslErrorHandler#cancel} or
-     * {@link SslErrorHandler#proceed}. Note that the decision may be retained for use in
-     * response to future SSL errors. The default behavior is to cancel the
-     * load.
-     * <p>
-     * This API is only called for recoverable SSL certificate errors. In the case of
-     * non-recoverable errors (such as when the server fails the client), WebView will call {@link
-     * #onReceivedError(WebView, WebResourceRequest, WebResourceError)} with {@link
-     * #ERROR_FAILED_SSL_HANDSHAKE}.
-     * <p>
-     * Applications are advised not to prompt the user about SSL errors, as
-     * the user is unlikely to be able to make an informed security decision
-     * and WebView does not provide any UI for showing the details of the
-     * error in a meaningful way.
-     * <p>
-     * Application overrides of this method may display custom error pages or
-     * silently log issues, but it is strongly recommended to always call
-     * {@link SslErrorHandler#cancel} and never allow proceeding past errors.
+     * Notifies the host application that an SSL error occurred while loading a
+     * resource. The host application must call either
+     * {@link SslErrorHandler#cancel()} or {@link SslErrorHandler#proceed()}.
      *
-     * @param view The WebView that is initiating the callback.
-     * @param handler An {@link SslErrorHandler} that will handle the user's
-     *            response.
-     * @param error The SSL error object.
+     * <p class="warning"><b>Warning:</b> Application overrides of this method
+     * can be used to display custom error pages or to silently log issues, but
+     * the host application should always call {@code SslErrorHandler#cancel()}
+     * and never proceed past errors.
+     *
+     * <p class="note"><b>Note:</b> Do not prompt the user about SSL errors.
+     * Users are unlikely to be able to make an informed security decision, and
+     * {@code WebView} does not provide a UI for showing the details of the
+     * error in a meaningful way.
+     *
+     * <p>The decision to call {@code proceed()} or {@code cancel()} may be
+     * retained to facilitate responses to future SSL errors. The default
+     * behavior is to cancel the resource loading process.
+     *
+     * <p>This API is called only for recoverable SSL certificate errors. For
+     * non-recoverable errors (such as when the server fails the client), the
+     * {@code WebView} calls {@link #onReceivedError(WebView,
+     * WebResourceRequest, WebResourceError) onReceivedError(WebView,
+     * WebResourceRequest, WebResourceError)} with the
+     * {@link #ERROR_FAILED_SSL_HANDSHAKE} argument.
+     *
+     * @param view {@code WebView} that initiated the callback.
+     * @param handler {@link SslErrorHandler} that handles the user's response.
+     * @param error SSL error object.
      */
     public void onReceivedSslError(WebView view, SslErrorHandler handler,
             SslError error) {
@@ -443,6 +466,9 @@ public class WebViewClient {
      * authentication request. The host application can use the supplied
      * {@link HttpAuthHandler} to set the WebView's response to the request.
      * The default behavior is to cancel the request.
+     *
+     * <p class="note"><b>Note:</b> The supplied HttpAuthHandler must be used on
+     * the UI thread.
      *
      * @param view the WebView that is initiating the callback
      * @param handler the HttpAuthHandler used to set the WebView's response

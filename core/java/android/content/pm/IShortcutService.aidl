@@ -16,42 +16,38 @@
 package android.content.pm;
 
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.IntentSender;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.ShortcutInfo;
 
-/**
- * {@hide}
- */
+import com.android.internal.infra.AndroidFuture;
+
+/** {@hide} */
 interface IShortcutService {
 
     boolean setDynamicShortcuts(String packageName, in ParceledListSlice shortcutInfoList,
             int userId);
 
-    ParceledListSlice getDynamicShortcuts(String packageName, int userId);
-
-    ParceledListSlice getManifestShortcuts(String packageName, int userId);
-
     boolean addDynamicShortcuts(String packageName, in ParceledListSlice shortcutInfoList,
             int userId);
 
-    void removeDynamicShortcuts(String packageName, in List shortcutIds, int userId);
+    void removeDynamicShortcuts(String packageName, in List<String> shortcutIds, int userId);
 
     void removeAllDynamicShortcuts(String packageName, int userId);
 
-    ParceledListSlice getPinnedShortcuts(String packageName, int userId);
-
     boolean updateShortcuts(String packageName, in ParceledListSlice shortcuts, int userId);
 
-    boolean requestPinShortcut(String packageName, in ShortcutInfo shortcut,
-            in IntentSender resultIntent, int userId);
+    void requestPinShortcut(String packageName, in ShortcutInfo shortcut,
+            in IntentSender resultIntent, int userId, in AndroidFuture<String> ret);
 
-    Intent createShortcutResultIntent(String packageName, in ShortcutInfo shortcut, int userId);
+    void createShortcutResultIntent(String packageName, in ShortcutInfo shortcut, int userId,
+            in AndroidFuture<Intent> ret);
 
-    void disableShortcuts(String packageName, in List shortcutIds, CharSequence disabledMessage,
-            int disabledMessageResId, int userId);
+    void disableShortcuts(String packageName, in List<String> shortcutIds,
+            CharSequence disabledMessage, int disabledMessageResId, int userId);
 
-    void enableShortcuts(String packageName, in List shortcutIds, int userId);
+    void enableShortcuts(String packageName, in List<String> shortcutIds, int userId);
 
     int getMaxShortcutCountPerActivity(String packageName, int userId);
 
@@ -65,11 +61,22 @@ interface IShortcutService {
 
     void resetThrottling(); // system only API for developer opsions
 
-    void onApplicationActive(String packageName, int userId); // system only API for sysUI
+    oneway void onApplicationActive(String packageName, int userId); // system only API for sysUI
 
     byte[] getBackupPayload(int user);
 
     void applyRestore(in byte[] payload, int user);
 
     boolean isRequestPinItemSupported(int user, int requestType);
+
+    // System API used by framework's ShareSheet (ChooserActivity)
+    ParceledListSlice getShareTargets(String packageName, in IntentFilter filter, int userId);
+
+    boolean hasShareTargets(String packageName, String packageToCheck, int userId);
+
+    void removeLongLivedShortcuts(String packageName, in List<String> shortcutIds, int userId);
+
+    ParceledListSlice getShortcuts(String packageName, int matchFlags, int userId);
+
+    void pushDynamicShortcut(String packageName, in ShortcutInfo shortcut, int userId);
 }

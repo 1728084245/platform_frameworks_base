@@ -16,13 +16,19 @@
 
 #pragma once
 
+#include <SkColorSpace.h>
+#include <SkDocument.h>
 #include <SkSurface.h>
-#include "FrameBuilder.h"
+
+#include "Lighting.h"
 #include "hwui/AnimatedImageDrawable.h"
 #include "renderthread/CanvasContext.h"
+#include "renderthread/HardwareBufferRenderParams.h"
 #include "renderthread/IRenderPipeline.h"
 
+class SkFILEWStream;
 class SkPictureRecorder;
+struct SkSharingSerialContext;
 
 namespace android {
 namespace uirenderer {
@@ -33,136 +39,116 @@ public:
     explicit SkiaPipeline(renderthread::RenderThread& thread);
     virtual ~SkiaPipeline();
 
-    TaskManager* getTaskManager() override;
-
     void onDestroyHardwareResources() override;
 
-    bool pinImages(std::vector<SkImage*>& mutableImages) override;
-    bool pinImages(LsaVector<sk_sp<Bitmap>>& images) override { return false; }
-    void unpinImages() override;
-    void onPrepareTree() override;
+    void renderLayers(const LightGeometry& lightGeometry, LayerUpdateQueue* layerUpdateQueue,
+                      bool opaque, const LightInfo& lightInfo) override;
 
-    void renderLayers(const FrameBuilder::LightGeometry& lightGeometry,
-                      LayerUpdateQueue* layerUpdateQueue, bool opaque, bool wideColorGamut,
-                      const BakedOpRenderer::LightInfo& lightInfo) override;
-
-    bool createOrUpdateLayer(RenderNode* node, const DamageAccumulator& damageAccumulator,
-                             bool wideColorGamut, ErrorHandler* errorHandler) override;
+    void setSurfaceColorProperties(ColorMode colorMode) override;
+    SkColorType getSurfaceColorType() const override { return mSurfaceColorType; }
+    sk_sp<SkColorSpace> getSurfaceColorSpace() override { return mSurfaceColorSpace; }
 
     void renderFrame(const LayerUpdateQueue& layers, const SkRect& clip,
-                     const std::vector<sp<RenderNode>>& nodes, bool opaque, bool wideColorGamut,
-                     const Rect& contentDrawBounds, sk_sp<SkSurface> surface);
+                     const std::vector<sp<RenderNode>>& nodes, bool opaque,
+                     const Rect& contentDrawBounds, sk_sp<SkSurface> surface,
+                     const SkMatrix& preTransform);
 
-    std::vector<VectorDrawableRoot*>* getVectorDrawables() { return &mVectorDrawables; }
+    bool renderLayerImpl(RenderNode* layerNode, const Rect& layerDamage);
+    virtual void renderLayersImpl(const LayerUpdateQueue& layers, bool opaque) = 0;
 
-    static void destroyLayer(RenderNode* node);
-
-    static void prepareToDraw(const renderthread::RenderThread& thread, Bitmap* bitmap);
-
-    void renderLayersImpl(const LayerUpdateQueue& layers, bool opaque, bool wideColorGamut);
-
-    static float getLightRadius() {
-        if (CC_UNLIKELY(Properties::overrideLightRadius > 0)) {
-            return Properties::overrideLightRadius;
-        }
-        return mLightRadius;
+    // Sets the recording callback to the provided function and the recording mode
+    // to CallbackAPI
+    void setPictureCapturedCallback(
+            const std::function<void(sk_sp<SkPicture>&&)>& callback) override {
+        mPictureCapturedCallback = callback;
+        mCaptureMode = callback ? CaptureMode::CallbackAPI : CaptureMode::None;
     }
 
-    static uint8_t getAmbientShadowAlpha() {
-        if (CC_UNLIKELY(Properties::overrideAmbientShadowStrength >= 0)) {
-            return Properties::overrideAmbientShadowStrength;
-        }
-        return mAmbientShadowAlpha;
-    }
-
-    static uint8_t getSpotShadowAlpha() {
-        if (CC_UNLIKELY(Properties::overrideSpotShadowStrength >= 0)) {
-            return Properties::overrideSpotShadowStrength;
-        }
-        return mSpotShadowAlpha;
-    }
-
-    static Vector3 getLightCenter() {
-        if (CC_UNLIKELY(Properties::overrideLightPosY > 0 || Properties::overrideLightPosZ > 0)) {
-            Vector3 adjustedLightCenter = mLightCenter;
-            if (CC_UNLIKELY(Properties::overrideLightPosY > 0)) {
-                // negated since this shifts up
-                adjustedLightCenter.y = -Properties::overrideLightPosY;
-            }
-            if (CC_UNLIKELY(Properties::overrideLightPosZ > 0)) {
-                adjustedLightCenter.z = Properties::overrideLightPosZ;
-            }
-            return adjustedLightCenter;
-        }
-        return mLightCenter;
-    }
-
-    static void updateLighting(const FrameBuilder::LightGeometry& lightGeometry,
-                               const BakedOpRenderer::LightInfo& lightInfo) {
-        mLightRadius = lightGeometry.radius;
-        mAmbientShadowAlpha = lightInfo.ambientShadowAlpha;
-        mSpotShadowAlpha = lightInfo.spotShadowAlpha;
-        mLightCenter = lightGeometry.center;
-    }
+    void setTargetSdrHdrRatio(float ratio) override;
 
 protected:
-    void dumpResourceCacheUsage() const;
-
     renderthread::RenderThread& mRenderThread;
 
+    sk_sp<SkSurface> mBufferSurface = nullptr;
+    sk_sp<SkColorSpace> mBufferColorSpace = nullptr;
+
+    ColorMode mColorMode = ColorMode::Default;
+    SkColorType mSurfaceColorType;
+    sk_sp<SkColorSpace> mSurfaceColorSpace;
+    float mTargetSdrHdrRatio = 1.f;
+
+    bool isCapturingSkp() const { return mCaptureMode != CaptureMode::None; }
+
 private:
-    void renderFrameImpl(const LayerUpdateQueue& layers, const SkRect& clip,
-                         const std::vector<sp<RenderNode>>& nodes, bool opaque, bool wideColorGamut,
-                         const Rect& contentDrawBounds, SkCanvas* canvas);
+    void renderFrameImpl(const SkRect& clip,
+                         const std::vector<sp<RenderNode>>& nodes, bool opaque,
+                         const Rect& contentDrawBounds, SkCanvas* canvas,
+                         const SkMatrix& preTransform);
 
     /**
      *  Debugging feature.  Draws a semi-transparent overlay on each pixel, indicating
      *  how many times it has been drawn.
      */
-    void renderOverdraw(const LayerUpdateQueue& layers, const SkRect& clip,
+    void renderOverdraw(const SkRect& clip,
                         const std::vector<sp<RenderNode>>& nodes, const Rect& contentDrawBounds,
-                        sk_sp<SkSurface>);
+                        sk_sp<SkSurface> surface, const SkMatrix& preTransform);
 
-    /**
-     *  Render mVectorDrawables into offscreen buffers.
-     */
-    void renderVectorDrawableCache();
-
-    SkCanvas* tryCapture(SkSurface* surface);
+    // Called every frame. Normally returns early with screen canvas.
+    // But when capture is enabled, returns an nwaycanvas where commands are also recorded.
+    SkCanvas* tryCapture(SkSurface* surface, RenderNode* root, const LayerUpdateQueue& dirtyLayers);
+    // Called at the end of every frame, closes the recording if necessary.
     void endCapture(SkSurface* surface);
-
-    std::vector<sk_sp<SkImage>> mPinnedImages;
-
-    /**
-     *  populated by prepareTree with dirty VDs
-     */
-    std::vector<VectorDrawableRoot*> mVectorDrawables;
+    // Determine if a new file-based capture should be started.
+    // If so, sets mCapturedFile and mCaptureSequence and returns true.
+    // Should be called every frame when capture is enabled.
+    // sets mCaptureMode.
+    bool shouldStartNewFileCapture();
+    // Set up a multi frame capture.
+    bool setupMultiFrameCapture();
 
     // Block of properties used only for debugging to record a SkPicture and save it in a file.
+    // There are three possible ways of recording drawing commands.
+    enum class CaptureMode {
+        // return to this mode when capture stops.
+        None,
+        // A mode where every frame is recorded into an SkPicture and sent to a provided callback,
+        // until that callback is cleared
+        CallbackAPI,
+        // A mode where a finite number of frames are recorded to a file with
+        // SkMultiPictureDocument
+        MultiFrameSKP,
+        // A mode which records a single frame to a normal SKP file.
+        SingleFrameSKP,
+    };
+  CaptureMode mCaptureMode = CaptureMode::None;
+
     /**
-     * mCapturedFile is used to enforce we don't capture more than once for a given name (cause
-     * permissions don't allow to reset a property from render thread).
+     * mCapturedFile - the filename to write a recorded SKP to in either MultiFrameSKP or
+     * SingleFrameSKP mode.
      */
     std::string mCapturedFile;
     /**
-     *  mCaptureSequence counts how many frames are left to take in the sequence.
+     * mCaptureSequence counts down how many frames are left to take in the sequence. Applicable
+     * only to MultiFrameSKP or SingleFrameSKP mode.
      */
     int mCaptureSequence = 0;
+
+    // Multi frame serialization stream and writer used when serializing more than one frame.
+    std::unique_ptr<SkSharingSerialContext> mSerialContext;  // Must be declared before any other
+                                                             // serializing member
+    std::unique_ptr<SkFILEWStream> mOpenMultiPicStream;
+    sk_sp<SkDocument> mMultiPic;
+
     /**
-     *  mSavePictureProcessor is used to run the file saving code in a separate thread.
-     */
-    class SavePictureProcessor;
-    sp<SavePictureProcessor> mSavePictureProcessor;
-    /**
-     *  mRecorder holds the current picture recorder. We could store it on the stack to support
-     *  parallel tryCapture calls (not really needed).
+     * mRecorder holds the current picture recorder when serializing in either SingleFrameSKP or
+     * CallbackAPI modes.
      */
     std::unique_ptr<SkPictureRecorder> mRecorder;
+    std::unique_ptr<SkNWayCanvas> mNwayCanvas;
 
-    static float mLightRadius;
-    static uint8_t mAmbientShadowAlpha;
-    static uint8_t mSpotShadowAlpha;
-    static Vector3 mLightCenter;
+    // Set by setPictureCapturedCallback and when set, CallbackAPI mode recording is ongoing.
+    // Not used in other recording modes.
+    std::function<void(sk_sp<SkPicture>&&)> mPictureCapturedCallback;
 };
 
 } /* namespace skiapipeline */

@@ -16,7 +16,7 @@
 
 package android.opengl;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.os.Trace;
 import android.util.AttributeSet;
@@ -1667,7 +1667,15 @@ public class GLSurfaceView extends SurfaceView implements SurfaceHolder.Callback
                 mWantRenderNotification = true;
                 mRequestRender = true;
                 mRenderComplete = false;
-                mFinishDrawingRunnable = finishDrawing;
+                final Runnable oldCallback = mFinishDrawingRunnable;
+                mFinishDrawingRunnable = () -> {
+                    if (oldCallback != null) {
+                        oldCallback.run();
+                    }
+                    if (finishDrawing != null) {
+                        finishDrawing.run();
+                    }
+                };
 
                 sGLThreadManager.notifyAll();
             }

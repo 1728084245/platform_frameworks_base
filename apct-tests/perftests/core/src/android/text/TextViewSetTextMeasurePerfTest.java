@@ -19,14 +19,17 @@ import static android.view.View.MeasureSpec.AT_MOST;
 import static android.view.View.MeasureSpec.UNSPECIFIED;
 
 import android.graphics.Canvas;
+import android.graphics.RecordingCanvas;
+import android.graphics.RectF;
+import android.graphics.RenderNode;
 import android.perftests.utils.BenchmarkState;
 import android.perftests.utils.PerfStatusReporter;
-import android.support.test.InstrumentationRegistry;
-import android.support.test.filters.LargeTest;
 import android.text.NonEditableTextGenerator.TextType;
-import android.view.DisplayListCanvas;
-import android.view.RenderNode;
+import android.view.View;
 import android.widget.TextView;
+
+import androidx.test.InstrumentationRegistry;
+import androidx.test.filters.LargeTest;
 
 import org.junit.Rule;
 import org.junit.Test;
@@ -51,7 +54,7 @@ public class TextViewSetTextMeasurePerfTest {
     @Rule
     public PerfStatusReporter mPerfStatusReporter = new PerfStatusReporter();
 
-    @Parameterized.Parameters(name = "cached={3},{1}chars,{0}")
+    @Parameterized.Parameters(name = "cached {3} {1}chars {0}")
     public static Collection cases() {
         final List<Object[]> params = new ArrayList<>();
         for (int length : new int[]{128}) {
@@ -78,7 +81,7 @@ public class TextViewSetTextMeasurePerfTest {
         mCached = cached;
         mTextPaint = new TextPaint();
         mTextPaint.setTextSize(10);
-        mLineWidth = Integer.MAX_VALUE;
+        mLineWidth = 2048;
     }
 
     /**
@@ -92,6 +95,8 @@ public class TextViewSetTextMeasurePerfTest {
         Canvas.freeTextLayoutCaches();
         final CharSequence text = createRandomText(mLength);
         final TextView textView = new TextView(InstrumentationRegistry.getTargetContext());
+        textView.setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE);
+
         textView.setText(text);
         state.resumeTiming();
 
@@ -103,7 +108,9 @@ public class TextViewSetTextMeasurePerfTest {
             state.resumeTiming();
 
             textView.setText(text);
-            textView.measure(AT_MOST | mLineWidth, UNSPECIFIED);
+            textView.measure(
+                    View.MeasureSpec.makeMeasureSpec(mLineWidth, AT_MOST),
+                    UNSPECIFIED);
         }
     }
 
@@ -119,16 +126,23 @@ public class TextViewSetTextMeasurePerfTest {
         final RenderNode node = RenderNode.create("benchmark", null);
         final CharSequence text = createRandomText(mLength);
         final TextView textView = new TextView(InstrumentationRegistry.getTargetContext());
+        textView.setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE);
         textView.setText(text);
         state.resumeTiming();
 
         while (state.keepRunning()) {
 
             state.pauseTiming();
-            final DisplayListCanvas canvas = node.start(1200, 200);
-            int save = canvas.save();
             textView.setTextLocale(Locale.UK);
             textView.setTextLocale(Locale.US);
+            textView.measure(
+                    View.MeasureSpec.makeMeasureSpec(mLineWidth, AT_MOST),
+                    UNSPECIFIED);
+            RectF bounds = textView.getLayout().computeDrawingBoundingBox();
+            final RecordingCanvas canvas = node.start(
+                    (int) Math.ceil(bounds.width()),
+                    (int) Math.ceil(bounds.height()));
+            int save = canvas.save();
             if (!mCached) Canvas.freeTextLayoutCaches();
             state.resumeTiming();
 

@@ -14,16 +14,24 @@
 // limitations under the License.
 //
 
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
 // Provided solely to contribute information about which hidden parts of the android.test.base
 // library are used by apps. The source files are stubs of the actual files in ../src which use the
 // UnsupportedAppUsage annotation to tag those methods that are accessible via the hiddenapi.
-// Relies on the convention that modules with name <x>-hiddenapi provide hiddenapi information for
-// module <x> that is on the bootclasspath.
 java_library {
-    name: "android.test.base-hiddenapi",
+    name: "android.test.base-hiddenapi-annotations",
     compile_dex: true,
 
     srcs: ["src/**/*.java"],
 
-    libs: ["android.test.base"],
+    libs: [
+        // Use this instead of `android.test.base` to avoid a dependency cycle
+        // as `android.test.base` depends on this.
+        "android.test.base-minus-junit",
+        "junit",
+        "unsupportedappusage",
+    ],
 }

@@ -16,32 +16,44 @@
 
 package android.telephony.ims;
 
+import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.TestApi;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.telecom.VideoProfile;
+import android.telephony.CallState;
 import android.telephony.emergency.EmergencyNumber;
 import android.telephony.emergency.EmergencyNumber.EmergencyCallRouting;
 import android.telephony.emergency.EmergencyNumber.EmergencyServiceCategories;
+import android.telephony.ims.feature.MmTelFeature;
+import android.util.ArraySet;
 import android.util.Log;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.PhoneConstants;
+import com.android.internal.telephony.util.TelephonyUtils;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
- * Parcelable object to handle IMS call profile.
- * It is created from GSMA IR.92/IR.94, 3GPP TS 24.229/TS 26.114/TS26.111.
- * It provides the service and call type, the additional information related to the call.
- *
+ * A Parcelable object to handle the IMS call profile, which provides the service, call type, and
+ * additional information related to the call.
+ * <p>
+ * See the following specifications for more information about this class: GSMA IR.92/IR.94,
+ * 3GPP TS 24.229/TS 26.114/TS26.111.
  * @hide
  */
 @SystemApi
@@ -68,8 +80,11 @@ public final class ImsCallProfile implements Parcelable {
     public static final int SERVICE_TYPE_EMERGENCY = 2;
 
     /**
-     * Call types
+     * This value is returned if there is no valid IMS call type defined for the call. For example,
+     * if an ongoing call is circuit-switched and {@link CallState#getImsCallType()} is called, this
+     * value will be returned.
      */
+    public static final int CALL_TYPE_NONE = 0;
     /**
      * IMSPhone to support IR.92 & IR.94 (voice + video upgrade/downgrade)
      */
@@ -123,10 +138,28 @@ public final class ImsCallProfile implements Parcelable {
      *      the video during voice call.
      *  conference_avail : Indicates if the session can be extended to the conference.
      */
+
     /**
+     * Indicates if the session is for a conference call or not. If not defined, should be
+     * considered {@code false}.
+     * Boolean extra properties - {@code true} / {@code false}.
+     *
+     * This extra is set on an instance of {@link ImsCallProfile} via {@link #setCallExtraBoolean}.
      * @hide
      */
-    public static final String EXTRA_CONFERENCE = "conference";
+    @SystemApi
+    public static final String EXTRA_CONFERENCE = "android.telephony.ims.extra.CONFERENCE";
+
+    /**
+     * The previous string of EXTRA_CONFERENCE. Use EXTRA_CONFERENCE whenever possible.
+     * For external app or vendor code backward compatibility, we should always set value for both
+     * EXTRA_CONFERENCE_DEPRECATED and EXTRA_CONFERENCE.
+     *
+     * @deprecated Remove when not needed anymore.
+     *
+     * @hide
+     */
+    public static final String EXTRA_CONFERENCE_DEPRECATED = "conference";
 
     /**
      * Boolean extra property set on an {@link ImsCallProfile} to indicate that this call is an
@@ -143,17 +176,38 @@ public final class ImsCallProfile implements Parcelable {
      * @hide
      */
     public static final String EXTRA_CALL_MODE_CHANGEABLE = "call_mode_changeable";
+
     /**
+     * Indicates if the session can be extended to a conference call. If not defined, should be
+     * considered {@code false}.
+     * Boolean extra properties - {@code true} / {@code false}.
+     *
+     * This extra is set on an instance of {@link ImsCallProfile} via {@link #setCallExtraBoolean}.
+     * @hide
+     */
+    @SystemApi
+    public static final String EXTRA_EXTENDING_TO_CONFERENCE_SUPPORTED =
+            "android.telephony.ims.extra.EXTENDING_TO_CONFERENCE_SUPPORTED";
+
+    /**
+     * The previous string of EXTRA_EXTENDING_TO_CONFERENCE_SUPPORTED.
+     * Use EXTRA_EXTENDING_TO_CONFERENCE_SUPPORTED whenever possible.
+     * For backward compatibility, we should always set value for both
+     * EXTRA_EXTENDING_TO_CONFERENCE_SUPPORTED and EXTRA_CONFERENCE_AVAIL.
+     *
+     * @deprecated Remove when not needed anymore.
+     *
      * @hide
      */
     public static final String EXTRA_CONFERENCE_AVAIL = "conference_avail";
 
-    // Extra string for internal use only. OEMs should not use
-    // this for packing extras.
     /**
+     * Extra key used to store a Bundle containing proprietary extras to send to the ImsService.
+     * Use {@link #getProprietaryCallExtras()} instead.
      * @hide
      */
-    public static final String EXTRA_OEM_EXTRAS = "OemCallExtras";
+    @TestApi
+    public static final String EXTRA_OEM_EXTRAS = "android.telephony.ims.extra.OEM_EXTRAS";
 
     /**
      * Rule for originating identity (number) presentation, MO/MT.
@@ -176,6 +230,84 @@ public final class ImsCallProfile implements Parcelable {
      *      {@link ImsCallProfile#DIALSTRING_USSD}
      */
     public static final String EXTRA_DIALSTRING = "dialstring";
+    /**
+     * This extra holds call fail cause because of which redial is attempted.
+     * see {@link android.telephony.ims.ImsReasonInfo} {@code CODE_*}
+     * for possible values this extra can hold.
+     *
+     * @hide
+     */
+    public static final String EXTRA_RETRY_CALL_FAIL_REASON =
+            "android.telephony.ims.extra.RETRY_CALL_FAIL_REASON";
+    /**
+     * This extra holds call network type on which lower layers
+     * may try attempting redial.
+     * See {@link TelephonyManager} {@code NETWORK_TYPE_*}
+     * for possible values this extra can hold.
+     *
+     * @hide
+     */
+    public static final String EXTRA_RETRY_CALL_FAIL_NETWORKTYPE =
+            "android.telephony.ims.extra.RETRY_CALL_FAIL_NETWORKTYPE";
+
+    /**
+     * Extra for the call composer call priority, either {@link ImsCallProfile#PRIORITY_NORMAL} or
+     * {@link ImsCallProfile#PRIORITY_URGENT}. It can be set via
+     * {@link #setCallExtraInt(String, int)}.
+     *
+     * Reference: RCC.20 Section 2.4.4.2
+     */
+    public static final String EXTRA_PRIORITY = "android.telephony.ims.extra.PRIORITY";
+
+    // TODO(hallliu) remove the reference to the maximum length and update it later.
+    /**
+     * Extra for the call composer call subject, a string of maximum length 60 characters.
+     * It can be set via {@link #setCallExtra(String, String)}.
+     *
+     * Reference: RCC.20 Section 2.4.3.2
+     */
+    public static final String EXTRA_CALL_SUBJECT = "android.telephony.ims.extra.CALL_SUBJECT";
+
+    /**
+     * Extra for the call composer call location, an {@Link android.location.Location} parcelable
+     * class to represent the geolocation as a latitude and longitude pair. It can be set via
+     * {@link #setCallExtraParcelable(String, Parcelable)}.
+     *
+     * Reference: RCC.20 Section 2.4.3.2
+     */
+    public static final String EXTRA_LOCATION = "android.telephony.ims.extra.LOCATION";
+
+    /**
+     * Extra for the call composer picture URL, a String that indicates the URL on the carrier’s
+     * server infrastructure to get the picture. It can be set via
+     * {@link #setCallExtra(String, String)}.
+     *
+     * Note that this URL is not intended to be parsed by the IMS stack -- it should be sent
+     * directly to the network for consumption by the called party or forwarded directly from the
+     * network to the platform for caching and download.
+     *
+     * Reference: RCC.20 Section 2.4.3.2
+     */
+    public static final String EXTRA_PICTURE_URL = "android.telephony.ims.extra.PICTURE_URL";
+
+    /**
+     * Boolean extra indicating whether the call is a business call.
+     *
+     * This extra will be set to {@code true} if and only if the SIP INVITE headers contain the
+     * "Organization" header.
+     */
+    public static final String EXTRA_IS_BUSINESS_CALL =
+            "android.telephony.ims.extra.IS_BUSINESS_CALL";
+
+    /**
+     * The vendor IMS stack populates this {@code string} extra; it is used to hold the display name
+     * passed via the P-Asserted-Identity SIP header’s display-name field
+     *
+     * Reference: RFC3325
+     */
+    @FlaggedApi(com.android.server.telecom.flags.Flags.FLAG_BUSINESS_CALL_COMPOSER)
+    public static final String EXTRA_ASSERTED_DISPLAY_NAME =
+            "android.telephony.ims.extra.ASSERTED_DISPLAY_NAME";
 
     /**
      * Values for EXTRA_OIR / EXTRA_CNAP
@@ -200,6 +332,10 @@ public final class ImsCallProfile implements Parcelable {
      * Payphone presentation for Originating Identity.
      */
     public static final int OIR_PRESENTATION_PAYPHONE = 4;
+    /**
+     * Unavailable presentation for Originating Identity.
+     */
+    public static final int OIR_PRESENTATION_UNAVAILABLE = 5;
 
     //Values for EXTRA_DIALSTRING
     /**
@@ -214,6 +350,21 @@ public final class ImsCallProfile implements Parcelable {
      * Call for USSD message
      */
     public static final int DIALSTRING_USSD = 2;
+
+    // Values for EXTRA_PRIORITY
+    /**
+     * Indicates the call composer call priority is normal.
+     *
+     * Reference: RCC.20 Section 2.4.4.2
+     */
+    public static final int PRIORITY_NORMAL = 0;
+
+    /**
+     * Indicates the call composer call priority is urgent.
+     *
+     * Reference: RCC.20 Section 2.4.4.2
+     */
+    public static final int PRIORITY_URGENT = 1;
 
     /**
      * Call is not restricted on peer side and High Definition media is supported
@@ -267,8 +418,21 @@ public final class ImsCallProfile implements Parcelable {
     public static final String EXTRA_DISPLAY_TEXT = "DisplayText";
     public static final String EXTRA_ADDITIONAL_CALL_INFO = "AdditionalCallInfo";
     public static final String EXTRA_IS_CALL_PULL = "CallPull";
+
+    /**
+     * String extra property
+     *  Containing fields from the SIP INVITE message for an IMS call
+     */
     public static final String EXTRA_ADDITIONAL_SIP_INVITE_FIELDS =
                                   "android.telephony.ims.extra.ADDITIONAL_SIP_INVITE_FIELDS";
+
+    /**
+     * CallDisconnectCause: Specify call disconnect cause. This extra should be a code
+     * corresponding to ImsReasonInfo and should only be populated in the case that the
+     * call has already been missed
+     */
+    public static final String EXTRA_CALL_DISCONNECT_CAUSE =
+                                 "android.telephony.ims.extra.CALL_DISCONNECT_CAUSE";
 
     /**
      * Extra key which the RIL can use to indicate the radio technology used for a call.
@@ -283,25 +447,88 @@ public final class ImsCallProfile implements Parcelable {
      *      updateImsCallRatFromExtras(Bundle)} to determine whether to set the
      * {@link android.telecom.TelecomManager#EXTRA_CALL_NETWORK_TYPE} extra value and
      * {@link android.telecom.Connection#PROPERTY_WIFI} property on a connection.
+     * @deprecated the constants associated with this extra are hidden, instead use
+     * {@link #EXTRA_CALL_NETWORK_TYPE}.
      */
+    @Deprecated
     public static final String EXTRA_CALL_RAT_TYPE = "CallRadioTech";
+
+    /**
+     * Extra key with an {@code int} value which can be set in {@link #setCallExtraInt(String, int)}
+     * to indicate the network type used for a call.
+     * <p>
+     * Valid values are defined by {@code TelephonyManager.NETWORK_TYPE_*} constants. An example may
+     * be {@link android.telephony.TelephonyManager#NETWORK_TYPE_LTE}.
+     */
+    public static final String EXTRA_CALL_NETWORK_TYPE =
+            "android.telephony.ims.extra.CALL_NETWORK_TYPE";
 
     /**
      * Similar to {@link #EXTRA_CALL_RAT_TYPE}, except with a lowercase 'c'.  Used to ensure
      * compatibility with modems that are non-compliant with the {@link #EXTRA_CALL_RAT_TYPE}
      * extra key.  Should be removed when the non-compliant modems are fixed.
      * @hide
+     * @deprecated Use {@link #EXTRA_CALL_NETWORK_TYPE} instead.
      */
+    @Deprecated
     public static final String EXTRA_CALL_RAT_TYPE_ALT = "callRadioTech";
+
+    /**
+     * String extra property containing forwarded numbers associated with the current connection
+     * for an IMS call. The value is string array, and it can include multiple numbers, and
+     * the array values are expected E164 (e.g. +1 (650) 253-0000) format.
+     */
+    public static final String EXTRA_FORWARDED_NUMBER =
+            "android.telephony.ims.extra.FORWARDED_NUMBER";
+
+    /**
+     * Extra key with an {@code boolean} value which can be set in
+     * {@link #setCallExtraBoolean(String, boolean)} to indicate whether call is a cross sim call.
+     * <p>
+     * Valid values are true if call is cross sim call else false.
+     */
+    public static final String EXTRA_IS_CROSS_SIM_CALL =
+            "android.telephony.ims.extra.IS_CROSS_SIM_CALL";
 
     /** @hide */
     public int mServiceType;
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public int mCallType;
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public @CallRestrictCause int mRestrictCause = CALL_RESTRICT_CAUSE_NONE;
+
+    /**
+     * The VERSTAT for an incoming call's phone number.
+     */
+    private @VerificationStatus int mCallerNumberVerificationStatus;
+
+    /**
+     * Indicates that the network could not perform verification.
+     */
+    public static final int VERIFICATION_STATUS_NOT_VERIFIED = 0;
+
+    /**
+     * Indicates that verification by the network passed.  This indicates there is a high likelihood
+     * that the call originated from a valid source.
+     */
+    public static final int VERIFICATION_STATUS_PASSED = 1;
+
+    /**
+     * Indicates that verification by the network failed.  This indicates there is a high likelihood
+     * that the call did not originate from a valid source.
+     */
+    public static final int VERIFICATION_STATUS_FAILED = 2;
+
+    /**@hide*/
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(prefix = "VERIFICATION_STATUS_", value = {
+            VERIFICATION_STATUS_NOT_VERIFIED,
+            VERIFICATION_STATUS_PASSED,
+            VERIFICATION_STATUS_FAILED
+    })
+    public @interface VerificationStatus {}
 
     /**
      * The emergency service categories, only valid if {@link #getServiceType} returns
@@ -354,6 +581,8 @@ public final class ImsCallProfile implements Parcelable {
     /** Indicates if we have known the intent of the user for the call is emergency */
     private boolean mHasKnownUserIntentEmergency = false;
 
+    private Set<RtpHeaderExtensionType> mAcceptedRtpHeaderExtensionTypes = new ArraySet<>();
+
     /**
      * Extras associated with this {@link ImsCallProfile}.
      * <p>
@@ -377,10 +606,10 @@ public final class ImsCallProfile implements Parcelable {
      * a {@link android.os.Binder}.
      */
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public Bundle mCallExtras;
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public ImsStreamMediaProfile mMediaProfile;
 
     /** @hide */
@@ -490,6 +719,19 @@ public final class ImsCallProfile implements Parcelable {
         return mCallExtras.getInt(name, defaultValue);
     }
 
+    /**
+     * Get the call extras (Parcelable), given the extra name.
+     * @param name call extra name
+     * @return the corresponding call extra Parcelable or null if not applicable
+     */
+    @Nullable
+    public <T extends Parcelable> T getCallExtraParcelable(@Nullable String name) {
+        if (mCallExtras != null) {
+            return mCallExtras.getParcelable(name);
+        }
+        return null;
+    }
+
     public void setCallExtra(String name, String value) {
         if (mCallExtras != null) {
             mCallExtras.putString(name, value);
@@ -505,6 +747,21 @@ public final class ImsCallProfile implements Parcelable {
     public void setCallExtraInt(String name, int value) {
         if (mCallExtras != null) {
             mCallExtras.putInt(name, value);
+        }
+    }
+
+    /**
+     * Set the call extra value (Parcelable), given the call extra name.
+     *
+     * Note that the {@link Parcelable} provided must be a class defined in the Android API surface,
+     * as opposed to a class defined by your app.
+     *
+     * @param name call extra name
+     * @param parcelable call extra value
+     */
+    public void setCallExtraParcelable(@NonNull String name, @NonNull Parcelable parcelable) {
+        if (mCallExtras != null) {
+            mCallExtras.putParcelable(name, parcelable);
         }
     }
 
@@ -534,19 +791,45 @@ public final class ImsCallProfile implements Parcelable {
         mMediaProfile = profile.mMediaProfile;
     }
 
+    /**
+     * Sets the verification status for the phone number of an incoming call as identified in
+     * ATIS-1000082.
+     * <p>
+     * The ImsService should parse the verstat information from the SIP INVITE headers for the call
+     * to determine this information.  It is typically found in the P-Asserted-Identity OR From
+     * header fields.
+     * @param callerNumberVerificationStatus the new verification status.
+     */
+    public void setCallerNumberVerificationStatus(
+            @VerificationStatus int callerNumberVerificationStatus) {
+        mCallerNumberVerificationStatus = callerNumberVerificationStatus;
+    }
 
+    /**
+     * Gets the verification status for the phone number of an incoming call as identified in
+     * ATIS-1000082.
+     * @return the verification status.
+     */
+    public @VerificationStatus int getCallerNumberVerificationStatus() {
+        return mCallerNumberVerificationStatus;
+    }
+
+    @NonNull
     @Override
     public String toString() {
         return "{ serviceType=" + mServiceType
                 + ", callType=" + mCallType
                 + ", restrictCause=" + mRestrictCause
-                + ", mediaProfile=" + mMediaProfile.toString()
+                + ", mediaProfile=" + (mMediaProfile != null ? mMediaProfile.toString() : "null")
                 + ", emergencyServiceCategories=" + mEmergencyServiceCategories
                 + ", emergencyUrns=" + mEmergencyUrns
                 + ", emergencyCallRouting=" + mEmergencyCallRouting
                 + ", emergencyCallTesting=" + mEmergencyCallTesting
                 + ", hasKnownUserIntentEmergency=" + mHasKnownUserIntentEmergency
-                + ", mRestrictCause=" + mRestrictCause + " }";
+                + ", mRestrictCause=" + mRestrictCause
+                + ", mCallerNumberVerstat= " + mCallerNumberVerificationStatus
+                + ", mAcceptedRtpHeaderExtensions= " + mAcceptedRtpHeaderExtensionTypes
+                + " }";
     }
 
     @Override
@@ -567,22 +850,30 @@ public final class ImsCallProfile implements Parcelable {
         out.writeBoolean(mEmergencyCallTesting);
         out.writeBoolean(mHasKnownUserIntentEmergency);
         out.writeInt(mRestrictCause);
+        out.writeInt(mCallerNumberVerificationStatus);
+        out.writeArray(mAcceptedRtpHeaderExtensionTypes.toArray());
     }
 
     private void readFromParcel(Parcel in) {
         mServiceType = in.readInt();
         mCallType = in.readInt();
         mCallExtras = in.readBundle();
-        mMediaProfile = in.readParcelable(ImsStreamMediaProfile.class.getClassLoader());
+        mMediaProfile = in.readParcelable(ImsStreamMediaProfile.class.getClassLoader(), android.telephony.ims.ImsStreamMediaProfile.class);
         mEmergencyServiceCategories = in.readInt();
         mEmergencyUrns = in.createStringArrayList();
         mEmergencyCallRouting = in.readInt();
         mEmergencyCallTesting = in.readBoolean();
         mHasKnownUserIntentEmergency = in.readBoolean();
         mRestrictCause = in.readInt();
+        mCallerNumberVerificationStatus = in.readInt();
+        Object[] accepted = in.readArray(RtpHeaderExtensionType.class.getClassLoader(),
+                RtpHeaderExtensionType.class);
+        mAcceptedRtpHeaderExtensionTypes = Arrays.stream(accepted)
+                .map(o -> (RtpHeaderExtensionType) o).collect(Collectors.toSet());
     }
 
-    public static final Creator<ImsCallProfile> CREATOR = new Creator<ImsCallProfile>() {
+    public static final @android.annotation.NonNull Creator<ImsCallProfile> CREATOR =
+            new Creator<ImsCallProfile>() {
         @Override
         public ImsCallProfile createFromParcel(Parcel in) {
             return new ImsCallProfile(in);
@@ -612,6 +903,23 @@ public final class ImsCallProfile implements Parcelable {
 
     public Bundle getCallExtras() {
         return mCallExtras;
+    }
+
+    /**
+     * Get the proprietary extras set for this ImsCallProfile.
+     * @return A {@link Bundle} containing proprietary call extras that were not set by the
+     * platform.
+     */
+    public @NonNull Bundle getProprietaryCallExtras() {
+        if (mCallExtras == null) {
+            return new Bundle();
+        }
+        Bundle proprietaryExtras = mCallExtras.getBundle(EXTRA_OEM_EXTRAS);
+        if (proprietaryExtras == null) {
+            return new Bundle();
+        }
+        // Make a copy so users do not accidentally change this copy of the extras.
+        return new Bundle(proprietaryExtras);
     }
 
     public ImsStreamMediaProfile getMediaProfile() {
@@ -690,7 +998,7 @@ public final class ImsCallProfile implements Parcelable {
      * See {@link #presentationToOir(int)}.
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public static int presentationToOIR(int presentation) {
         switch (presentation) {
             case PhoneConstants.PRESENTATION_RESTRICTED:
@@ -701,6 +1009,8 @@ public final class ImsCallProfile implements Parcelable {
                 return ImsCallProfile.OIR_PRESENTATION_PAYPHONE;
             case PhoneConstants.PRESENTATION_UNKNOWN:
                 return ImsCallProfile.OIR_PRESENTATION_UNKNOWN;
+            case PhoneConstants.PRESENTATION_UNAVAILABLE:
+                return ImsCallProfile.OIR_PRESENTATION_UNAVAILABLE;
             default:
                 return ImsCallProfile.OIR_DEFAULT;
         }
@@ -729,6 +1039,8 @@ public final class ImsCallProfile implements Parcelable {
                 return PhoneConstants.PRESENTATION_ALLOWED;
             case ImsCallProfile.OIR_PRESENTATION_PAYPHONE:
                 return PhoneConstants.PRESENTATION_PAYPHONE;
+            case ImsCallProfile.OIR_PRESENTATION_UNAVAILABLE:
+                return PhoneConstants.PRESENTATION_UNAVAILABLE;
             case ImsCallProfile.OIR_PRESENTATION_UNKNOWN:
                 return PhoneConstants.PRESENTATION_UNKNOWN;
             default:
@@ -769,7 +1081,7 @@ public final class ImsCallProfile implements Parcelable {
         }
 
         int startSize = extras.size();
-        Bundle filtered = extras.filterValues();
+        Bundle filtered = TelephonyUtils.filterValues(extras);
         int endSize = filtered.size();
         if (startSize != endSize) {
             Log.i(TAG, "maybeCleanseExtras: " + (startSize - endSize) + " extra values were "
@@ -951,5 +1263,34 @@ public final class ImsCallProfile implements Parcelable {
      */
     public boolean hasKnownUserIntentEmergency() {
         return mHasKnownUserIntentEmergency;
+    }
+
+    /**
+     * Gets the {@link RtpHeaderExtensionType}s which have been accepted by both ends of the call.
+     * <p>
+     * According to RFC8285, RTP header extensions available to a call are determined using the
+     * offer/accept phase of the SDP protocol (see RFC4566).
+     * <p>
+     * The offered header extension types supported by the framework and exposed to the
+     * {@link ImsService} via {@link MmTelFeature#changeOfferedRtpHeaderExtensionTypes(Set)}.
+     *
+     * @return the {@link RtpHeaderExtensionType}s which were accepted by the other end of the call.
+     */
+    public @NonNull Set<RtpHeaderExtensionType> getAcceptedRtpHeaderExtensionTypes() {
+        return mAcceptedRtpHeaderExtensionTypes;
+    }
+
+    /**
+     * Sets the accepted {@link RtpHeaderExtensionType}s for this call.
+     * <p>
+     * According to RFC8285, RTP header extensions available to a call are determined using the
+     * offer/accept phase of the SDP protocol (see RFC4566).
+     *
+     * @param rtpHeaderExtensions
+     */
+    public void setAcceptedRtpHeaderExtensionTypes(@NonNull Set<RtpHeaderExtensionType>
+            rtpHeaderExtensions) {
+        mAcceptedRtpHeaderExtensionTypes.clear();
+        mAcceptedRtpHeaderExtensionTypes.addAll(rtpHeaderExtensions);
     }
 }

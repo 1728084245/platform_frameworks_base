@@ -16,6 +16,8 @@
 
 package com.android.server.webkit;
 
+import static android.webkit.Flags.updateServiceV2;
+
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -25,7 +27,10 @@ import android.content.pm.PackageInfo;
 import android.content.pm.Signature;
 import android.os.Build;
 import android.os.Bundle;
-import android.test.suitebuilder.annotation.MediumTest;
+import android.platform.test.annotations.RequiresFlagsDisabled;
+import android.platform.test.annotations.RequiresFlagsEnabled;
+import android.platform.test.flag.junit.CheckFlagsRule;
+import android.platform.test.flag.junit.DeviceFlagsValueProvider;
 import android.util.Base64;
 import android.webkit.UserPackage;
 import android.webkit.WebViewFactory;
@@ -33,8 +38,10 @@ import android.webkit.WebViewProviderInfo;
 import android.webkit.WebViewProviderResponse;
 
 import androidx.test.InstrumentationRegistry;
+import androidx.test.filters.MediumTest;
 import androidx.test.runner.AndroidJUnit4;
 
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentMatcher;
@@ -55,10 +62,13 @@ import java.util.concurrent.CountDownLatch;
 public class WebViewUpdateServiceTest {
     private final static String TAG = WebViewUpdateServiceTest.class.getSimpleName();
 
-    private WebViewUpdateServiceImpl mWebViewUpdateServiceImpl;
+    private WebViewUpdateServiceInterface mWebViewUpdateServiceImpl;
     private TestSystemImpl mTestSystemImpl;
 
     private static final String WEBVIEW_LIBRARY_FLAG = "com.android.webview.WebViewLibrary";
+
+    @Rule
+    public final CheckFlagsRule mCheckFlagsRule = DeviceFlagsValueProvider.createCheckFlagsRule();
 
     /**
      * Creates a new instance.
@@ -67,34 +77,38 @@ public class WebViewUpdateServiceTest {
     }
 
     private void setupWithPackages(WebViewProviderInfo[] packages) {
-        setupWithPackages(packages, true);
-    }
-
-    private void setupWithPackages(WebViewProviderInfo[] packages,
-            boolean fallbackLogicEnabled) {
-        setupWithPackages(packages, fallbackLogicEnabled, 1);
-    }
-
-    private void setupWithPackages(WebViewProviderInfo[] packages,
-            boolean fallbackLogicEnabled, int numRelros) {
-        setupWithPackages(packages, fallbackLogicEnabled, numRelros,
-                true /* isDebuggable == true -> don't check package signatures */);
-    }
-
-    private void setupWithPackages(WebViewProviderInfo[] packages,
-            boolean fallbackLogicEnabled, int numRelros, boolean isDebuggable) {
-        setupWithPackages(packages, fallbackLogicEnabled, numRelros, isDebuggable,
+        setupWithAllParameters(packages, 1 /* numRelros */, true /* isDebuggable */,
                 false /* multiProcessDefault */);
     }
 
-    private void setupWithPackages(WebViewProviderInfo[] packages,
-            boolean fallbackLogicEnabled, int numRelros, boolean isDebuggable,
+    private void setupWithPackagesAndRelroCount(WebViewProviderInfo[] packages, int numRelros) {
+        setupWithAllParameters(packages, numRelros, true /* isDebuggable */,
+                false /* multiProcessDefault */);
+    }
+
+    private void setupWithPackagesNonDebuggable(WebViewProviderInfo[] packages) {
+        setupWithAllParameters(packages, 1 /* numRelros */, false /* isDebuggable */,
+                false /* multiProcessDefault */);
+    }
+
+    private void setupWithPackagesAndMultiProcess(WebViewProviderInfo[] packages,
             boolean multiProcessDefault) {
-        TestSystemImpl testing = new TestSystemImpl(packages, fallbackLogicEnabled, numRelros,
-                isDebuggable, multiProcessDefault);
+        setupWithAllParameters(packages, 1 /* numRelros */, true /* isDebuggable */,
+                multiProcessDefault);
+    }
+
+    private void setupWithAllParameters(WebViewProviderInfo[] packages, int numRelros,
+            boolean isDebuggable, boolean multiProcessDefault) {
+        TestSystemImpl testing = new TestSystemImpl(packages, numRelros, isDebuggable,
+                multiProcessDefault);
         mTestSystemImpl = Mockito.spy(testing);
-        mWebViewUpdateServiceImpl =
-            new WebViewUpdateServiceImpl(null /*Context*/, mTestSystemImpl);
+        if (updateServiceV2()) {
+            mWebViewUpdateServiceImpl =
+                    new WebViewUpdateServiceImpl2(mTestSystemImpl);
+        } else {
+            mWebViewUpdateServiceImpl =
+                    new WebViewUpdateServiceImpl(mTestSystemImpl);
+        }
     }
 
     private void setEnabledAndValidPackageInfos(WebViewProviderInfo[] providers) {
@@ -113,12 +127,21 @@ public class WebViewUpdateServiceTest {
     private void checkCertainPackageUsedAfterWebViewBootPreparation(String expectedProviderName,
             WebViewProviderInfo[] webviewPackages) {
         checkCertainPackageUsedAfterWebViewBootPreparation(
-                expectedProviderName, webviewPackages, 1);
+                expectedProviderName, webviewPackages, 1, null);
     }
 
     private void checkCertainPackageUsedAfterWebViewBootPreparation(String expectedProviderName,
-            WebViewProviderInfo[] webviewPackages, int numRelros) {
-        setupWithPackages(webviewPackages, true, numRelros);
+            WebViewProviderInfo[] webviewPackages, String userSetting) {
+        checkCertainPackageUsedAfterWebViewBootPreparation(
+                expectedProviderName, webviewPackages, 1, userSetting);
+    }
+
+    private void checkCertainPackageUsedAfterWebViewBootPreparation(String expectedProviderName,
+            WebViewProviderInfo[] webviewPackages, int numRelros, String userSetting) {
+        setupWithPackagesAndRelroCount(webviewPackages, numRelros);
+        if (userSetting != null) {
+            mTestSystemImpl.updateUserSetting(userSetting);
+        }
         // Add (enabled and valid) package infos for each provider
         setEnabledAndValidPackageInfos(webviewPackages);
 
@@ -266,7 +289,7 @@ public class WebViewUpdateServiceTest {
                 singlePackage,
                 new WebViewProviderInfo[] {
                     new WebViewProviderInfo(singlePackage, "", true /*def av*/, false, null)},
-                2);
+                2, null);
     }
 
     // Ensure that package with valid signatures is chosen rather than package with invalid
@@ -281,15 +304,16 @@ public class WebViewUpdateServiceTest {
         Signature invalidPackageSignature = new Signature("33");
 
         WebViewProviderInfo[] packages = new WebViewProviderInfo[] {
-            new WebViewProviderInfo(invalidPackage, "", true, false, new String[]{
-                        Base64.encodeToString(
-                                invalidExpectedSignature.toByteArray(), Base64.DEFAULT)}),
             new WebViewProviderInfo(validPackage, "", true, false, new String[]{
                         Base64.encodeToString(
-                                validSignature.toByteArray(), Base64.DEFAULT)})
+                                validSignature.toByteArray(), Base64.DEFAULT)}),
+            new WebViewProviderInfo(invalidPackage, "", true, false, new String[]{
+                        Base64.encodeToString(
+                                invalidExpectedSignature.toByteArray(), Base64.DEFAULT)})
         };
-        setupWithPackages(packages, true /* fallback logic enabled */, 1 /* numRelros */,
-                false /* isDebuggable */);
+        setupWithPackagesNonDebuggable(packages);
+        // Start with the setting pointing to the invalid package
+        mTestSystemImpl.updateUserSetting(invalidPackage);
         mTestSystemImpl.setPackageInfo(createPackageInfo(invalidPackage, true /* enabled */,
                     true /* valid */, true /* installed */, new Signature[]{invalidPackageSignature}
                     , 0 /* updateTime */));
@@ -326,7 +350,9 @@ public class WebViewUpdateServiceTest {
     }
 
     @Test
-    public void testFailListingEmptyWebviewPackages() {
+    @RequiresFlagsDisabled("android.webkit.update_service_v2")
+    // If the flag is set, will throw an exception because of no available by default provider.
+    public void testEmptyConfig() {
         WebViewProviderInfo[] packages = new WebViewProviderInfo[0];
         setupWithPackages(packages);
         setEnabledAndValidPackageInfos(packages);
@@ -339,14 +365,26 @@ public class WebViewUpdateServiceTest {
         WebViewProviderResponse response = mWebViewUpdateServiceImpl.waitForAndGetProvider();
         assertEquals(WebViewFactory.LIBLOAD_FAILED_LISTING_WEBVIEW_PACKAGES, response.status);
         assertEquals(null, mWebViewUpdateServiceImpl.getCurrentWebViewPackage());
+    }
 
-        // Now install a package
+    @Test
+    public void testFailListingEmptyWebviewPackages() {
         String singlePackage = "singlePackage";
-        packages = new WebViewProviderInfo[]{
+        WebViewProviderInfo[] packages = new WebViewProviderInfo[]{
             new WebViewProviderInfo(singlePackage, "", true, false, null)};
         setupWithPackages(packages);
-        setEnabledAndValidPackageInfos(packages);
 
+        runWebViewBootPreparationOnMainSync();
+
+        Mockito.verify(mTestSystemImpl, Mockito.never()).onWebViewProviderChanged(
+                Matchers.anyObject());
+
+        WebViewProviderResponse response = mWebViewUpdateServiceImpl.waitForAndGetProvider();
+        assertEquals(WebViewFactory.LIBLOAD_FAILED_LISTING_WEBVIEW_PACKAGES, response.status);
+        assertEquals(null, mWebViewUpdateServiceImpl.getCurrentWebViewPackage());
+
+        // Now install the package
+        setEnabledAndValidPackageInfos(packages);
         mWebViewUpdateServiceImpl.packageStateChanged(singlePackage,
                 WebViewUpdateService.PACKAGE_ADDED, TestSystemImpl.PRIMARY_USER_ID);
 
@@ -357,7 +395,7 @@ public class WebViewUpdateServiceTest {
         // Remove the package again
         mTestSystemImpl.removePackageInfo(singlePackage);
         mWebViewUpdateServiceImpl.packageStateChanged(singlePackage,
-                WebViewUpdateService.PACKAGE_ADDED, TestSystemImpl.PRIMARY_USER_ID);
+                WebViewUpdateService.PACKAGE_REMOVED, TestSystemImpl.PRIMARY_USER_ID);
 
         // Package removed - ensure our interface states that there is no package
         response = mWebViewUpdateServiceImpl.waitForAndGetProvider();
@@ -442,6 +480,8 @@ public class WebViewUpdateServiceTest {
             new WebViewProviderInfo(firstPackage, "", true, false, null),
             new WebViewProviderInfo(secondPackage, "", true, false, null)};
         setupWithPackages(packages);
+        // Start with the setting pointing to the second package
+        mTestSystemImpl.updateUserSetting(secondPackage);
         // Have all packages be enabled, so that we can change provider however we want to
         setEnabledAndValidPackageInfos(packages);
 
@@ -450,9 +490,9 @@ public class WebViewUpdateServiceTest {
         runWebViewBootPreparationOnMainSync();
 
         Mockito.verify(mTestSystemImpl).onWebViewProviderChanged(
-                Mockito.argThat(new IsPackageInfoWithName(firstPackage)));
+                Mockito.argThat(new IsPackageInfoWithName(secondPackage)));
 
-        assertEquals(firstPackage,
+        assertEquals(secondPackage,
                 mWebViewUpdateServiceImpl.getCurrentWebViewPackage().packageName);
 
         new Thread(new Runnable() {
@@ -461,12 +501,13 @@ public class WebViewUpdateServiceTest {
                 WebViewProviderResponse threadResponse =
                     mWebViewUpdateServiceImpl.waitForAndGetProvider();
                 assertEquals(WebViewFactory.LIBLOAD_SUCCESS, threadResponse.status);
-                assertEquals(secondPackage, threadResponse.packageInfo.packageName);
-                // Verify that we killed the first package if we performed a settings change -
-                // otherwise we had to disable the first package, in which case its dependents
+                assertEquals(firstPackage, threadResponse.packageInfo.packageName);
+                // Verify that we killed the second package if we performed a settings change -
+                // otherwise we had to disable the second package, in which case its dependents
                 // should have been killed by the framework.
                 if (settingsChange) {
-                    Mockito.verify(mTestSystemImpl).killPackageDependents(Mockito.eq(firstPackage));
+                    Mockito.verify(mTestSystemImpl)
+                            .killPackageDependents(Mockito.eq(secondPackage));
                 }
                 countdown.countDown();
             }
@@ -477,114 +518,95 @@ public class WebViewUpdateServiceTest {
         }
 
         if (settingsChange) {
-            mWebViewUpdateServiceImpl.changeProviderAndSetting(secondPackage);
+            mWebViewUpdateServiceImpl.changeProviderAndSetting(firstPackage);
         } else {
-            // Enable the second provider
-            mTestSystemImpl.setPackageInfo(createPackageInfo(secondPackage, true /* enabled */,
+            // Enable the first provider
+            mTestSystemImpl.setPackageInfo(createPackageInfo(firstPackage, true /* enabled */,
                         true /* valid */, true /* installed */));
             mWebViewUpdateServiceImpl.packageStateChanged(
-                    secondPackage, WebViewUpdateService.PACKAGE_CHANGED, TestSystemImpl.PRIMARY_USER_ID);
+                    firstPackage,
+                    WebViewUpdateService.PACKAGE_CHANGED,
+                    TestSystemImpl.PRIMARY_USER_ID);
 
             // Ensure we haven't changed package yet.
-            assertEquals(firstPackage,
+            assertEquals(secondPackage,
                     mWebViewUpdateServiceImpl.getCurrentWebViewPackage().packageName);
 
-            // Switch provider by disabling the first one
-            mTestSystemImpl.setPackageInfo(createPackageInfo(firstPackage, false /* enabled */,
+            // Switch provider by disabling the second one
+            mTestSystemImpl.setPackageInfo(createPackageInfo(secondPackage, false /* enabled */,
                         true /* valid */, true /* installed */));
             mWebViewUpdateServiceImpl.packageStateChanged(
-                    firstPackage, WebViewUpdateService.PACKAGE_CHANGED, TestSystemImpl.PRIMARY_USER_ID);
+                    secondPackage,
+                    WebViewUpdateService.PACKAGE_CHANGED,
+                    TestSystemImpl.PRIMARY_USER_ID);
         }
         mWebViewUpdateServiceImpl.notifyRelroCreationCompleted();
-        // first package done, should start on second
+        // second package done, should start on first
 
         Mockito.verify(mTestSystemImpl).onWebViewProviderChanged(
-                Mockito.argThat(new IsPackageInfoWithName(secondPackage)));
+                Mockito.argThat(new IsPackageInfoWithName(firstPackage)));
 
         mWebViewUpdateServiceImpl.notifyRelroCreationCompleted();
-        // second package done, the other thread should now be unblocked
+        // first package done, the other thread should now be unblocked
         try {
             countdown.await();
         } catch (InterruptedException e) {
         }
     }
 
+    /**
+     * Scenario for testing re-enabling a fallback package.
+     */
     @Test
-    public void testRunFallbackLogicIfEnabled() {
-        checkFallbackLogicBeingRun(true);
-    }
-
-    @Test
-    public void testDontRunFallbackLogicIfDisabled() {
-        checkFallbackLogicBeingRun(false);
-    }
-
-    private void checkFallbackLogicBeingRun(boolean fallbackLogicEnabled) {
-        String primaryPackage = "primary";
-        String fallbackPackage = "fallback";
+    @RequiresFlagsDisabled("android.webkit.update_service_v2")
+    public void testFallbackPackageEnabling() {
+        String testPackage = "testFallback";
         WebViewProviderInfo[] packages = new WebViewProviderInfo[] {
             new WebViewProviderInfo(
-                    primaryPackage, "", true /* default available */, false /* fallback */, null),
-            new WebViewProviderInfo(
-                    fallbackPackage, "", true /* default available */, true /* fallback */, null)};
-        setupWithPackages(packages, fallbackLogicEnabled);
-        setEnabledAndValidPackageInfos(packages);
+                    testPackage, "", true /* default available */, true /* fallback */, null)};
+        setupWithPackages(packages);
+        mTestSystemImpl.setPackageInfo(
+                createPackageInfo(testPackage, false /* enabled */ , true /* valid */,
+                    true /* installed */));
 
+        // Check that the boot time logic re-enables the fallback package.
         runWebViewBootPreparationOnMainSync();
-        // Verify that we disable the fallback package if fallback logic enabled, and don't disable
-        // the fallback package if that logic is disabled
-        if (fallbackLogicEnabled) {
-            Mockito.verify(mTestSystemImpl).uninstallAndDisablePackageForAllUsers(
-                    Matchers.anyObject(), Mockito.eq(fallbackPackage));
-        } else {
-            Mockito.verify(mTestSystemImpl, Mockito.never()).uninstallAndDisablePackageForAllUsers(
-                    Matchers.anyObject(), Matchers.anyObject());
-        }
-        Mockito.verify(mTestSystemImpl).onWebViewProviderChanged(
-                Mockito.argThat(new IsPackageInfoWithName(primaryPackage)));
+        Mockito.verify(mTestSystemImpl).enablePackageForAllUsers(
+                Mockito.eq(testPackage), Mockito.eq(true));
 
-        // Enable fallback package
-        mTestSystemImpl.setPackageInfo(createPackageInfo(fallbackPackage, true /* enabled */,
-                        true /* valid */, true /* installed */));
+        // Fake the message about the enabling having changed the package state,
+        // and check we now use that package.
         mWebViewUpdateServiceImpl.packageStateChanged(
-                fallbackPackage, WebViewUpdateService.PACKAGE_CHANGED, TestSystemImpl.PRIMARY_USER_ID);
-
-        if (fallbackLogicEnabled) {
-            // Check that we have now disabled the fallback package twice
-            Mockito.verify(mTestSystemImpl, Mockito.times(2)).uninstallAndDisablePackageForAllUsers(
-                    Matchers.anyObject(), Mockito.eq(fallbackPackage));
-        } else {
-            // Check that we still haven't disabled any package
-            Mockito.verify(mTestSystemImpl, Mockito.never()).uninstallAndDisablePackageForAllUsers(
-                    Matchers.anyObject(), Matchers.anyObject());
-        }
+                testPackage, WebViewUpdateService.PACKAGE_CHANGED, TestSystemImpl.PRIMARY_USER_ID);
+        checkPreparationPhasesForPackage(testPackage, 1);
     }
 
     /**
-     * Scenario for installing primary package when fallback enabled.
-     * 1. Start with only fallback installed
-     * 2. Install non-fallback
-     * 3. Fallback should be disabled
+     * Scenario for installing primary package when secondary in use.
+     * 1. Start with only secondary installed
+     * 2. Install primary
+     * 3. Primary should be used
      */
     @Test
-    public void testInstallingNonFallbackPackage() {
+    @RequiresFlagsDisabled("android.webkit.update_service_v2")
+    // If the flag is set, we don't automitally switch to secondary package unless it is
+    // chosen directly.
+    public void testInstallingPrimaryPackage() {
         String primaryPackage = "primary";
-        String fallbackPackage = "fallback";
+        String secondaryPackage = "secondary";
         WebViewProviderInfo[] packages = new WebViewProviderInfo[] {
             new WebViewProviderInfo(
                     primaryPackage, "", true /* default available */, false /* fallback */, null),
             new WebViewProviderInfo(
-                    fallbackPackage, "", true /* default available */, true /* fallback */, null)};
-        setupWithPackages(packages, true /* isFallbackLogicEnabled */);
+                    secondaryPackage, "", true /* default available */, false /* fallback */,
+                    null)};
+        setupWithPackages(packages);
         mTestSystemImpl.setPackageInfo(
-                createPackageInfo(fallbackPackage, true /* enabled */ , true /* valid */,
+                createPackageInfo(secondaryPackage, true /* enabled */ , true /* valid */,
                     true /* installed */));
 
         runWebViewBootPreparationOnMainSync();
-        Mockito.verify(mTestSystemImpl, Mockito.never()).uninstallAndDisablePackageForAllUsers(
-                Matchers.anyObject(), Matchers.anyObject());
-
-        checkPreparationPhasesForPackage(fallbackPackage,
+        checkPreparationPhasesForPackage(secondaryPackage,
                 1 /* first preparation for this package*/);
 
         // Install primary package
@@ -594,24 +616,22 @@ public class WebViewUpdateServiceTest {
         mWebViewUpdateServiceImpl.packageStateChanged(primaryPackage,
                 WebViewUpdateService.PACKAGE_ADDED_REPLACED, TestSystemImpl.PRIMARY_USER_ID);
 
-        // Verify fallback disabled, primary package used as provider, and fallback package killed
-        Mockito.verify(mTestSystemImpl).uninstallAndDisablePackageForAllUsers(
-                Matchers.anyObject(), Mockito.eq(fallbackPackage));
+        // Verify primary package used as provider, and secondary package killed
         checkPreparationPhasesForPackage(primaryPackage, 1 /* first preparation for this package*/);
-        Mockito.verify(mTestSystemImpl).killPackageDependents(Mockito.eq(fallbackPackage));
+        Mockito.verify(mTestSystemImpl).killPackageDependents(Mockito.eq(secondaryPackage));
     }
 
     @Test
-    public void testFallbackChangesEnabledStateSingleUser() {
+    public void testRemovingSecondarySelectsPrimarySingleUser() {
         for (PackageRemovalType removalType : REMOVAL_TYPES) {
-            checkFallbackChangesEnabledState(false /* multiUser */, removalType);
+            checkRemovingSecondarySelectsPrimary(false /* multiUser */, removalType);
         }
     }
 
     @Test
-    public void testFallbackChangesEnabledStateMultiUser() {
+    public void testRemovingSecondarySelectsPrimaryMultiUser() {
         for (PackageRemovalType removalType : REMOVAL_TYPES) {
-            checkFallbackChangesEnabledState(true /* multiUser */, removalType);
+            checkRemovingSecondarySelectsPrimary(true /* multiUser */, removalType);
         }
     }
 
@@ -625,16 +645,19 @@ public class WebViewUpdateServiceTest {
 
     private PackageRemovalType[] REMOVAL_TYPES = PackageRemovalType.class.getEnumConstants();
 
-    public void checkFallbackChangesEnabledState(boolean multiUser,
+    private void checkRemovingSecondarySelectsPrimary(boolean multiUser,
             PackageRemovalType removalType) {
         String primaryPackage = "primary";
-        String fallbackPackage = "fallback";
+        String secondaryPackage = "secondary";
         WebViewProviderInfo[] packages = new WebViewProviderInfo[] {
             new WebViewProviderInfo(
                     primaryPackage, "", true /* default available */, false /* fallback */, null),
             new WebViewProviderInfo(
-                    fallbackPackage, "", true /* default available */, true /* fallback */, null)};
-        setupWithPackages(packages, true /* fallbackLogicEnabled */);
+                    secondaryPackage, "", true /* default available */, false /* fallback */,
+                    null)};
+        setupWithPackages(packages);
+        // Start with the setting pointing to the secondary package
+        mTestSystemImpl.updateUserSetting(secondaryPackage);
         int secondaryUserId = 10;
         int userIdToChangePackageFor = multiUser ? secondaryUserId : TestSystemImpl.PRIMARY_USER_ID;
         if (multiUser) {
@@ -644,94 +667,31 @@ public class WebViewUpdateServiceTest {
         setEnabledAndValidPackageInfosForUser(TestSystemImpl.PRIMARY_USER_ID, packages);
 
         runWebViewBootPreparationOnMainSync();
-
-        // Verify fallback disabled at boot when primary package enabled
-        checkEnablePackageForUserCalled(fallbackPackage, false, multiUser
-                ? new int[] {TestSystemImpl.PRIMARY_USER_ID, secondaryUserId}
-                : new int[] {TestSystemImpl.PRIMARY_USER_ID}, 1 /* numUsages */);
-
-        checkPreparationPhasesForPackage(primaryPackage, 1);
+        checkPreparationPhasesForPackage(secondaryPackage, 1);
 
         boolean enabled = !(removalType == PackageRemovalType.DISABLE);
         boolean installed = !(removalType == PackageRemovalType.UNINSTALL);
         boolean hidden = (removalType == PackageRemovalType.HIDE);
-        // Disable primary package and ensure fallback becomes enabled and used
+        // Disable secondary package and ensure primary becomes used
         mTestSystemImpl.setPackageInfoForUser(userIdToChangePackageFor,
-                createPackageInfo(primaryPackage, enabled /* enabled */, true /* valid */,
+                createPackageInfo(secondaryPackage, enabled /* enabled */, true /* valid */,
                     installed /* installed */, null /* signature */, 0 /* updateTime */,
                     hidden /* hidden */));
-        mWebViewUpdateServiceImpl.packageStateChanged(primaryPackage,
+        mWebViewUpdateServiceImpl.packageStateChanged(secondaryPackage,
                 removalType == PackageRemovalType.DISABLE
                 ? WebViewUpdateService.PACKAGE_CHANGED : WebViewUpdateService.PACKAGE_REMOVED,
                 userIdToChangePackageFor); // USER ID
+        checkPreparationPhasesForPackage(primaryPackage, 1);
 
-        checkEnablePackageForUserCalled(fallbackPackage, true, multiUser
-                ? new int[] {TestSystemImpl.PRIMARY_USER_ID, secondaryUserId}
-                : new int[] {TestSystemImpl.PRIMARY_USER_ID}, 1 /* numUsages */);
-
-        checkPreparationPhasesForPackage(fallbackPackage, 1);
-
-
-        // Again enable primary package and verify primary is used and fallback becomes disabled
+        // Again enable secondary package and verify secondary is used
         mTestSystemImpl.setPackageInfoForUser(userIdToChangePackageFor,
-                createPackageInfo(primaryPackage, true /* enabled */, true /* valid */,
+                createPackageInfo(secondaryPackage, true /* enabled */, true /* valid */,
                     true /* installed */));
-        mWebViewUpdateServiceImpl.packageStateChanged(primaryPackage,
+        mWebViewUpdateServiceImpl.packageStateChanged(secondaryPackage,
                 removalType == PackageRemovalType.DISABLE
                 ? WebViewUpdateService.PACKAGE_CHANGED : WebViewUpdateService.PACKAGE_ADDED,
                 userIdToChangePackageFor);
-
-        // Verify fallback is disabled a second time when primary package becomes enabled
-        checkEnablePackageForUserCalled(fallbackPackage, false, multiUser
-                ? new int[] {TestSystemImpl.PRIMARY_USER_ID, secondaryUserId}
-                : new int[] {TestSystemImpl.PRIMARY_USER_ID}, 2 /* numUsages */);
-
-        checkPreparationPhasesForPackage(primaryPackage, 2);
-    }
-
-    private void checkEnablePackageForUserCalled(String packageName, boolean expectEnabled,
-            int[] userIds, int numUsages) {
-        for (int userId : userIds) {
-            Mockito.verify(mTestSystemImpl, Mockito.times(numUsages)).enablePackageForUser(
-                    Mockito.eq(packageName), Mockito.eq(expectEnabled), Mockito.eq(userId));
-        }
-    }
-
-    @Test
-    public void testAddUserWhenFallbackLogicEnabled() {
-        checkAddingNewUser(true);
-    }
-
-    @Test
-    public void testAddUserWhenFallbackLogicDisabled() {
-        checkAddingNewUser(false);
-    }
-
-    public void checkAddingNewUser(boolean fallbackLogicEnabled) {
-        String primaryPackage = "primary";
-        String fallbackPackage = "fallback";
-        WebViewProviderInfo[] packages = new WebViewProviderInfo[] {
-            new WebViewProviderInfo(
-                    primaryPackage, "", true /* default available */, false /* fallback */, null),
-            new WebViewProviderInfo(
-                    fallbackPackage, "", true /* default available */, true /* fallback */, null)};
-        setupWithPackages(packages, fallbackLogicEnabled);
-        setEnabledAndValidPackageInfosForUser(TestSystemImpl.PRIMARY_USER_ID, packages);
-        int newUser = 100;
-        mTestSystemImpl.addUser(newUser);
-        setEnabledAndValidPackageInfosForUser(newUser, packages);
-        mWebViewUpdateServiceImpl.handleNewUser(newUser);
-        if (fallbackLogicEnabled) {
-            // Verify fallback package becomes disabled for new user
-            Mockito.verify(mTestSystemImpl).enablePackageForUser(
-                    Mockito.eq(fallbackPackage), Mockito.eq(false) /* enable */,
-                    Mockito.eq(newUser));
-        } else {
-            // Verify that we don't disable fallback for new user
-            Mockito.verify(mTestSystemImpl, Mockito.never()).enablePackageForUser(
-                    Mockito.anyObject(), Matchers.anyBoolean() /* enable */,
-                    Matchers.anyInt() /* user */);
-        }
+        checkPreparationPhasesForPackage(secondaryPackage, 2);
     }
 
     /**
@@ -741,33 +701,28 @@ public class WebViewUpdateServiceTest {
     @Test
     public void testAddingNewUserWithUninstalledPackage() {
         String primaryPackage = "primary";
-        String fallbackPackage = "fallback";
+        String secondaryPackage = "secondary";
         WebViewProviderInfo[] packages = new WebViewProviderInfo[] {
             new WebViewProviderInfo(
                     primaryPackage, "", true /* default available */, false /* fallback */, null),
             new WebViewProviderInfo(
-                    fallbackPackage, "", true /* default available */, true /* fallback */, null)};
-        setupWithPackages(packages, true /* fallbackLogicEnabled */);
+                    secondaryPackage, "", true /* default available */, false /* fallback */,
+                    null)};
+        setupWithPackages(packages);
+        // Start with the setting pointing to the secondary package
+        mTestSystemImpl.updateUserSetting(secondaryPackage);
         setEnabledAndValidPackageInfosForUser(TestSystemImpl.PRIMARY_USER_ID, packages);
         int newUser = 100;
         mTestSystemImpl.addUser(newUser);
-        // Let the primary package be uninstalled for the new user
+        // Let the secondary package be uninstalled for the new user
         mTestSystemImpl.setPackageInfoForUser(newUser,
-                createPackageInfo(primaryPackage, true /* enabled */, true /* valid */,
+                createPackageInfo(secondaryPackage, true /* enabled */, true /* valid */,
                         false /* installed */));
         mTestSystemImpl.setPackageInfoForUser(newUser,
-                createPackageInfo(fallbackPackage, false /* enabled */, true /* valid */,
+                createPackageInfo(primaryPackage, true /* enabled */, true /* valid */,
                         true /* installed */));
         mWebViewUpdateServiceImpl.handleNewUser(newUser);
-        // Verify fallback package doesn't become disabled for the primary user.
-        Mockito.verify(mTestSystemImpl, Mockito.never()).enablePackageForUser(
-                Mockito.anyObject(), Mockito.eq(false) /* enable */,
-                Mockito.eq(TestSystemImpl.PRIMARY_USER_ID) /* user */);
-        // Verify that we enable the fallback package for the secondary user.
-        Mockito.verify(mTestSystemImpl, Mockito.times(1)).enablePackageForUser(
-                Mockito.eq(fallbackPackage), Mockito.eq(true) /* enable */,
-                Mockito.eq(newUser) /* user */);
-        checkPreparationPhasesForPackage(fallbackPackage, 1 /* numRelros */);
+        checkPreparationPhasesForPackage(primaryPackage, 1 /* numRelros */);
     }
 
     /**
@@ -865,25 +820,25 @@ public class WebViewUpdateServiceTest {
         String chosenPackage = "chosenPackage";
         String nonChosenPackage = "non-chosenPackage";
         WebViewProviderInfo[] packages = new WebViewProviderInfo[] {
-            new WebViewProviderInfo(chosenPackage, "", true /* default available */,
-                    false /* fallback */, null),
             new WebViewProviderInfo(nonChosenPackage, "", true /* default available */,
+                    false /* fallback */, null),
+            new WebViewProviderInfo(chosenPackage, "", true /* default available */,
                     false /* fallback */, null)};
 
         setupWithPackages(packages);
         // Only 'install' nonChosenPackage
         mTestSystemImpl.setPackageInfo(
-                createPackageInfo(nonChosenPackage, true /* enabled */, true /* valid */, true /* installed */));
+                createPackageInfo(nonChosenPackage, true /* enabled */, true /* valid */,
+                        true /* installed */));
 
         // Set user-chosen package
-        mTestSystemImpl.updateUserSetting(null, chosenPackage);
+        mTestSystemImpl.updateUserSetting(chosenPackage);
 
         runWebViewBootPreparationOnMainSync();
 
         // Verify that we switch the setting to point to the current package
-        Mockito.verify(mTestSystemImpl).updateUserSetting(
-                Mockito.anyObject(), Mockito.eq(nonChosenPackage));
-        assertEquals(nonChosenPackage, mTestSystemImpl.getUserChosenWebViewProvider(null));
+        Mockito.verify(mTestSystemImpl).updateUserSetting(Mockito.eq(nonChosenPackage));
+        assertEquals(nonChosenPackage, mTestSystemImpl.getUserChosenWebViewProvider());
 
         checkPreparationPhasesForPackage(nonChosenPackage, 1);
     }
@@ -894,6 +849,9 @@ public class WebViewUpdateServiceTest {
     }
 
     @Test
+    @RequiresFlagsDisabled("android.webkit.update_service_v2")
+    // If the flag is set, we don't automitally switch to second package unless it is chosen
+    // directly.
     public void testRecoverFailedListingWebViewPackagesAddedPackage() {
         checkRecoverAfterFailListingWebviewPackages(false);
     }
@@ -958,22 +916,22 @@ public class WebViewUpdateServiceTest {
                     false /* fallback */, null),
             new WebViewProviderInfo(secondPackage, "", true /* default available */,
                     false /* fallback */, null)};
-        checkCertainPackageUsedAfterWebViewBootPreparation(firstPackage, packages);
+        checkCertainPackageUsedAfterWebViewBootPreparation(secondPackage, packages, secondPackage);
 
         // Replace or remove the current webview package
         if (replaced) {
             mTestSystemImpl.setPackageInfo(
-                    createPackageInfo(firstPackage, true /* enabled */, false /* valid */,
+                    createPackageInfo(secondPackage, true /* enabled */, false /* valid */,
                         true /* installed */));
-            mWebViewUpdateServiceImpl.packageStateChanged(firstPackage,
+            mWebViewUpdateServiceImpl.packageStateChanged(secondPackage,
                     WebViewUpdateService.PACKAGE_ADDED_REPLACED, TestSystemImpl.PRIMARY_USER_ID);
         } else {
-            mTestSystemImpl.removePackageInfo(firstPackage);
-            mWebViewUpdateServiceImpl.packageStateChanged(firstPackage,
+            mTestSystemImpl.removePackageInfo(secondPackage);
+            mWebViewUpdateServiceImpl.packageStateChanged(secondPackage,
                     WebViewUpdateService.PACKAGE_REMOVED, TestSystemImpl.PRIMARY_USER_ID);
         }
 
-        checkPreparationPhasesForPackage(secondPackage, 1);
+        checkPreparationPhasesForPackage(firstPackage, 1);
 
         Mockito.verify(mTestSystemImpl, Mockito.never()).killPackageDependents(
                 Mockito.anyObject());
@@ -1017,13 +975,14 @@ public class WebViewUpdateServiceTest {
         setEnabledAndValidPackageInfos(packages);
 
         // Start with the setting pointing to the third package
-        mTestSystemImpl.updateUserSetting(null, thirdPackage);
+        mTestSystemImpl.updateUserSetting(thirdPackage);
 
         runWebViewBootPreparationOnMainSync();
         checkPreparationPhasesForPackage(thirdPackage, 1);
 
         mTestSystemImpl.setPackageInfo(
-                createPackageInfo(secondPackage, true /* enabled */, false /* valid */, true /* installed */));
+                createPackageInfo(secondPackage, true /* enabled */, false /* valid */,
+                        true /* installed */));
 
         // Try to switch to the invalid second package, this should result in switching to the first
         // package, since that is more preferred than the third one.
@@ -1083,40 +1042,17 @@ public class WebViewUpdateServiceTest {
                 100000 /* candidate version */, false /* expected validity */);
     }
 
-    @Test
-    public void testMinimumSystemVersionUsedFallbackIgnored() {
-        checkPackageVersions(new int[]{300000, 400000, 500000, 600000, 700000} /* system versions */,
-                200000 /* candidate version */, false /* expected validity */, true /* add fallback */,
-                100000 /* fallback version */, false /* expected validity of fallback */);
-    }
-
-    @Test
-    public void testFallbackValid() {
-        checkPackageVersions(new int[]{300000, 400000, 500000, 600000, 700000} /* system versions */,
-                200000/* candidate version */, false /* expected validity */, true /* add fallback */,
-                300000 /* fallback version */, true /* expected validity of fallback */);
-    }
-
-    private void checkPackageVersions(int[] systemVersions, int candidateVersion,
-            boolean candidateShouldBeValid) {
-        checkPackageVersions(systemVersions, candidateVersion, candidateShouldBeValid,
-                false, 0, false);
-    }
-
     /**
      * Utility method for checking that package version restriction works as it should.
      * I.e. that a package with lower version than the system-default is not valid and that a
      * package with greater than or equal version code is considered valid.
      */
     private void checkPackageVersions(int[] systemVersions, int candidateVersion,
-            boolean candidateShouldBeValid, boolean addFallback, int fallbackVersion,
-            boolean fallbackShouldBeValid) {
+            boolean candidateShouldBeValid) {
         int numSystemPackages = systemVersions.length;
-        int numFallbackPackages = (addFallback ? 1 : 0);
-        int numPackages = systemVersions.length + 1 + numFallbackPackages;
+        int numPackages = systemVersions.length + 1;
         String candidatePackage = "candidatePackage";
         String systemPackage = "systemPackage";
-        String fallbackPackage = "fallbackPackage";
 
         // Each package needs a valid signature since we set isDebuggable to false
         Signature signature = new Signature("11");
@@ -1125,8 +1061,7 @@ public class WebViewUpdateServiceTest {
 
         // Set up config
         // 1. candidatePackage
-        // 2-N. default available non-fallback packages
-        // N+1. default available fallback package
+        // 2-N. default available packages
         WebViewProviderInfo[] packages = new WebViewProviderInfo[numPackages];
         packages[0] = new WebViewProviderInfo(candidatePackage, "",
                 false /* available by default */, false /* fallback */,
@@ -1136,14 +1071,7 @@ public class WebViewUpdateServiceTest {
                     true /* available by default */, false /* fallback */,
                     new String[]{encodedSignatureString});
         }
-        if (addFallback) {
-            packages[packages.length-1] = new WebViewProviderInfo(fallbackPackage, "",
-                    true /* available by default */, true /* fallback */,
-                    new String[]{encodedSignatureString});
-        }
-
-        setupWithPackages(packages, true /* fallback logic enabled */, 1 /* numRelros */,
-                false /* isDebuggable */);
+        setupWithPackagesNonDebuggable(packages);
 
         // Set package infos
         mTestSystemImpl.setPackageInfo(
@@ -1156,12 +1084,6 @@ public class WebViewUpdateServiceTest {
                         true /* installed */, new Signature[]{signature}, 0 /* updateTime */,
                         false /* hidden */, systemVersions[n-1], true /* isSystemApp */));
         }
-        if (addFallback) {
-            mTestSystemImpl.setPackageInfo(
-                    createPackageInfo(fallbackPackage, true /* enabled */, true /* valid */,
-                        true /* installed */, new Signature[]{signature}, 0 /* updateTime */,
-                        false /* hidden */, fallbackVersion, true /* isSystemApp */));
-        }
 
         WebViewProviderInfo[] validPackages = mWebViewUpdateServiceImpl.getValidWebViewPackages();
         int expectedNumValidPackages = numSystemPackages;
@@ -1171,15 +1093,6 @@ public class WebViewUpdateServiceTest {
             // Ensure the candidate package is not one of the valid packages
             for(int n = 0; n < validPackages.length; n++) {
                 assertFalse(candidatePackage.equals(validPackages[n].packageName));
-            }
-        }
-
-        if (fallbackShouldBeValid) {
-            expectedNumValidPackages += numFallbackPackages;
-        } else {
-            // Ensure the fallback package is not one of the valid packages
-            for(int n = 0; n < validPackages.length; n++) {
-                assertFalse(fallbackPackage.equals(validPackages[n].packageName));
             }
         }
 
@@ -1202,16 +1115,18 @@ public class WebViewUpdateServiceTest {
     }
 
     /**
-     * Ensure that the update service does use an uninstalled package when that is the only
+     * Ensure that the update service does not use an uninstalled package even if it is the only
      * package available.
      */
     @Test
+    @RequiresFlagsDisabled("android.webkit.update_service_v2")
+    // If the flag is set, we return the package even if it is not installed.
     public void testWithSingleUninstalledPackage() {
         String testPackageName = "test.package.name";
         WebViewProviderInfo[] webviewPackages = new WebViewProviderInfo[] {
                 new WebViewProviderInfo(testPackageName, "",
                         true /*default available*/, false /* fallback */, null)};
-        setupWithPackages(webviewPackages, true /* fallback logic enabled */, 1 /* numRelros */);
+        setupWithPackages(webviewPackages);
         mTestSystemImpl.setPackageInfo(createPackageInfo(testPackageName, true /* enabled */,
                     true /* valid */, false /* installed */));
 
@@ -1244,12 +1159,14 @@ public class WebViewUpdateServiceTest {
         String installedPackage = "installedPackage";
         String uninstalledPackage = "uninstalledPackage";
         WebViewProviderInfo[] webviewPackages = new WebViewProviderInfo[] {
-            new WebViewProviderInfo(uninstalledPackage, "", true /* available by default */,
-                    false /* fallback */, null),
             new WebViewProviderInfo(installedPackage, "", true /* available by default */,
+                    false /* fallback */, null),
+            new WebViewProviderInfo(uninstalledPackage, "", true /* available by default */,
                     false /* fallback */, null)};
 
-        setupWithPackages(webviewPackages, true /* fallback logic enabled */, 1 /* numRelros */);
+        setupWithPackages(webviewPackages);
+        // Start with the setting pointing to the uninstalled package
+        mTestSystemImpl.updateUserSetting(uninstalledPackage);
         int secondaryUserId = 5;
         if (multiUser) {
             mTestSystemImpl.addUser(secondaryUserId);
@@ -1257,7 +1174,7 @@ public class WebViewUpdateServiceTest {
             setEnabledAndValidPackageInfosForUser(TestSystemImpl.PRIMARY_USER_ID, webviewPackages);
             mTestSystemImpl.setPackageInfoForUser(secondaryUserId, createPackageInfo(
                     installedPackage, true /* enabled */, true /* valid */, true /* installed */));
-            // Hide or uninstall the primary package for the second user
+            // Hide or uninstall the secondary package for the second user
             mTestSystemImpl.setPackageInfo(createPackageInfo(uninstalledPackage, true /* enabled */,
                     true /* valid */, (testUninstalled ? false : true) /* installed */,
                     null /* signatures */, 0 /* updateTime */, (testHidden ? true : false)));
@@ -1295,12 +1212,14 @@ public class WebViewUpdateServiceTest {
         String installedPackage = "installedPackage";
         String uninstalledPackage = "uninstalledPackage";
         WebViewProviderInfo[] webviewPackages = new WebViewProviderInfo[] {
-            new WebViewProviderInfo(uninstalledPackage, "", true /* available by default */,
-                    false /* fallback */, null),
             new WebViewProviderInfo(installedPackage, "", true /* available by default */,
+                    false /* fallback */, null),
+            new WebViewProviderInfo(uninstalledPackage, "", true /* available by default */,
                     false /* fallback */, null)};
 
-        setupWithPackages(webviewPackages, true /* fallback logic enabled */, 1 /* numRelros */);
+        setupWithPackages(webviewPackages);
+        // Start with the setting pointing to the uninstalled package
+        mTestSystemImpl.updateUserSetting(uninstalledPackage);
         int secondaryUserId = 412;
         mTestSystemImpl.addUser(secondaryUserId);
 
@@ -1350,12 +1269,14 @@ public class WebViewUpdateServiceTest {
         String installedPackage = "installedPackage";
         String uninstalledPackage = "uninstalledPackage";
         WebViewProviderInfo[] webviewPackages = new WebViewProviderInfo[] {
-            new WebViewProviderInfo(uninstalledPackage, "", true /* available by default */,
-                    false /* fallback */, null),
             new WebViewProviderInfo(installedPackage, "", true /* available by default */,
+                    false /* fallback */, null),
+            new WebViewProviderInfo(uninstalledPackage, "", true /* available by default */,
                     false /* fallback */, null)};
 
-        setupWithPackages(webviewPackages, true /* fallback logic enabled */, 1 /* numRelros */);
+        setupWithPackages(webviewPackages);
+        // Start with the setting pointing to the uninstalled package
+        mTestSystemImpl.updateUserSetting(uninstalledPackage);
         int secondaryUserId = 4;
         mTestSystemImpl.addUser(secondaryUserId);
 
@@ -1368,7 +1289,7 @@ public class WebViewUpdateServiceTest {
                 0 /* updateTime */, (testHidden ? true : false) /* hidden */));
 
         // Start with the setting pointing to the uninstalled package
-        mTestSystemImpl.updateUserSetting(null, uninstalledPackage);
+        mTestSystemImpl.updateUserSetting(uninstalledPackage);
 
         runWebViewBootPreparationOnMainSync();
 
@@ -1376,97 +1297,24 @@ public class WebViewUpdateServiceTest {
     }
 
     @Test
-    public void testFallbackEnabledIfPrimaryUninstalledSingleUser() {
-        checkFallbackEnabledIfPrimaryUninstalled(false /* multiUser */);
-    }
-
-    @Test
-    public void testFallbackEnabledIfPrimaryUninstalledMultiUser() {
-        checkFallbackEnabledIfPrimaryUninstalled(true /* multiUser */);
-    }
-
-    /**
-     * Ensures that fallback becomes enabled at boot if the primary package is uninstalled for some
-     * user.
-     */
-    private void checkFallbackEnabledIfPrimaryUninstalled(boolean multiUser) {
-        String primaryPackage = "primary";
-        String fallbackPackage = "fallback";
-        WebViewProviderInfo[] packages = new WebViewProviderInfo[] {
-            new WebViewProviderInfo(
-                    primaryPackage, "", true /* default available */, false /* fallback */, null),
-            new WebViewProviderInfo(
-                    fallbackPackage, "", true /* default available */, true /* fallback */, null)};
-        setupWithPackages(packages, true /* fallback logic enabled */);
-        int secondaryUserId = 5;
-        if (multiUser) {
-            mTestSystemImpl.addUser(secondaryUserId);
-            // Install all packages for the primary user.
-            setEnabledAndValidPackageInfosForUser(TestSystemImpl.PRIMARY_USER_ID, packages);
-            // Only install fallback package for secondary user.
-            mTestSystemImpl.setPackageInfoForUser(secondaryUserId,
-                    createPackageInfo(primaryPackage, true /* enabled */,
-                            true /* valid */, false /* installed */));
-            mTestSystemImpl.setPackageInfoForUser(secondaryUserId,
-                    createPackageInfo(fallbackPackage, false /* enabled */,
-                            true /* valid */, true /* installed */));
-        } else {
-            mTestSystemImpl.setPackageInfo(createPackageInfo(primaryPackage, true /* enabled */,
-                    true /* valid */, false /* installed */));
-            mTestSystemImpl.setPackageInfo(createPackageInfo(fallbackPackage, false /* enabled */,
-                    true /* valid */, true /* installed */));
-        }
-
-        runWebViewBootPreparationOnMainSync();
-        // Verify that we enable the fallback package
-        Mockito.verify(mTestSystemImpl).enablePackageForAllUsers(
-                Mockito.anyObject(), Mockito.eq(fallbackPackage), Mockito.eq(true) /* enable */);
-
-        checkPreparationPhasesForPackage(fallbackPackage, 1 /* first preparation phase */);
-    }
-
-    @Test
     public void testPreparationRunsIffNewPackage() {
         String primaryPackage = "primary";
-        String fallbackPackage = "fallback";
+        String secondaryPackage = "secondary";
         WebViewProviderInfo[] packages = new WebViewProviderInfo[] {
             new WebViewProviderInfo(
                     primaryPackage, "", true /* default available */, false /* fallback */, null),
             new WebViewProviderInfo(
-                    fallbackPackage, "", true /* default available */, true /* fallback */, null)};
-        setupWithPackages(packages, true /* fallback logic enabled */);
+                    secondaryPackage, "", true /* default available */, false /* fallback */,
+                    null)};
+        setupWithPackages(packages);
         mTestSystemImpl.setPackageInfo(createPackageInfo(primaryPackage, true /* enabled */,
                     true /* valid */, true /* installed */, null /* signatures */,
                     10 /* lastUpdateTime*/ ));
-        mTestSystemImpl.setPackageInfo(createPackageInfo(fallbackPackage, true /* enabled */,
+        mTestSystemImpl.setPackageInfo(createPackageInfo(secondaryPackage, true /* enabled */,
                     true /* valid */, true /* installed */));
 
         runWebViewBootPreparationOnMainSync();
-
         checkPreparationPhasesForPackage(primaryPackage, 1 /* first preparation phase */);
-        Mockito.verify(mTestSystemImpl, Mockito.times(1)).enablePackageForUser(
-                Mockito.eq(fallbackPackage), Mockito.eq(false) /* enable */,
-                Matchers.anyInt() /* user */);
-
-
-        mWebViewUpdateServiceImpl.packageStateChanged(primaryPackage,
-                WebViewUpdateService.PACKAGE_ADDED_REPLACED, 0 /* userId */);
-        mWebViewUpdateServiceImpl.packageStateChanged(primaryPackage,
-                WebViewUpdateService.PACKAGE_ADDED_REPLACED, 1 /* userId */);
-        mWebViewUpdateServiceImpl.packageStateChanged(primaryPackage,
-                WebViewUpdateService.PACKAGE_ADDED_REPLACED, 2 /* userId */);
-        // package still has the same update-time so we shouldn't run preparation here
-        Mockito.verify(mTestSystemImpl, Mockito.times(1)).onWebViewProviderChanged(
-                Mockito.argThat(new IsPackageInfoWithName(primaryPackage)));
-        Mockito.verify(mTestSystemImpl, Mockito.times(1)).enablePackageForUser(
-                Mockito.eq(fallbackPackage), Mockito.eq(false) /* enable */,
-                Matchers.anyInt() /* user */);
-
-        // Ensure we can still load the package
-        WebViewProviderResponse response = mWebViewUpdateServiceImpl.waitForAndGetProvider();
-        assertEquals(WebViewFactory.LIBLOAD_SUCCESS, response.status);
-        assertEquals(primaryPackage, response.packageInfo.packageName);
-
 
         mTestSystemImpl.setPackageInfo(createPackageInfo(primaryPackage, true /* enabled */,
                     true /* valid */, true /* installed */, null /* signatures */,
@@ -1495,7 +1343,7 @@ public class WebViewUpdateServiceTest {
         firstPackage.versionName = "first package version";
         WebViewProviderInfo[] packages = new WebViewProviderInfo[] {
             new WebViewProviderInfo(firstPackage.packageName, "", true, false, null)};
-        setupWithPackages(packages, true);
+        setupWithPackages(packages);
         mTestSystemImpl.setPackageInfo(firstPackage);
 
         runWebViewBootPreparationOnMainSync();
@@ -1527,11 +1375,13 @@ public class WebViewUpdateServiceTest {
     }
 
     @Test
+    @RequiresFlagsDisabled("android.webkit.update_service_v2")
     public void testMultiProcessEnabledByDefault() {
         testMultiProcessByDefault(true /* enabledByDefault */);
     }
 
     @Test
+    @RequiresFlagsDisabled("android.webkit.update_service_v2")
     public void testMultiProcessDisabledByDefault() {
         testMultiProcessByDefault(false /* enabledByDefault */);
     }
@@ -1541,9 +1391,7 @@ public class WebViewUpdateServiceTest {
         WebViewProviderInfo[] packages = new WebViewProviderInfo[] {
             new WebViewProviderInfo(
                     primaryPackage, "", true /* default available */, false /* fallback */, null)};
-        setupWithPackages(packages, true /* fallback logic enabled */, 1 /* numRelros */,
-                          true /* debuggable */,
-                          enabledByDefault /* not multiprocess by default */);
+        setupWithPackagesAndMultiProcess(packages, enabledByDefault);
         mTestSystemImpl.setPackageInfo(createPackageInfo(primaryPackage, true /* enabled */,
                     true /* valid */, true /* installed */, null /* signatures */,
                     10 /* lastUpdateTime*/, false /* not hidden */, 1000 /* versionCode */,
@@ -1563,6 +1411,7 @@ public class WebViewUpdateServiceTest {
     }
 
     @Test
+    @RequiresFlagsDisabled("android.webkit.update_service_v2")
     public void testMultiProcessEnabledByDefaultWithSettingsValue() {
         testMultiProcessByDefaultWithSettingsValue(
                 true /* enabledByDefault */, Integer.MIN_VALUE, false /* expectEnabled */);
@@ -1575,6 +1424,7 @@ public class WebViewUpdateServiceTest {
     }
 
     @Test
+    @RequiresFlagsDisabled("android.webkit.update_service_v2")
     public void testMultiProcessDisabledByDefaultWithSettingsValue() {
         testMultiProcessByDefaultWithSettingsValue(
                 false /* enabledByDefault */, Integer.MIN_VALUE, false /* expectEnabled */);
@@ -1598,8 +1448,7 @@ public class WebViewUpdateServiceTest {
         WebViewProviderInfo[] packages = new WebViewProviderInfo[] {
             new WebViewProviderInfo(
                     primaryPackage, "", true /* default available */, false /* fallback */, null)};
-        setupWithPackages(packages, true /* fallback logic enabled */, 1 /* numRelros */,
-                          true /* debuggable */, enabledByDefault /* multiprocess by default */);
+        setupWithPackagesAndMultiProcess(packages, enabledByDefault);
         mTestSystemImpl.setPackageInfo(createPackageInfo(primaryPackage, true /* enabled */,
                     true /* valid */, true /* installed */, null /* signatures */,
                     10 /* lastUpdateTime*/, false /* not hidden */, 1000 /* versionCode */,
@@ -1608,7 +1457,7 @@ public class WebViewUpdateServiceTest {
         runWebViewBootPreparationOnMainSync();
         checkPreparationPhasesForPackage(primaryPackage, 1 /* first preparation phase */);
 
-        mTestSystemImpl.setMultiProcessSetting(null /* context */, settingValue);
+        mTestSystemImpl.setMultiProcessSetting(settingValue);
 
         assertEquals(expectEnabled, mWebViewUpdateServiceImpl.isMultiProcessEnabled());
     }
@@ -1634,11 +1483,16 @@ public class WebViewUpdateServiceTest {
                 new WebViewProviderInfo(newSdkPackage.packageName, "", true, false, null);
         WebViewProviderInfo currentSdkProviderInfo =
                 new WebViewProviderInfo(currentSdkPackage.packageName, "", true, false, null);
-        WebViewProviderInfo[] packages = new WebViewProviderInfo[] {
-            new WebViewProviderInfo(oldSdkPackage.packageName, "", true, false, null),
-            currentSdkProviderInfo, newSdkProviderInfo};
-        setupWithPackages(packages, true);
-;
+        WebViewProviderInfo[] packages =
+                new WebViewProviderInfo[] {
+                    currentSdkProviderInfo,
+                    new WebViewProviderInfo(oldSdkPackage.packageName, "", true, false, null),
+                    newSdkProviderInfo
+                };
+        setupWithPackages(packages);
+        // Start with the setting pointing to the invalid package
+        mTestSystemImpl.updateUserSetting(oldSdkPackage.packageName);
+
         mTestSystemImpl.setPackageInfo(newSdkPackage);
         mTestSystemImpl.setPackageInfo(currentSdkPackage);
         mTestSystemImpl.setPackageInfo(oldSdkPackage);
@@ -1650,5 +1504,175 @@ public class WebViewUpdateServiceTest {
 
         checkPreparationPhasesForPackage(currentSdkPackage.packageName,
                 1 /* first preparation phase */);
+    }
+
+    @Test
+    @RequiresFlagsEnabled("android.webkit.update_service_v2")
+    public void testDefaultWebViewPackageIsTheFirstAvailableByDefault() {
+        String nonDefaultPackage = "nonDefaultPackage";
+        String defaultPackage1 = "defaultPackage1";
+        String defaultPackage2 = "defaultPackage2";
+        WebViewProviderInfo[] packages =
+                new WebViewProviderInfo[] {
+                    new WebViewProviderInfo(nonDefaultPackage, "", false, false, null),
+                    new WebViewProviderInfo(defaultPackage1, "", true, false, null),
+                    new WebViewProviderInfo(defaultPackage2, "", true, false, null)
+                };
+        setupWithPackages(packages);
+        assertEquals(
+                defaultPackage1, mWebViewUpdateServiceImpl.getDefaultWebViewPackage().packageName);
+    }
+
+    @Test
+    @RequiresFlagsEnabled("android.webkit.update_service_v2")
+    public void testDefaultWebViewPackageEnabling() {
+        String testPackage = "testDefault";
+        WebViewProviderInfo[] packages =
+                new WebViewProviderInfo[] {
+                    new WebViewProviderInfo(
+                            testPackage,
+                            "",
+                            true /* default available */,
+                            false /* fallback */,
+                            null)
+                };
+        setupWithPackages(packages);
+        mTestSystemImpl.setPackageInfo(
+                createPackageInfo(
+                        testPackage, false /* enabled */, true /* valid */, true /* installed */));
+
+        // Check that the boot time logic re-enables the default package.
+        runWebViewBootPreparationOnMainSync();
+        Mockito.verify(mTestSystemImpl)
+                .enablePackageForAllUsers(Mockito.eq(testPackage), Mockito.eq(true));
+    }
+
+    @Test
+    @RequiresFlagsEnabled("android.webkit.update_service_v2")
+    public void testDefaultWebViewPackageInstallingDuringStartUp() {
+        String testPackage = "testDefault";
+        WebViewProviderInfo[] packages =
+                new WebViewProviderInfo[] {
+                    new WebViewProviderInfo(
+                            testPackage,
+                            "",
+                            true /* default available */,
+                            false /* fallback */,
+                            null)
+                };
+        setupWithPackages(packages);
+        mTestSystemImpl.setPackageInfo(
+                createPackageInfo(
+                        testPackage, true /* enabled */, true /* valid */, false /* installed */));
+
+        // Check that the boot time logic tries to install the default package.
+        runWebViewBootPreparationOnMainSync();
+        Mockito.verify(mTestSystemImpl)
+                .installExistingPackageForAllUsers(Mockito.eq(testPackage));
+    }
+
+    @Test
+    @RequiresFlagsEnabled("android.webkit.update_service_v2")
+    public void testDefaultWebViewPackageInstallingAfterStartUp() {
+        String testPackage = "testDefault";
+        WebViewProviderInfo[] packages =
+                new WebViewProviderInfo[] {
+                    new WebViewProviderInfo(
+                            testPackage,
+                            "",
+                            true /* default available */,
+                            false /* fallback */,
+                            null)
+                };
+        checkCertainPackageUsedAfterWebViewBootPreparation(testPackage, packages);
+
+        // uninstall the default package.
+        mTestSystemImpl.setPackageInfo(
+                createPackageInfo(
+                        testPackage, true /* enabled */, true /* valid */, false /* installed */));
+        mWebViewUpdateServiceImpl.packageStateChanged(testPackage,
+                WebViewUpdateService.PACKAGE_REMOVED, 0);
+
+        // Check that we try to re-install the default package.
+        Mockito.verify(mTestSystemImpl)
+                .installExistingPackageForAllUsers(Mockito.eq(testPackage));
+    }
+
+    /**
+     * Ensures that adding a new user for which the current WebView package is uninstalled triggers
+     * the repair logic.
+     */
+    @Test
+    @RequiresFlagsEnabled("android.webkit.update_service_v2")
+    public void testAddingNewUserWithDefaultdPackageNotInstalled() {
+        String testPackage = "testDefault";
+        WebViewProviderInfo[] packages =
+                new WebViewProviderInfo[] {
+                    new WebViewProviderInfo(
+                            testPackage,
+                            "",
+                            true /* default available */,
+                            false /* fallback */,
+                            null)
+                };
+        checkCertainPackageUsedAfterWebViewBootPreparation(testPackage, packages);
+
+        // Add new user with the default package not installed.
+        int newUser = 100;
+        mTestSystemImpl.addUser(newUser);
+        mTestSystemImpl.setPackageInfoForUser(newUser,
+                createPackageInfo(testPackage, true /* enabled */, true /* valid */,
+                        false /* installed */));
+
+        mWebViewUpdateServiceImpl.handleNewUser(newUser);
+
+        // Check that we try to re-install the default package for all users.
+        Mockito.verify(mTestSystemImpl)
+                .installExistingPackageForAllUsers(Mockito.eq(testPackage));
+    }
+
+    private void testDefaultPackageChosen(PackageInfo packageInfo) {
+        WebViewProviderInfo[] packages =
+                new WebViewProviderInfo[] {
+                    new WebViewProviderInfo(packageInfo.packageName, "", true, false, null)
+                };
+        setupWithPackages(packages);
+        mTestSystemImpl.setPackageInfo(packageInfo);
+
+        runWebViewBootPreparationOnMainSync();
+        mWebViewUpdateServiceImpl.notifyRelroCreationCompleted();
+
+        assertEquals(
+                packageInfo.packageName,
+                mWebViewUpdateServiceImpl.getCurrentWebViewPackage().packageName);
+
+        WebViewProviderResponse response = mWebViewUpdateServiceImpl.waitForAndGetProvider();
+        assertEquals(packageInfo.packageName, response.packageInfo.packageName);
+    }
+
+    @Test
+    @RequiresFlagsEnabled("android.webkit.update_service_v2")
+    public void testDisabledDefaultPackageChosen() {
+        PackageInfo disabledPackage =
+                createPackageInfo(
+                        "disabledPackage",
+                        false /* enabled */,
+                        true /* valid */,
+                        true /* installed */);
+
+        testDefaultPackageChosen(disabledPackage);
+    }
+
+    @Test
+    @RequiresFlagsEnabled("android.webkit.update_service_v2")
+    public void testUninstalledDefaultPackageChosen() {
+        PackageInfo uninstalledPackage =
+                createPackageInfo(
+                        "uninstalledPackage",
+                        true /* enabled */,
+                        true /* valid */,
+                        false /* installed */);
+
+        testDefaultPackageChosen(uninstalledPackage);
     }
 }

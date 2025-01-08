@@ -1,11 +1,33 @@
+/*
+ * Copyright (C) 2016 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.android.internal.os;
 
-import android.support.test.filters.SmallTest;
+import static org.junit.Assert.assertEquals;
+
+import android.platform.test.annotations.IgnoreUnderRavenwood;
+import android.platform.test.ravenwood.RavenwoodRule;
 import android.util.LongSparseLongArray;
 
-import junit.framework.TestCase;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
 
-import org.junit.Assert;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.runner.RunWith;
 import org.mockito.Mockito;
 
 import java.io.BufferedReader;
@@ -13,12 +35,17 @@ import java.io.BufferedReader;
 /**
  * Tests for KernelMemoryBandwidthStats parsing and delta calculation, based on memory_state_time.
  */
-public class KernelMemoryBandwidthStatsTest extends TestCase {
+@RunWith(AndroidJUnit4.class)
+@IgnoreUnderRavenwood(reason = "Needs kernel support")
+public class KernelMemoryBandwidthStatsTest {
+    @Rule
+    public final RavenwoodRule mRavenwood = new RavenwoodRule();
 
     /**
      * Standard example of parsing stats.
      * @throws Exception
      */
+    @Test
     @SmallTest
     public void testParseStandard() throws Exception {
         KernelMemoryBandwidthStats stats = new KernelMemoryBandwidthStats();
@@ -52,6 +79,7 @@ public class KernelMemoryBandwidthStatsTest extends TestCase {
      * zero.
      * @throws Exception
      */
+    @Test
     @SmallTest
     public void testParseBackwards() throws Exception {
         KernelMemoryBandwidthStats zeroStats = new KernelMemoryBandwidthStats();

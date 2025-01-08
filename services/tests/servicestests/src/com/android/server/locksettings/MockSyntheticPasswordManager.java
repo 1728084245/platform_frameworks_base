@@ -37,17 +37,20 @@ public class MockSyntheticPasswordManager extends SyntheticPasswordManager {
     private IWeaver mWeaverService;
 
     public MockSyntheticPasswordManager(Context context, LockSettingsStorage storage,
-            FakeGateKeeperService gatekeeper, UserManager userManager) {
-        super(context, storage, userManager);
+            FakeGateKeeperService gatekeeper, UserManager userManager,
+            PasswordSlotManager passwordSlotManager) {
+        super(context, storage, userManager, passwordSlotManager);
         mGateKeeper = gatekeeper;
     }
 
-    private ArrayMap<String, byte[]> mBlobs = new ArrayMap<>();
+    private final ArrayMap<String, byte[]> mBlobs = new ArrayMap<>();
 
     @Override
-    protected byte[] decryptSPBlob(String blobKeyName, byte[] blob, byte[] applicationId) {
-        if (mBlobs.containsKey(blobKeyName) && !Arrays.equals(mBlobs.get(blobKeyName), blob)) {
-            throw new AssertionFailedError("blobKeyName content is overwritten: " + blobKeyName);
+    protected byte[] decryptSpBlob(String protectorKeyAlias, byte[] blob, byte[] protectorSecret) {
+        if (mBlobs.containsKey(protectorKeyAlias) &&
+                !Arrays.equals(mBlobs.get(protectorKeyAlias), blob)) {
+            throw new AssertionFailedError("Blob was overwritten; protectorKeyAlias="
+                    + protectorKeyAlias);
         }
         ByteBuffer buffer = ByteBuffer.allocate(blob.length);
         buffer.put(blob, 0, blob.length);
@@ -57,11 +60,11 @@ public class MockSyntheticPasswordManager extends SyntheticPasswordManager {
         byte[] data = new byte[len];
         buffer.get(data);
         len = buffer.getInt();
-        byte[] appId = new byte[len];
-        buffer.get(appId);
+        byte[] storedProtectorSecret = new byte[len];
+        buffer.get(storedProtectorSecret);
         long sid = buffer.getLong();
-        if (!Arrays.equals(appId, applicationId)) {
-            throw new AssertionFailedError("Invalid application id");
+        if (!Arrays.equals(storedProtectorSecret, protectorSecret)) {
+            throw new AssertionFailedError("Invalid protector secret");
         }
         if (sid != 0 && mGateKeeper.getAuthTokenForSid(sid) == null) {
             throw new AssertionFailedError("No valid auth token");
@@ -70,21 +73,22 @@ public class MockSyntheticPasswordManager extends SyntheticPasswordManager {
     }
 
     @Override
-    protected byte[] createSPBlob(String blobKeyName, byte[] data, byte[] applicationId, long sid) {
+    protected byte[] createSpBlob(String protectorKeyAlias, byte[] data, byte[] protectorSecret,
+            long sid) {
         ByteBuffer buffer = ByteBuffer.allocate(Integer.BYTES + data.length + Integer.BYTES
-                + applicationId.length + Long.BYTES);
+                + protectorSecret.length + Long.BYTES);
         buffer.putInt(data.length);
         buffer.put(data);
-        buffer.putInt(applicationId.length);
-        buffer.put(applicationId);
+        buffer.putInt(protectorSecret.length);
+        buffer.put(protectorSecret);
         buffer.putLong(sid);
         byte[] result = buffer.array();
-        mBlobs.put(blobKeyName, result);
+        mBlobs.put(protectorKeyAlias, result);
         return result;
     }
 
     @Override
-    protected void destroySPBlobKey(String keyAlias) {
+    protected void destroyProtectorKey(String keyAlias) {
     }
 
     @Override
@@ -93,9 +97,13 @@ public class MockSyntheticPasswordManager extends SyntheticPasswordManager {
     }
 
     @Override
-    protected byte[] scrypt(String password, byte[] salt, int N, int r, int p, int outLen) {
+    protected byte[] scrypt(byte[] password, byte[] salt, int n, int r, int p, int outLen) {
         try {
-            PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, 10, outLen * 8);
+            char[] passwordChars = new char[password.length];
+            for (int i = 0; i < password.length; i++) {
+                passwordChars[i] = (char) password[i];
+            }
+            PBEKeySpec spec = new PBEKeySpec(passwordChars, salt, 10, outLen * 8);
             SecretKeyFactory f = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1");
             return f.generateSecret(spec).getEncoded();
         } catch (InvalidKeySpecException | NoSuchAlgorithmException e) {
@@ -105,13 +113,16 @@ public class MockSyntheticPasswordManager extends SyntheticPasswordManager {
     }
 
     @Override
-    protected IWeaver getWeaverService() throws RemoteException {
+    public boolean isAutoPinConfirmationFeatureAvailable() {
+        return true;
+    }
+
+    @Override
+    protected IWeaver getWeaverHidlService() throws RemoteException {
         return mWeaverService;
     }
 
     public void enableWeaver() {
         mWeaverService = new MockWeaverService();
-        initWeaverService();
     }
-
 }

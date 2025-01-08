@@ -16,7 +16,7 @@
 package android.hardware.location;
 
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.location.Location;
 import android.os.Build;
 import android.os.RemoteException;
@@ -169,7 +169,7 @@ public final class GeofenceHardware {
                     GeofenceHardwareMonitorCallbackWrapper>();
 
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public GeofenceHardware(IGeofenceHardware service) {
         mService = service;
     }

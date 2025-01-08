@@ -16,7 +16,8 @@
 
 package android.view;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 
 /**
  * An instance of this class represents a connection to the surface
@@ -26,13 +27,11 @@ import android.annotation.UnsupportedAppUsage;
  */
 public final class SurfaceSession {
     // Note: This field is accessed by native code.
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private long mNativeClient; // SurfaceComposerClient*
 
     private static native long nativeCreate();
-    private static native long nativeCreateScoped(long surfacePtr);
     private static native void nativeDestroy(long ptr);
-    private static native void nativeKill(long ptr);
 
     /** Create a new connection with the surface flinger. */
     @UnsupportedAppUsage
@@ -40,30 +39,26 @@ public final class SurfaceSession {
         mNativeClient = nativeCreate();
     }
 
-    public SurfaceSession(Surface root) {
-        mNativeClient = nativeCreateScoped(root.mNativeObject);
-    }
-
     /* no user serviceable parts here ... */
     @Override
     protected void finalize() throws Throwable {
         try {
-            if (mNativeClient != 0) {
-                nativeDestroy(mNativeClient);
-            }
+            kill();
         } finally {
             super.finalize();
         }
     }
 
     /**
-     * Forcibly detach native resources associated with this object.
-     * Unlike destroy(), after this call any surfaces that were created
-     * from the session will no longer work.
+     * Remove the reference to the native Session object. The native object may still exist if
+     * there are other references to it, but it cannot be accessed from this Java object anymore.
      */
     @UnsupportedAppUsage
     public void kill() {
-        nativeKill(mNativeClient);
+        if (mNativeClient != 0) {
+            nativeDestroy(mNativeClient);
+            mNativeClient = 0;
+        }
     }
 }
 

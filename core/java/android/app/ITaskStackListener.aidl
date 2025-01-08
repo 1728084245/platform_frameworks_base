@@ -18,6 +18,7 @@ package android.app;
 
 import android.app.ActivityManager;
 import android.content.ComponentName;
+import android.window.TaskSnapshot;
 
 /** @hide */
 oneway interface ITaskStackListener {
@@ -37,23 +38,16 @@ oneway interface ITaskStackListener {
 
     /**
      * Called whenever IActivityManager.startActivity is called on an activity that is already
-     * running in the pinned stack and the activity is not actually started, but the task is either
-     * brought to the front or a new Intent is delivered to it.
+     * running, but the task is either brought to the front or a new Intent is delivered to it.
      *
+     * @param task information about the task the activity was relaunched into
+     * @param homeVisible whether or not the home task is visible
      * @param clearedTask whether or not the launch activity also cleared the task as a part of
      * starting
+     * @param wasVisible whether the activity was visible before the restart attempt
      */
-    void onPinnedActivityRestartAttempt(boolean clearedTask);
-
-    /**
-     * Called whenever the pinned stack is starting animating a resize.
-     */
-    void onPinnedStackAnimationStarted();
-
-    /**
-     * Called whenever the pinned stack is done animating a resize.
-     */
-    void onPinnedStackAnimationEnded();
+    void onActivityRestartAttempt(in ActivityManager.RunningTaskInfo task, boolean homeTaskVisible,
+            boolean clearedTask, boolean wasVisible);
 
     /**
      * Called when we launched an activity that we forced to be resizable.
@@ -66,15 +60,29 @@ oneway interface ITaskStackListener {
     void onActivityForcedResizable(String packageName, int taskId, int reason);
 
     /**
-     * Called when we launched an activity that dismissed the docked stack.
+     * Called when we launched an activity that dismissed the docked task.
      */
-    void onActivityDismissingDockedStack();
+    void onActivityDismissingDockedTask();
 
     /**
      * Called when an activity was requested to be launched on a secondary display but was not
      * allowed there.
+     *
+     * @param taskInfo info about the Activity's task
+     * @param requestedDisplayId the id of the requested launch display
      */
-    void onActivityLaunchOnSecondaryDisplayFailed();
+    void onActivityLaunchOnSecondaryDisplayFailed(in ActivityManager.RunningTaskInfo taskInfo,
+            int requestedDisplayId);
+
+    /**
+     * Called when an activity was requested to be launched on a secondary display but was rerouted
+     * to default display.
+     *
+     * @param taskInfo info about the Activity's task
+     * @param requestedDisplayId the id of the requested launch display
+     */
+    void onActivityLaunchOnSecondaryDisplayRerouted(in ActivityManager.RunningTaskInfo taskInfo,
+                int requestedDisplayId);
 
     /**
      * Called when a task is added.
@@ -94,18 +102,17 @@ oneway interface ITaskStackListener {
     /**
      * Called when a task is moved to the front of its stack.
      *
-     * @param taskId id of the task.
+     * @param taskInfo info about the task which moved
     */
-    void onTaskMovedToFront(int taskId);
+    void onTaskMovedToFront(in ActivityManager.RunningTaskInfo taskInfo);
 
     /**
      * Called when a task’s description is changed due to an activity calling
      * ActivityManagerService.setTaskDescription
      *
-     * @param taskId id of the task.
-     * @param td the new TaskDescription.
+     * @param taskInfo info about the task which changed, with {@link TaskInfo#taskDescription}
     */
-    void onTaskDescriptionChanged(int taskId, in ActivityManager.TaskDescription td);
+    void onTaskDescriptionChanged(in ActivityManager.RunningTaskInfo taskInfo);
 
     /**
      * Called when a activity’s orientation is changed due to it calling
@@ -120,18 +127,97 @@ oneway interface ITaskStackListener {
      * Called when the task is about to be finished but before its surfaces are
      * removed from the window manager. This allows interested parties to
      * perform relevant animations before the window disappears.
+     *
+     * @param taskInfo info about the task being removed
      */
-    void onTaskRemovalStarted(int taskId);
+    void onTaskRemovalStarted(in ActivityManager.RunningTaskInfo taskInfo);
 
     /**
      * Called when the task has been put in a locked state because one or more of the
      * activities inside it belong to a managed profile user, and that user has just
      * been locked.
      */
-    void onTaskProfileLocked(int taskId, int userId);
+    void onTaskProfileLocked(in ActivityManager.RunningTaskInfo taskInfo, int userId);
 
     /**
      * Called when a task snapshot got updated.
      */
-    void onTaskSnapshotChanged(int taskId, in ActivityManager.TaskSnapshot snapshot);
+    void onTaskSnapshotChanged(int taskId, in TaskSnapshot snapshot);
+
+    /**
+     * Called when a task snapshot become invalidated.
+     */
+    void onTaskSnapshotInvalidated(int taskId);
+
+    /**
+     * Reports that an Activity received a back key press when there were no additional activities
+     * on the back stack.
+     *
+     * @param taskInfo info about the task which received the back press
+     */
+    void onBackPressedOnTaskRoot(in ActivityManager.RunningTaskInfo taskInfo);
+
+    /**
+     * Called when a task is reparented to a stack on a different display.
+     *
+     * @param taskId id of the task which was moved to a different display.
+     * @param newDisplayId id of the new display.
+     */
+    void onTaskDisplayChanged(int taskId, int newDisplayId);
+
+    /**
+     * Called when any additions or deletions to the recent tasks list have been made.
+     */
+    void onRecentTaskListUpdated();
+
+    /**
+     * Called when Recent Tasks list is frozen or unfrozen.
+     *
+     * @param frozen if true, Recents Tasks list is currently frozen, false otherwise
+     */
+    void onRecentTaskListFrozenChanged(boolean frozen);
+
+    /**
+     * Called when a task gets or loses focus.
+     *
+     * @param taskId id of the task.
+     * @param {@code true} if the task got focus, {@code false} if it lost it.
+     */
+    void onTaskFocusChanged(int taskId, boolean focused);
+
+    /**
+     * Called when a task changes its requested orientation. It is different from {@link
+     * #onActivityRequestedOrientationChanged(int, int)} in the sense that this method is called
+     * when a task changes requested orientation due to activity launch, dimiss or reparenting.
+     *
+     * @param taskId id of the task.
+     * @param requestedOrientation the new requested orientation of this task as screen orientations
+     *                             in {@link android.content.pm.ActivityInfo}.
+     */
+     void onTaskRequestedOrientationChanged(int taskId, int requestedOrientation);
+
+    /**
+     * Called when a rotation is about to start on the foreground activity.
+     * This applies for:
+     *   * free sensor rotation
+     *   * forced rotation
+     *   * rotation settings set through adb command line
+     *   * rotation that occurs when rotation tile is toggled in quick settings
+     *
+     * @param displayId id of the display where activity will rotate
+     */
+     void onActivityRotation(int displayId);
+
+    /**
+     * Called when a task is moved to the back behind the home stack.
+     *
+     * @param taskInfo info about the task which moved
+     */
+    void onTaskMovedToBack(in ActivityManager.RunningTaskInfo taskInfo);
+
+    /**
+     * Called when the lock task mode changes. See ActivityManager#LOCK_TASK_MODE_* and
+     * LockTaskController.
+     */
+    void onLockTaskModeChanged(int mode);
 }

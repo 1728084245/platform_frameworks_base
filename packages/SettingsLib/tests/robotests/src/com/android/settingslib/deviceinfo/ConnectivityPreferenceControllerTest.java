@@ -17,6 +17,8 @@
 package com.android.settingslib.deviceinfo;
 
 import static com.google.common.truth.Truth.assertWithMessage;
+
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.doReturn;
@@ -29,7 +31,6 @@ import android.content.Context;
 import android.content.IntentFilter;
 import android.os.Handler;
 
-import com.android.settingslib.SettingsLibRobolectricTestRunner;
 import com.android.settingslib.core.lifecycle.Lifecycle;
 
 import org.junit.Before;
@@ -38,8 +39,9 @@ import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.robolectric.RobolectricTestRunner;
 
-@RunWith(SettingsLibRobolectricTestRunner.class)
+@RunWith(RobolectricTestRunner.class)
 public class ConnectivityPreferenceControllerTest {
     @Mock
     private Context mContext;
@@ -70,7 +72,7 @@ public class ConnectivityPreferenceControllerTest {
         verify(mContext, times(1))
                 .registerReceiver(receiverArgumentCaptor.capture(),
                         filterArgumentCaptor.capture(),
-                        anyString(), nullable(Handler.class));
+                        anyString(), nullable(Handler.class), anyInt());
 
         final BroadcastReceiver receiver = receiverArgumentCaptor.getValue();
         final IntentFilter filter = filterArgumentCaptor.getValue();
@@ -90,8 +92,7 @@ public class ConnectivityPreferenceControllerTest {
     private static class ConcreteConnectivityPreferenceController
             extends AbstractConnectivityPreferenceController {
 
-
-        public ConcreteConnectivityPreferenceController(Context context,
+        private ConcreteConnectivityPreferenceController(Context context,
                 Lifecycle lifecycle) {
             super(context, lifecycle);
         }

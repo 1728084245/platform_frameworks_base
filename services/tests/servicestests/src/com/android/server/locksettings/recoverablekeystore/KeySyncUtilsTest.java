@@ -22,8 +22,13 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 
+import android.util.Pair;
+
 import androidx.test.filters.SmallTest;
 import androidx.test.runner.AndroidJUnit4;
+
+import com.android.internal.util.ArrayUtils;
+import com.android.security.SecureBox;
 
 import com.google.common.collect.ImmutableMap;
 
@@ -65,7 +70,8 @@ public class KeySyncUtilsTest {
     private static final byte[] RECOVERY_RESPONSE_HEADER =
             "V1 reencrypted_recovery_key".getBytes(StandardCharsets.UTF_8);
     private static final int PUBLIC_KEY_LENGTH_BYTES = 65;
-
+    private static final byte[] NULL_METADATA = null;
+    private static final byte[] NON_NULL_METADATA = "somemetadata".getBytes(StandardCharsets.UTF_8);
 
     @Test
     public void calculateThmKfHash_isShaOfLockScreenHashWithPrefix() throws Exception {
@@ -114,29 +120,35 @@ public class KeySyncUtilsTest {
     }
 
     @Test
-    public void concat_concatenatesArrays() {
-        assertArrayEquals(
-                utf8Bytes("hello, world!"),
-                KeySyncUtils.concat(
-                        utf8Bytes("hello"),
-                        utf8Bytes(", "),
-                        utf8Bytes("world"),
-                        utf8Bytes("!")));
-    }
-
-    @Test
-    public void decryptApplicationKey_decryptsAnApplicationKeyEncryptedWithSecureBox()
-            throws Exception {
+    public void decryptApplicationKey_decryptsAnApplicationKey_nullMetadata() throws Exception {
         String alias = "phoebe";
         SecretKey recoveryKey = KeySyncUtils.generateRecoveryKey();
         SecretKey applicationKey = generateApplicationKey();
         Map<String, byte[]> encryptedKeys =
                 KeySyncUtils.encryptKeysWithRecoveryKey(
-                        recoveryKey, ImmutableMap.of(alias, applicationKey));
+                        recoveryKey,
+                        ImmutableMap.of(alias, Pair.create(applicationKey, NULL_METADATA)));
         byte[] encryptedKey = encryptedKeys.get(alias);
 
-        byte[] keyMaterial =
-                KeySyncUtils.decryptApplicationKey(recoveryKey.getEncoded(), encryptedKey);
+        byte[] keyMaterial = KeySyncUtils.decryptApplicationKey(recoveryKey.getEncoded(),
+                encryptedKey, NULL_METADATA);
+
+        assertArrayEquals(applicationKey.getEncoded(), keyMaterial);
+    }
+
+    @Test
+    public void decryptApplicationKey_decryptsAnApplicationKey_nonNullMetadata() throws Exception {
+        String alias = "phoebe";
+        SecretKey recoveryKey = KeySyncUtils.generateRecoveryKey();
+        SecretKey applicationKey = generateApplicationKey();
+        Map<String, byte[]> encryptedKeys =
+                KeySyncUtils.encryptKeysWithRecoveryKey(
+                        recoveryKey,
+                        ImmutableMap.of(alias, Pair.create(applicationKey, NON_NULL_METADATA)));
+        byte[] encryptedKey = encryptedKeys.get(alias);
+
+        byte[] keyMaterial = KeySyncUtils.decryptApplicationKey(recoveryKey.getEncoded(),
+                encryptedKey, NON_NULL_METADATA);
 
         assertArrayEquals(applicationKey.getEncoded(), keyMaterial);
     }
@@ -147,13 +159,55 @@ public class KeySyncUtilsTest {
         Map<String, byte[]> encryptedKeys =
                 KeySyncUtils.encryptKeysWithRecoveryKey(
                         KeySyncUtils.generateRecoveryKey(),
-                        ImmutableMap.of("casper", generateApplicationKey()));
+                        ImmutableMap.of("casper",
+                                Pair.create(generateApplicationKey(), NULL_METADATA)));
         byte[] encryptedKey = encryptedKeys.get(alias);
 
         try {
-            KeySyncUtils.decryptApplicationKey(
-                    KeySyncUtils.generateRecoveryKey().getEncoded(), encryptedKey);
+            KeySyncUtils.decryptApplicationKey(KeySyncUtils.generateRecoveryKey().getEncoded(),
+                    encryptedKey, NULL_METADATA);
             fail("Did not throw decrypting with bad key.");
+        } catch (AEADBadTagException error) {
+            // expected
+        }
+    }
+
+    @Test
+    public void decryptApplicationKey_throwsIfWrongMetadata() throws Exception {
+        String alias1 = "casper1";
+        String alias2 = "casper2";
+        String alias3 = "casper3";
+        SecretKey recoveryKey = KeySyncUtils.generateRecoveryKey();
+
+        Map<String, byte[]> encryptedKeys =
+                KeySyncUtils.encryptKeysWithRecoveryKey(
+                        recoveryKey,
+                        ImmutableMap.of(
+                                alias1,
+                                Pair.create(generateApplicationKey(), NULL_METADATA),
+                                alias2,
+                                Pair.create(generateApplicationKey(), NON_NULL_METADATA),
+                                alias3,
+                                Pair.create(generateApplicationKey(), NON_NULL_METADATA)));
+
+        try {
+            KeySyncUtils.decryptApplicationKey(recoveryKey.getEncoded(),
+                    encryptedKeys.get(alias1), NON_NULL_METADATA);
+            fail("Did not throw decrypting with wrong metadata.");
+        } catch (AEADBadTagException error) {
+            // expected
+        }
+        try {
+            KeySyncUtils.decryptApplicationKey(recoveryKey.getEncoded(),
+                    encryptedKeys.get(alias2), NULL_METADATA);
+            fail("Did not throw decrypting with wrong metadata.");
+        } catch (AEADBadTagException error) {
+            // expected
+        }
+        try {
+            KeySyncUtils.decryptApplicationKey(recoveryKey.getEncoded(),
+                    encryptedKeys.get(alias3), "different".getBytes(StandardCharsets.UTF_8));
+            fail("Did not throw decrypting with wrong metadata.");
         } catch (AEADBadTagException error) {
             // expected
         }
@@ -191,7 +245,7 @@ public class KeySyncUtilsTest {
         byte[] encryptedPayload = SecureBox.encrypt(
                 /*theirPublicKey=*/ null,
                 /*sharedSecret=*/ keyClaimant,
-                /*header=*/ KeySyncUtils.concat(RECOVERY_RESPONSE_HEADER, vaultParams),
+                /*header=*/ ArrayUtils.concat(RECOVERY_RESPONSE_HEADER, vaultParams),
                 /*payload=*/ recoveryKey);
 
         byte[] decrypted = KeySyncUtils.decryptRecoveryClaimResponse(
@@ -207,7 +261,7 @@ public class KeySyncUtilsTest {
         byte[] encryptedPayload = SecureBox.encrypt(
                 /*theirPublicKey=*/ null,
                 /*sharedSecret=*/ KeySyncUtils.generateKeyClaimant(),
-                /*header=*/ KeySyncUtils.concat(RECOVERY_RESPONSE_HEADER, vaultParams),
+                /*header=*/ ArrayUtils.concat(RECOVERY_RESPONSE_HEADER, vaultParams),
                 /*payload=*/ recoveryKey);
 
         try {
@@ -236,9 +290,9 @@ public class KeySyncUtilsTest {
         byte[] decrypted = SecureBox.decrypt(
                 keyPair.getPrivate(),
                 /*sharedSecret=*/ null,
-                /*header=*/ KeySyncUtils.concat(RECOVERY_CLAIM_HEADER, vaultParams, challenge),
+                /*header=*/ ArrayUtils.concat(RECOVERY_CLAIM_HEADER, vaultParams, challenge),
                 encryptedRecoveryClaim);
-        assertArrayEquals(KeySyncUtils.concat(LOCK_SCREEN_HASH_1, keyClaimant), decrypted);
+        assertArrayEquals(ArrayUtils.concat(LOCK_SCREEN_HASH_1, keyClaimant), decrypted);
     }
 
     @Test
@@ -258,7 +312,7 @@ public class KeySyncUtilsTest {
             SecureBox.decrypt(
                     keyPair.getPrivate(),
                     /*sharedSecret=*/ null,
-                    /*header=*/ KeySyncUtils.concat(
+                    /*header=*/ ArrayUtils.concat(
                             RECOVERY_CLAIM_HEADER, vaultParams, randomBytes(32)),
                     encryptedRecoveryClaim);
             fail("Should throw if challenge is incorrect.");
@@ -284,7 +338,7 @@ public class KeySyncUtilsTest {
             SecureBox.decrypt(
                     SecureBox.genKeyPair().getPrivate(),
                     /*sharedSecret=*/ null,
-                    /*header=*/ KeySyncUtils.concat(
+                    /*header=*/ ArrayUtils.concat(
                             RECOVERY_CLAIM_HEADER, vaultParams, challenge),
                     encryptedRecoveryClaim);
             fail("Should throw if secret key is incorrect.");
@@ -310,7 +364,7 @@ public class KeySyncUtilsTest {
             SecureBox.decrypt(
                     keyPair.getPrivate(),
                     /*sharedSecret=*/ null,
-                    /*header=*/ KeySyncUtils.concat(
+                    /*header=*/ ArrayUtils.concat(
                             RECOVERY_CLAIM_HEADER, randomBytes(100), challenge),
                     encryptedRecoveryClaim);
             fail("Should throw if vault params is incorrect.");
@@ -337,7 +391,7 @@ public class KeySyncUtilsTest {
             SecureBox.decrypt(
                     keyPair.getPrivate(),
                     /*sharedSecret=*/ null,
-                    /*header=*/ KeySyncUtils.concat(randomBytes(10), vaultParams, challenge),
+                    /*header=*/ ArrayUtils.concat(randomBytes(10), vaultParams, challenge),
                     encryptedRecoveryClaim);
             fail("Should throw if header is incorrect.");
         } catch (AEADBadTagException e) {

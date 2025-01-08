@@ -17,12 +17,15 @@
 #include "ReorderBarrierDrawables.h"
 #include "RenderNode.h"
 #include "SkiaDisplayList.h"
-#include "SkiaPipeline.h"
+#include "LightingInfo.h"
 
-#include <SkBlurMask.h>
-#include <SkBlurMaskFilter.h>
+#include <SkColor.h>
+#include <SkMatrix.h>
+#include <SkPath.h>
 #include <SkPathOps.h>
-#include <SkRRectsGaussianEdgeMaskFilter.h>
+#include <SkPoint3.h>
+#include <SkRect.h>
+#include <SkScalar.h>
 #include <SkShadowUtils.h>
 
 namespace android {
@@ -30,7 +33,7 @@ namespace uirenderer {
 namespace skiapipeline {
 
 StartReorderBarrierDrawable::StartReorderBarrierDrawable(SkiaDisplayList* data)
-        : mEndChildIndex(0), mBeginChildIndex(data->mChildNodes.size()), mDisplayList(data) {}
+        : mEndChildIndex(-1), mBeginChildIndex(data->mChildNodes.size()), mDisplayList(data) {}
 
 void StartReorderBarrierDrawable::onDraw(SkCanvas* canvas) {
     if (mChildren.empty()) {
@@ -55,9 +58,14 @@ void StartReorderBarrierDrawable::onDraw(SkCanvas* canvas) {
         RenderNodeDrawable* childNode = mChildren[drawIndex];
         SkASSERT(childNode);
         const float casterZ = childNode->getNodeProperties().getZ();
-        if (casterZ >= -NON_ZERO_EPSILON) {  // draw only children with negative Z
+        if (casterZ >= -MathUtils::NON_ZERO_EPSILON) {  // draw only children with negative Z
             return;
         }
+        SkAutoCanvasRestore acr(canvas, true);
+        // Since we're drawing out of recording order, the child's matrix needs to be applied to the
+        // canvas. In in-order drawing, the canvas already has the child's matrix applied.
+        canvas->setMatrix(mDisplayList->mParentMatrix);
+        canvas->concat(childNode->getRecordedMatrix());
         childNode->forceDraw(canvas);
         drawIndex++;
     }
@@ -84,7 +92,7 @@ void EndReorderBarrierDrawable::onDraw(SkCanvas* canvas) {
 
     const size_t endIndex = zChildren.size();
     while (drawIndex < endIndex  // draw only children with positive Z
-           && zChildren[drawIndex]->getNodeProperties().getZ() <= NON_ZERO_EPSILON)
+           && zChildren[drawIndex]->getNodeProperties().getZ() <= MathUtils::NON_ZERO_EPSILON)
         drawIndex++;
     size_t shadowIndex = drawIndex;
 
@@ -105,6 +113,11 @@ void EndReorderBarrierDrawable::onDraw(SkCanvas* canvas) {
 
         RenderNodeDrawable* childNode = zChildren[drawIndex];
         SkASSERT(childNode);
+        SkAutoCanvasRestore acr(canvas, true);
+        // Since we're drawing out of recording order, the child's matrix needs to be applied to the
+        // canvas. In in-order drawing, the canvas already has the child's matrix applied.
+        canvas->setMatrix(mStartBarrier->mDisplayList->mParentMatrix);
+        canvas->concat(childNode->getRecordedMatrix());
         childNode->forceDraw(canvas);
 
         drawIndex++;
@@ -132,8 +145,8 @@ void EndReorderBarrierDrawable::drawShadow(SkCanvas* canvas, RenderNodeDrawable*
         return;
     }
 
-    float ambientAlpha = (SkiaPipeline::getAmbientShadowAlpha() / 255.f) * casterAlpha;
-    float spotAlpha = (SkiaPipeline::getSpotShadowAlpha() / 255.f) * casterAlpha;
+    float ambientAlpha = (LightingInfo::getAmbientShadowAlpha() / 255.f) * casterAlpha;
+    float spotAlpha = (LightingInfo::getSpotShadowAlpha() / 255.f) * casterAlpha;
 
     const RevealClip& revealClip = casterProperties.getRevealClip();
     const SkPath* revealClipPath = revealClip.getPath();
@@ -156,10 +169,15 @@ void EndReorderBarrierDrawable::drawShadow(SkCanvas* canvas, RenderNodeDrawable*
     }
 
     SkAutoCanvasRestore acr(canvas, true);
+    // Since we're drawing out of recording order, the child's matrix needs to be applied to the
+    // canvas. In in-order drawing, the canvas already has the child's matrix applied.
+    canvas->setMatrix(mStartBarrier->mDisplayList->mParentMatrix);
 
     SkMatrix shadowMatrix;
-    mat4 hwuiMatrix;
+    mat4 hwuiMatrix(caster->getRecordedMatrix());
     // TODO we don't pass the optional boolean to treat it as a 4x4 matrix
+    // applyViewPropertyTransforms gets the same matrix, which render nodes apply with
+    // RenderNodeDrawable::setViewProperties as a part if their draw.
     caster->getRenderNode()->applyViewPropertyTransforms(hwuiMatrix);
     hwuiMatrix.copyTo(shadowMatrix);
     canvas->concat(shadowMatrix);
@@ -180,7 +198,7 @@ void EndReorderBarrierDrawable::drawShadow(SkCanvas* canvas, RenderNodeDrawable*
         casterPath = &tmpPath;
     }
 
-    const Vector3 lightPos = SkiaPipeline::getLightCenter();
+    const Vector3 lightPos = LightingInfo::getLightCenter();
     SkPoint3 skiaLightPos = SkPoint3::Make(lightPos.x, lightPos.y, lightPos.z);
     SkPoint3 zParams;
     if (shadowMatrix.hasPerspective()) {
@@ -194,11 +212,11 @@ void EndReorderBarrierDrawable::drawShadow(SkCanvas* canvas, RenderNodeDrawable*
     SkColor ambientColor = multiplyAlpha(casterProperties.getAmbientShadowColor(), ambientAlpha);
     SkColor spotColor = multiplyAlpha(casterProperties.getSpotShadowColor(), spotAlpha);
     SkShadowUtils::DrawShadow(
-            canvas, *casterPath, zParams, skiaLightPos, SkiaPipeline::getLightRadius(),
+            canvas, *casterPath, zParams, skiaLightPos, LightingInfo::getLightRadius(),
             ambientColor, spotColor,
             casterAlpha < 1.0f ? SkShadowFlags::kTransparentOccluder_ShadowFlag : 0);
 }
 
-};  // namespace skiapipeline
-};  // namespace uirenderer
-};  // namespace android
+}  // namespace skiapipeline
+}  // namespace uirenderer
+}  // namespace android

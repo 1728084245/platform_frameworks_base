@@ -19,10 +19,10 @@ package android.widget;
 import static android.widget.SuggestionsAdapter.getColumnString;
 
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
 import android.app.PendingIntent;
 import android.app.SearchManager;
 import android.app.SearchableInfo;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Context;
@@ -62,6 +62,7 @@ import android.view.ViewConfiguration;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
+import android.view.inspector.InspectableProperty;
 import android.widget.AdapterView.OnItemClickListener;
 import android.widget.AdapterView.OnItemSelectedListener;
 import android.widget.TextView.OnEditorActionListener;
@@ -282,6 +283,8 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
 
         final TypedArray a = context.obtainStyledAttributes(
                 attrs, R.styleable.SearchView, defStyleAttr, defStyleRes);
+        saveAttributeDataForStyleable(context, R.styleable.SearchView,
+                attrs, a, defStyleAttr, defStyleRes);
         final LayoutInflater inflater = (LayoutInflater) context.getSystemService(
                 Context.LAYOUT_INFLATER_SERVICE);
         final int layoutResId = a.getResourceId(
@@ -489,6 +492,13 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
         if (!isFocusable()) return false;
         // If it is not iconified, then give the focus to the text field
         if (!isIconified()) {
+            if (direction == FOCUS_BACKWARD) {
+                final View found = focusSearch(FOCUS_BACKWARD);
+                if (found != null) {
+                    return found.requestFocus(FOCUS_BACKWARD, previouslyFocusedRect);
+                }
+                return false;
+            }
             boolean result = mSearchSrcTextView.requestFocus(direction, previouslyFocusedRect);
             if (result) {
                 updateViewsVisibility(false);
@@ -563,6 +573,7 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
      *
      * @return the query string
      */
+    @InspectableProperty(hasAttributeId = false)
     public CharSequence getQuery() {
         return mSearchSrcTextView.getText();
     }
@@ -620,6 +631,7 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
      * @return the displayed query hint text, or {@code null} if none set
      * @attr ref android.R.styleable#SearchView_queryHint
      */
+    @InspectableProperty
     @Nullable
     public CharSequence getQueryHint() {
         final CharSequence hint;
@@ -656,9 +668,21 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
      * Returns the default iconified state of the search field.
      * @return
      *
+     * @deprecated use {@link #isIconifiedByDefault()}
      * @attr ref android.R.styleable#SearchView_iconifiedByDefault
      */
+    @Deprecated
     public boolean isIconfiedByDefault() {
+        return mIconifiedByDefault;
+    }
+
+    /**
+     * Returns the default iconified state of the search field.
+     *
+     * @attr ref android.R.styleable#SearchView_iconifiedByDefault
+     */
+    @InspectableProperty
+    public boolean isIconifiedByDefault() {
         return mIconifiedByDefault;
     }
 
@@ -686,6 +710,7 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
      * @return true if the SearchView is currently iconified, false if the search field is
      * fully visible.
      */
+    @InspectableProperty(hasAttributeId = false)
     public boolean isIconified() {
         return mIconified;
     }
@@ -780,6 +805,7 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
      *
      * @attr ref android.R.styleable#SearchView_maxWidth
      */
+    @InspectableProperty
     public int getMaxWidth() {
         return mMaxWidth;
     }
@@ -1057,7 +1083,8 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
             // The search key is handled by the dialog's onKeyDown().
             if (!mSearchSrcTextView.isEmpty() && event.hasNoModifiers()) {
                 if (event.getAction() == KeyEvent.ACTION_UP) {
-                    if (keyCode == KeyEvent.KEYCODE_ENTER) {
+                    if (keyCode == KeyEvent.KEYCODE_ENTER
+                            || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
                         v.cancelLongPress();
 
                         // Launch as a regular search.
@@ -1414,7 +1441,7 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
                     + " isIconified=" + isIconified + "}";
         }
 
-        public static final Parcelable.Creator<SavedState> CREATOR =
+        public static final @android.annotation.NonNull Parcelable.Creator<SavedState> CREATOR =
                 new Parcelable.Creator<SavedState>() {
                     public SavedState createFromParcel(Parcel in) {
                         return new SavedState(in);
@@ -1675,7 +1702,7 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
         Intent queryIntent = new Intent(Intent.ACTION_SEARCH);
         queryIntent.setComponent(searchActivity);
         PendingIntent pending = PendingIntent.getActivity(getContext(), 0, queryIntent,
-                PendingIntent.FLAG_ONE_SHOT);
+                PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_MUTABLE);
 
         // Now set up the bundle that will be inserted into the pending intent
         // when it's time to do the search.  We always build it here (even if empty)
@@ -1769,7 +1796,7 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
             return createIntent(action, dataUri, extraData, query, actionKey, actionMsg);
         } catch (RuntimeException e ) {
             int rowNum;
-            try {                       // be really paranoid now
+            try {                       // be really defensive now
                 rowNum = c.getPosition();
             } catch (RuntimeException e2 ) {
                 rowNum = -1;
@@ -1918,7 +1945,7 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
             mThreshold = getThreshold();
         }
 
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public SearchAutoComplete(Context context, AttributeSet attrs) {
             super(context, attrs);
             mThreshold = getThreshold();
@@ -2059,6 +2086,11 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
             return ic;
         }
 
+        @Override
+        public boolean checkInputConnectionProxy(View view) {
+            return view == mSearchView;
+        }
+
         private void showSoftInputIfNecessary() {
             if (mHasPendingShowSoftInputRequest) {
                 final InputMethodManager imm =
@@ -2077,7 +2109,7 @@ public class SearchView extends LinearLayout implements CollapsibleActionView {
                 return;
             }
 
-            if (imm.isActive(this)) {
+            if (imm.hasActiveInputConnection(this)) {
                 // This means that SearchAutoComplete is already connected to the IME.
                 // InputMethodManager#showSoftInput() is guaranteed to pass client-side focus check.
                 mHasPendingShowSoftInputRequest = false;

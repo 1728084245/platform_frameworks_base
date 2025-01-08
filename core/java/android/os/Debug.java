@@ -16,10 +16,11 @@
 
 package android.os;
 
+import android.annotation.FlaggedApi;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
 import android.app.AppGlobals;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.util.Log;
 
@@ -74,8 +75,9 @@ public final class Debug
      *
      * @deprecated Accurate counting is a burden on the runtime and may be removed.
      */
+    // This must match VMDebug.TRACE_COUNT_ALLOCS.
     @Deprecated
-    public static final int TRACE_COUNT_ALLOCS  = VMDebug.TRACE_COUNT_ALLOCS;
+    public static final int TRACE_COUNT_ALLOCS  = 1;
 
     /**
      * Flags for printLoadedClasses().  Default behavior is to only show
@@ -88,7 +90,7 @@ public final class Debug
     // set/cleared by waitForDebugger()
     private static volatile boolean mWaiting = false;
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private Debug() {}
 
     /*
@@ -108,6 +110,13 @@ public final class Debug
     private static final String DEFAULT_TRACE_BODY = "dmtrace";
     private static final String DEFAULT_TRACE_EXTENSION = ".trace";
 
+    private static final String[] FRAMEWORK_FEATURES = new String[] {
+        "opengl-tracing",
+        "view-hierarchy",
+        "support_boot_stages",
+        "app_info",
+    };
+
     /**
      * This class is used to retrieved various statistics about the memory mappings for this
      * process. The returned info is broken down by dalvik, native, and other. All results are in kB.
@@ -120,7 +129,7 @@ public final class Debug
         @UnsupportedAppUsage
         public int dalvikSwappablePss;
         /** @hide The resident set size for dalvik heap.  (Without other Dalvik overhead.) */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public int dalvikRss;
         /** The private dirty pages used by dalvik heap. */
         public int dalvikPrivateDirty;
@@ -140,7 +149,7 @@ public final class Debug
         public int dalvikSwappedOut;
         /** The dirty dalvik pages that have been swapped out, proportional. */
         /** @hide We may want to expose this, eventually. */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public int dalvikSwappedOutPss;
 
         /** The proportional set size for the native heap. */
@@ -150,7 +159,7 @@ public final class Debug
         @UnsupportedAppUsage
         public int nativeSwappablePss;
         /** @hide The resident set size for the native heap. */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public int nativeRss;
         /** The private dirty pages used by the native heap. */
         public int nativePrivateDirty;
@@ -170,7 +179,7 @@ public final class Debug
         public int nativeSwappedOut;
         /** The dirty native pages that have been swapped out, proportional. */
         /** @hide We may want to expose this, eventually. */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public int nativeSwappedOutPss;
 
         /** The proportional set size for everything else. */
@@ -180,7 +189,7 @@ public final class Debug
         @UnsupportedAppUsage
         public int otherSwappablePss;
         /** @hide The resident set size for everything else. */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public int otherRss;
         /** The private dirty pages used by everything else. */
         public int otherPrivateDirty;
@@ -200,14 +209,15 @@ public final class Debug
         public int otherSwappedOut;
         /** The dirty pages used by anyting else that have been swapped out, proportional. */
         /** @hide We may want to expose this, eventually. */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public int otherSwappedOutPss;
 
         /** Whether the kernel reports proportional swap usage */
         /** @hide */
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public boolean hasSwappedOutPss;
 
+        // LINT.IfChange
         /** @hide */
         public static final int HEAP_UNKNOWN = 0;
         /** @hide */
@@ -278,11 +288,13 @@ public final class Debug
         /** @hide */
         public static final int OTHER_DALVIK_OTHER_ACCOUNTING = 22;
         /** @hide */
-        public static final int OTHER_DALVIK_OTHER_CODE_CACHE = 23;
+        public static final int OTHER_DALVIK_OTHER_ZYGOTE_CODE_CACHE = 23;
         /** @hide */
-        public static final int OTHER_DALVIK_OTHER_COMPILER_METADATA = 24;
+        public static final int OTHER_DALVIK_OTHER_APP_CODE_CACHE = 24;
         /** @hide */
-        public static final int OTHER_DALVIK_OTHER_INDIRECT_REFERENCE_TABLE = 25;
+        public static final int OTHER_DALVIK_OTHER_COMPILER_METADATA = 25;
+        /** @hide */
+        public static final int OTHER_DALVIK_OTHER_INDIRECT_REFERENCE_TABLE = 26;
         /** @hide */
         public static final int OTHER_DVK_STAT_DALVIK_OTHER_START =
                 OTHER_DALVIK_OTHER_LINEARALLOC - NUM_OTHER_STATS;
@@ -292,11 +304,11 @@ public final class Debug
 
         // Dex subsections (Boot vdex, App dex, and App vdex).
         /** @hide */
-        public static final int OTHER_DEX_BOOT_VDEX = 26;
+        public static final int OTHER_DEX_BOOT_VDEX = 27;
         /** @hide */
-        public static final int OTHER_DEX_APP_DEX = 27;
+        public static final int OTHER_DEX_APP_DEX = 28;
         /** @hide */
-        public static final int OTHER_DEX_APP_VDEX = 28;
+        public static final int OTHER_DEX_APP_VDEX = 29;
         /** @hide */
         public static final int OTHER_DVK_STAT_DEX_START = OTHER_DEX_BOOT_VDEX - NUM_OTHER_STATS;
         /** @hide */
@@ -304,9 +316,10 @@ public final class Debug
 
         // Art subsections (App image, boot image).
         /** @hide */
-        public static final int OTHER_ART_APP = 29;
+        public static final int OTHER_ART_APP = 30;
         /** @hide */
-        public static final int OTHER_ART_BOOT = 30;
+        public static final int OTHER_ART_BOOT = 31;
+        // LINT.ThenChange(/system/memory/libmeminfo/include/meminfo/androidprocheaps.h)
         /** @hide */
         public static final int OTHER_DVK_STAT_ART_START = OTHER_ART_APP - NUM_OTHER_STATS;
         /** @hide */
@@ -314,7 +327,7 @@ public final class Debug
 
         /** @hide */
         @UnsupportedAppUsage
-        public static final int NUM_DVK_STATS = 14;
+        public static final int NUM_DVK_STATS = OTHER_ART_BOOT + 1 - OTHER_DALVIK_NORMAL;
 
         /** @hide */
         public static final int NUM_CATEGORIES = 9;
@@ -342,6 +355,45 @@ public final class Debug
         private int[] otherStats = new int[(NUM_OTHER_STATS+NUM_DVK_STATS)*NUM_CATEGORIES];
 
         public MemoryInfo() {
+        }
+
+        /**
+         * @hide Copy contents from another object.
+         */
+        public void set(MemoryInfo other) {
+            dalvikPss = other.dalvikPss;
+            dalvikSwappablePss = other.dalvikSwappablePss;
+            dalvikRss = other.dalvikRss;
+            dalvikPrivateDirty = other.dalvikPrivateDirty;
+            dalvikSharedDirty = other.dalvikSharedDirty;
+            dalvikPrivateClean = other.dalvikPrivateClean;
+            dalvikSharedClean = other.dalvikSharedClean;
+            dalvikSwappedOut = other.dalvikSwappedOut;
+            dalvikSwappedOutPss = other.dalvikSwappedOutPss;
+
+            nativePss = other.nativePss;
+            nativeSwappablePss = other.nativeSwappablePss;
+            nativeRss = other.nativeRss;
+            nativePrivateDirty = other.nativePrivateDirty;
+            nativeSharedDirty = other.nativeSharedDirty;
+            nativePrivateClean = other.nativePrivateClean;
+            nativeSharedClean = other.nativeSharedClean;
+            nativeSwappedOut = other.nativeSwappedOut;
+            nativeSwappedOutPss = other.nativeSwappedOutPss;
+
+            otherPss = other.otherPss;
+            otherSwappablePss = other.otherSwappablePss;
+            otherRss = other.otherRss;
+            otherPrivateDirty = other.otherPrivateDirty;
+            otherSharedDirty = other.otherSharedDirty;
+            otherPrivateClean = other.otherPrivateClean;
+            otherSharedClean = other.otherSharedClean;
+            otherSwappedOut = other.otherSwappedOut;
+            otherSwappedOutPss = other.otherSwappedOutPss;
+
+            hasSwappedOutPss = other.hasSwappedOutPss;
+
+            System.arraycopy(other.otherStats, 0, otherStats, 0, otherStats.length);
         }
 
         /**
@@ -501,7 +553,8 @@ public final class Debug
                 case OTHER_DALVIK_NON_MOVING: return ".NonMoving";
                 case OTHER_DALVIK_OTHER_LINEARALLOC: return ".LinearAlloc";
                 case OTHER_DALVIK_OTHER_ACCOUNTING: return ".GC";
-                case OTHER_DALVIK_OTHER_CODE_CACHE: return ".JITCache";
+                case OTHER_DALVIK_OTHER_ZYGOTE_CODE_CACHE: return ".ZygoteJIT";
+                case OTHER_DALVIK_OTHER_APP_CODE_CACHE: return ".AppJIT";
                 case OTHER_DALVIK_OTHER_COMPILER_METADATA: return ".CompilerMetadata";
                 case OTHER_DALVIK_OTHER_INDIRECT_REFERENCE_TABLE: return ".IndirectRef";
                 case OTHER_DEX_BOOT_VDEX: return ".Boot vdex";
@@ -581,7 +634,7 @@ public final class Debug
        *         </tr>
        *         <tr>
        *             <td>summary.total-pss</td>
-       *             <td>Total PPS memory usage in kB.</td>
+       *             <td>Total PSS memory usage in kB.</td>
        *             <td>{@code 1442}</td>
        *             <td>23</td>
        *         </tr>
@@ -683,7 +736,9 @@ public final class Debug
               + getOtherPrivate(OTHER_APK)
               + getOtherPrivate(OTHER_TTF)
               + getOtherPrivate(OTHER_DEX)
-              + getOtherPrivate(OTHER_OAT);
+                + getOtherPrivate(OTHER_OAT)
+                + getOtherPrivate(OTHER_DALVIK_OTHER_ZYGOTE_CODE_CACHE)
+                + getOtherPrivate(OTHER_DALVIK_OTHER_APP_CODE_CACHE);
         }
 
         /**
@@ -745,6 +800,70 @@ public final class Debug
             return getTotalPss()
               - getTotalPrivateClean()
               - getTotalPrivateDirty();
+        }
+
+        /**
+         * Rss of Java Heap bytes in KB due to the application.
+         * @hide
+         */
+        public int getSummaryJavaHeapRss() {
+            return dalvikRss + getOtherRss(OTHER_ART);
+        }
+
+        /**
+         * Rss of Native Heap bytes in KB due to the application.
+         * @hide
+         */
+        public int getSummaryNativeHeapRss() {
+            return nativeRss;
+        }
+
+        /**
+         * Rss of code and other static resource bytes in KB due to
+         * the application.
+         * @hide
+         */
+        public int getSummaryCodeRss() {
+            return getOtherRss(OTHER_SO)
+                + getOtherRss(OTHER_JAR)
+                + getOtherRss(OTHER_APK)
+                + getOtherRss(OTHER_TTF)
+                + getOtherRss(OTHER_DEX)
+                + getOtherRss(OTHER_OAT)
+                + getOtherRss(OTHER_DALVIK_OTHER_ZYGOTE_CODE_CACHE)
+                + getOtherRss(OTHER_DALVIK_OTHER_APP_CODE_CACHE);
+        }
+
+        /**
+         * Rss in KB of the stack due to the application.
+         * @hide
+         */
+        public int getSummaryStackRss() {
+            return getOtherRss(OTHER_STACK);
+        }
+
+        /**
+         * Rss in KB of graphics due to the application.
+         * @hide
+         */
+        public int getSummaryGraphicsRss() {
+            return getOtherRss(OTHER_GL_DEV)
+                + getOtherRss(OTHER_GRAPHICS)
+                + getOtherRss(OTHER_GL);
+        }
+
+        /**
+         * Rss in KB due to either the application or system that haven't otherwise been
+         * accounted for.
+         * @hide
+         */
+        public int getSummaryUnknownRss() {
+            return getTotalRss()
+                - getSummaryJavaHeapRss()
+                - getSummaryNativeHeapRss()
+                - getSummaryCodeRss()
+                - getSummaryStackRss()
+                - getSummaryGraphicsRss();
         }
 
         /**
@@ -857,7 +976,7 @@ public final class Debug
             otherStats = source.createIntArray();
         }
 
-        public static final Creator<MemoryInfo> CREATOR = new Creator<MemoryInfo>() {
+        public static final @android.annotation.NonNull Creator<MemoryInfo> CREATOR = new Creator<MemoryInfo>() {
             public MemoryInfo createFromParcel(Parcel source) {
                 return new MemoryInfo(source);
             }
@@ -871,6 +990,46 @@ public final class Debug
         }
     }
 
+
+    /**
+     * Wait until a debugger attaches. As soon as a debugger attaches,
+     * suspend all Java threads and send VM_START (a.k.a VM_INIT)
+     * packet.
+     *
+     * @hide
+     */
+    public static void suspendAllAndSendVmStart() {
+        if (!VMDebug.isDebuggingEnabled()) {
+            return;
+        }
+
+        // if DDMS is listening, inform them of our plight
+        System.out.println("Sending WAIT chunk");
+        byte[] data = new byte[] { 0 };     // 0 == "waiting for debugger"
+        Chunk waitChunk = new Chunk(ChunkHandler.type("WAIT"), data, 0, 1);
+        DdmServer.sendChunk(waitChunk);
+
+        // We must wait until a debugger is connected (debug socket is
+        // open and at least one non-DDM JDWP packedt has been received.
+        // This guarantees that oj-libjdwp has been attached and that
+        // ART's default implementation of suspendAllAndSendVmStart has
+        // been replaced with an implementation that will suspendAll and
+        // send VM_START.
+        System.out.println("Waiting for debugger first packet");
+
+        setWaitingForDebugger(true);
+        while (!isDebuggerConnected()) {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException ie) {
+            }
+        }
+        setWaitingForDebugger(false);
+
+        System.out.println("Debug.suspendAllAndSentVmStart");
+        VMDebug.suspendAllAndSendVmStart();
+        System.out.println("Debug.suspendAllAndSendVmStart, resumed");
+    }
 
     /**
      * Wait until a debugger attaches.  As soon as the debugger attaches,
@@ -891,12 +1050,12 @@ public final class Debug
         Chunk waitChunk = new Chunk(ChunkHandler.type("WAIT"), data, 0, 1);
         DdmServer.sendChunk(waitChunk);
 
-        mWaiting = true;
+        setWaitingForDebugger(true);
         while (!isDebuggerConnected()) {
             try { Thread.sleep(SPIN_DELAY); }
             catch (InterruptedException ie) {}
         }
-        mWaiting = false;
+        setWaitingForDebugger(false);
 
         System.out.println("Debugger has connected");
 
@@ -954,6 +1113,27 @@ public final class Debug
     }
 
     /**
+     * Set whether the app is waiting for a debugger to connect
+     *
+     * @hide
+     */
+    private static void setWaitingForDebugger(boolean waiting) {
+        mWaiting = waiting;
+        VMDebug.setWaitingForDebugger(waiting);
+    }
+
+    /**
+     * Returns an array of strings that identify Framework features. This is
+     * used by DDMS to determine what sorts of operations the Framework can
+     * perform.
+     *
+     * @hide
+     */
+    public static String[] getFeatureList() {
+        return FRAMEWORK_FEATURES;
+    }
+
+    /**
      * Change the JDWP port.
      *
      * @deprecated no longer needed or useful
@@ -1007,8 +1187,6 @@ public final class Debug
             if (outStream != null)
                 outStream.close();
         }
-
-        VMDebug.startEmulatorTracing();
     }
 
     /**
@@ -1022,8 +1200,6 @@ public final class Debug
      * region of code.</p>
      */
     public static void stopNativeTracing() {
-        VMDebug.stopEmulatorTracing();
-
         // Open the sysfs file for writing and write "0" to it.
         PrintWriter outStream = null;
         try {
@@ -1050,9 +1226,11 @@ public final class Debug
      * consequences.
      *
      * To temporarily enable tracing, use {@link #startNativeTracing()}.
+     *
+     * @deprecated Please use other tracing method in this class.
      */
     public static void enableEmulatorTraceOutput() {
-        VMDebug.startEmulatorTracing();
+        Log.w(TAG, "Unimplemented");
     }
 
     /**
@@ -1646,6 +1824,8 @@ public final class Debug
      * such runtime statistic exists.
      *
      * <p>The following table lists the runtime statistics that the runtime supports.
+     * All statistics are approximate. Individual allocations may not be immediately reflected
+     * in the results.
      * Note runtime statistics may be added or removed in a future API level.</p>
      *
      * <table>
@@ -1778,10 +1958,13 @@ public final class Debug
     /**
      * Note: currently only works when the requested pid has the same UID
      * as the caller.
+     *
+     * @return true if the meminfo was read successfully, false if not (i.e., given pid has gone).
+     *
      * @hide
      */
     @UnsupportedAppUsage
-    public static native void getMemoryInfo(int pid, MemoryInfo memoryInfo);
+    public static native boolean getMemoryInfo(int pid, MemoryInfo memoryInfo);
 
     /**
      * Retrieves the PSS memory used by the process as given by the
@@ -1790,13 +1973,33 @@ public final class Debug
     public static native long getPss();
 
     /**
-     * Retrieves the PSS memory used by the process as given by the
-     * smaps.  Optionally supply a long array of 2 entries to also
-     * receive the Uss and SwapPss of the process, and another array to also
-     * retrieve the separate memtrack size.
+     * Retrieves the PSS memory used by the process as given by the smaps. Optionally supply a long
+     * array of up to 3 entries to also receive (up to 3 values in order): the Uss and SwapPss and
+     * Rss (only filled in as of {@link android.os.Build.VERSION_CODES#P}) of the process, and
+     * another array to also retrieve the separate memtrack sizes (up to 4 values in order): the
+     * total memtrack reported size, memtrack graphics, memtrack gl and memtrack other.
+     *
+     * @return The PSS memory usage, or 0 if failed to retrieve (i.e., given pid has gone).
      * @hide
      */
-    public static native long getPss(int pid, long[] outUssSwapPss, long[] outMemtrack);
+    public static native long getPss(int pid, long[] outUssSwapPssRss, long[] outMemtrack);
+
+    /**
+     * Retrieves the RSS memory used by the process as given by the status file.
+     */
+    @FlaggedApi(Flags.FLAG_REMOVE_APP_PROFILER_PSS_COLLECTION)
+    public static native long getRss();
+
+    /**
+     * Retrieves the RSS memory used by the process as given by the status file. Optionally supply a
+     * long array of up to 4 entries to retrieve the total memtrack reported size, memtrack
+     * graphics, memtrack gl, and memtrack other.
+     *
+     * @return The RSS memory usage, or 0 if retrieval failed (i.e. the PID is gone).
+     * @hide
+     */
+    @FlaggedApi(Flags.FLAG_REMOVE_APP_PROFILER_PSS_COLLECTION)
+    public static native long getRss(int pid, long[] outMemtrack);
 
     /** @hide */
     public static final int MEMINFO_TOTAL = 0;
@@ -1828,8 +2031,34 @@ public final class Debug
     public static final int MEMINFO_PAGE_TABLES = 13;
     /** @hide */
     public static final int MEMINFO_KERNEL_STACK = 14;
+    /**
+     * Note: MEMINFO_KRECLAIMABLE includes MEMINFO_SLAB_RECLAIMABLE (see KReclaimable field
+     * description in kernel documentation).
+     * @hide
+     */
+    public static final int MEMINFO_KRECLAIMABLE = 15;
     /** @hide */
-    public static final int MEMINFO_COUNT = 15;
+    public static final int MEMINFO_ACTIVE = 16;
+    /** @hide */
+    public static final int MEMINFO_INACTIVE = 17;
+    /** @hide */
+    public static final int MEMINFO_UNEVICTABLE = 18;
+    /** @hide */
+    public static final int MEMINFO_AVAILABLE = 19;
+    /** @hide */
+    public static final int MEMINFO_ACTIVE_ANON = 20;
+    /** @hide */
+    public static final int MEMINFO_INACTIVE_ANON = 21;
+    /** @hide */
+    public static final int MEMINFO_ACTIVE_FILE = 22;
+    /** @hide */
+    public static final int MEMINFO_INACTIVE_FILE = 23;
+    /** @hide */
+    public static final int MEMINFO_CMA_TOTAL = 24;
+    /** @hide */
+    public static final int MEMINFO_CMA_FREE = 25;
+    /** @hide */
+    public static final int MEMINFO_COUNT = 26;
 
     /**
      * Retrieves /proc/meminfo.  outSizes is filled with fields
@@ -1925,7 +2154,7 @@ public final class Debug
      *
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public static native void dumpNativeHeap(FileDescriptor fd);
 
     /**
@@ -1974,25 +2203,6 @@ public final class Debug
      * exist in the current process.
      */
     public static final native int getBinderDeathObjectCount();
-
-    /**
-     * Primes the register map cache.
-     *
-     * Only works for classes in the bootstrap class loader.  Does not
-     * cause classes to be loaded if they're not already present.
-     *
-     * The classAndMethodDesc argument is a concatentation of the VM-internal
-     * class descriptor, method name, and method descriptor.  Examples:
-     *     Landroid/os/Looper;.loop:()V
-     *     Landroid/app/ActivityThread;.main:([Ljava/lang/String;)V
-     *
-     * @param classAndMethodDesc the method to prepare
-     *
-     * @hide
-     */
-    public static final boolean cacheRegisterMap(String classAndMethodDesc) {
-        return VMDebug.cacheRegisterMap(classAndMethodDesc);
-    }
 
     /**
      * Dumps the contents of VM reference tables (e.g. JNI locals and
@@ -2370,7 +2580,7 @@ public final class Debug
     @UnsupportedAppUsage
     public static String getCallers(final int depth) {
         final StackTraceElement[] callStack = Thread.currentThread().getStackTrace();
-        StringBuffer sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder();
         for (int i = 0; i < depth; i++) {
             sb.append(getCaller(callStack, i)).append(" ");
         }
@@ -2385,7 +2595,7 @@ public final class Debug
      */
     public static String getCallers(final int start, int depth) {
         final StackTraceElement[] callStack = Thread.currentThread().getStackTrace();
-        StringBuffer sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder();
         depth += start;
         for (int i = start; i < depth; i++) {
             sb.append(getCaller(callStack, i)).append(" ");
@@ -2403,7 +2613,7 @@ public final class Debug
      */
     public static String getCallers(final int depth, String linePrefix) {
         final StackTraceElement[] callStack = Thread.currentThread().getStackTrace();
-        StringBuffer sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder();
         for (int i = 0; i < depth; i++) {
             sb.append(linePrefix).append(getCaller(callStack, i)).append("\n");
         }
@@ -2444,4 +2654,91 @@ public final class Debug
             VMDebug.attachAgent(library + "=" + options, classLoader);
         }
     }
+
+    /**
+     * Return the current free ZRAM usage in kilobytes.
+     *
+     * @hide
+     */
+    public static native long getZramFreeKb();
+
+    /**
+     * Return total memory size in kilobytes for exported DMA-BUFs or -1 if
+     * the DMA-BUF sysfs stats at /sys/kernel/dmabuf/buffers could not be read.
+     *
+     * @hide
+     */
+    public static native long getDmabufTotalExportedKb();
+
+    /**
+     * Return total memory size in kilobytes for DMA-BUFs exported from the DMA-BUF
+     * heaps frameworks or -1 in the case of an error.
+     *
+     * @hide
+     */
+    public static native long getDmabufHeapTotalExportedKb();
+
+    /**
+     * Return memory size in kilobytes allocated for ION heaps or -1 if
+     * /sys/kernel/ion/total_heaps_kb could not be read.
+     *
+     * @hide
+     */
+    public static native long getIonHeapsSizeKb();
+
+    /**
+     * Return memory size in kilobytes allocated for DMA-BUF heap pools or -1 if
+     * /sys/kernel/dma_heap/total_pools_kb could not be read.
+     *
+     * @hide
+     */
+    public static native long getDmabufHeapPoolsSizeKb();
+
+    /**
+     * Return memory size in kilobytes allocated for ION pools or -1 if
+     * /sys/kernel/ion/total_pools_kb could not be read.
+     *
+     * @hide
+     */
+    public static native long getIonPoolsSizeKb();
+
+    /**
+     * Returns the global total GPU-private memory in kB or -1 on error.
+     *
+     * @hide
+     */
+    public static native long getGpuPrivateMemoryKb();
+
+    /**
+     * Return DMA-BUF memory mapped by processes in kB.
+     * Notes:
+     *  * Warning: Might impact performance as it reads /proc/<pid>/maps files for each process.
+     *
+     * @hide
+     */
+    public static native long getDmabufMappedSizeKb();
+
+    /**
+     * Return memory size in kilobytes used by GPU.
+     *
+     * @hide
+     */
+    public static native long getGpuTotalUsageKb();
+
+    /**
+     * Return whether virtually-mapped kernel stacks are enabled (CONFIG_VMAP_STACK).
+     * Note: caller needs config_gz read sepolicy permission
+     *
+     * @hide
+     */
+    public static native boolean isVmapStack();
+
+    /**
+     * Log internal statistics about the allocator.
+     * @return true if the statistics were logged properly, false if not.
+     *
+     * @hide
+     */
+    public static native boolean logAllocatorStats();
+
 }

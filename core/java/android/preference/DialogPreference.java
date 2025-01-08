@@ -21,9 +21,9 @@ import android.annotation.CallSuper;
 import android.annotation.DrawableRes;
 import android.annotation.Nullable;
 import android.annotation.StringRes;
-import android.annotation.UnsupportedAppUsage;
 import android.app.AlertDialog;
 import android.app.Dialog;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.SharedPreferences;
@@ -36,8 +36,6 @@ import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.view.Window;
-import android.view.WindowManager;
 import android.widget.TextView;
 
 /**
@@ -51,7 +49,14 @@ import android.widget.TextView;
  * @attr ref android.R.styleable#DialogPreference_dialogLayout
  * @attr ref android.R.styleable#DialogPreference_positiveButtonText
  * @attr ref android.R.styleable#DialogPreference_negativeButtonText
+ *
+ * @deprecated Use the <a href="{@docRoot}jetpack/androidx.html">AndroidX</a>
+ *      <a href="{@docRoot}reference/androidx/preference/package-summary.html">
+ *      Preference Library</a> for consistent behavior across all devices. For more information on
+ *      using the AndroidX Preference Library see
+ *      <a href="{@docRoot}guide/topics/ui/settings.html">Settings</a>.
  */
+@Deprecated
 public abstract class DialogPreference extends Preference implements
         DialogInterface.OnClickListener, DialogInterface.OnDismissListener,
         PreferenceManager.OnActivityDestroyListener {
@@ -330,9 +335,6 @@ public abstract class DialogPreference extends Preference implements
         if (state != null) {
             dialog.onRestoreInstanceState(state);
         }
-        if (needInputMethod()) {
-            requestInputMethod(dialog);
-        }
         dialog.setOnShowListener(new DialogInterface.OnShowListener() {
             @Override
             public void onShow(DialogInterface dialog) {
@@ -370,24 +372,6 @@ public abstract class DialogPreference extends Preference implements
         if (decorView != null) {
             decorView.removeCallbacks(mDismissRunnable);
         }
-    }
-
-    /**
-     * Returns whether the preference needs to display a soft input method when the dialog
-     * is displayed. Default is false. Subclasses should override this method if they need
-     * the soft input method brought up automatically.
-     * @hide
-     */
-    protected boolean needInputMethod() {
-        return false;
-    }
-
-    /**
-     * Sets the required flags on the dialog window to enable input method window to show up.
-     */
-    private void requestInputMethod(Dialog dialog) {
-        Window window = dialog.getWindow();
-        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
     }
 
     /**
@@ -529,7 +513,7 @@ public abstract class DialogPreference extends Preference implements
             super(superState);
         }
 
-        public static final Parcelable.Creator<SavedState> CREATOR =
+        public static final @android.annotation.NonNull Parcelable.Creator<SavedState> CREATOR =
                 new Parcelable.Creator<SavedState>() {
             public SavedState createFromParcel(Parcel in) {
                 return new SavedState(in);

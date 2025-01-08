@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-
 package com.android.server.security;
 
 import android.content.Context;
@@ -23,17 +22,19 @@ import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.os.Binder;
 import android.os.RemoteException;
+import android.os.ServiceSpecificException;
 import android.os.UserHandle;
-import android.security.keymaster.KeyAttestationPackageInfo;
-import android.security.keymaster.KeyAttestationApplicationId;
-import android.security.keymaster.IKeyAttestationApplicationIdProvider;
+import android.security.keystore.IKeyAttestationApplicationIdProvider;
+import android.security.keystore.KeyAttestationApplicationId;
+import android.security.keystore.KeyAttestationPackageInfo;
+import android.security.keystore.Signature;
 
 /**
  * @hide
  * The KeyAttestationApplicationIdProviderService provides information describing the possible
  * applications identified by a UID. Due to UID sharing, this KeyAttestationApplicationId can
- * comprise information about multiple packages. The Information is used by keystore to describe
- * the initiating application of a key attestation procedure.
+ * comprise information about multiple packages. The Information is used by keystore and credstore
+ * to describe the initiating application of a key attestation procedure.
  */
 public class KeyAttestationApplicationIdProviderService
         extends IKeyAttestationApplicationIdProvider.Stub {
@@ -46,15 +47,20 @@ public class KeyAttestationApplicationIdProviderService
 
     public KeyAttestationApplicationId getKeyAttestationApplicationId(int uid)
             throws RemoteException {
-        if (Binder.getCallingUid() != android.os.Process.KEYSTORE_UID) {
-            throw new SecurityException("This service can only be used by Keystore");
+        int callingUid = Binder.getCallingUid();
+        if (callingUid != android.os.Process.KEYSTORE_UID
+                && callingUid != android.os.Process.CREDSTORE_UID) {
+            throw new SecurityException("This service can only be used by Keystore or Credstore");
         }
         KeyAttestationPackageInfo[] keyAttestationPackageInfos = null;
         final long token = Binder.clearCallingIdentity();
         try {
             String[] packageNames = mPackageManager.getPackagesForUid(uid);
             if (packageNames == null) {
-                throw new RemoteException("No packages for uid");
+                throw new ServiceSpecificException(
+                        IKeyAttestationApplicationIdProvider
+                                .ERROR_GET_ATTESTATION_APPLICATION_ID_FAILED,
+                        "No package for uid: " + uid);
             }
             int userId = UserHandle.getUserId(uid);
             keyAttestationPackageInfos = new KeyAttestationPackageInfo[packageNames.length];
@@ -62,14 +68,25 @@ public class KeyAttestationApplicationIdProviderService
             for (int i = 0; i < packageNames.length; ++i) {
                 PackageInfo packageInfo = mPackageManager.getPackageInfoAsUser(packageNames[i],
                         PackageManager.GET_SIGNATURES, userId);
-                keyAttestationPackageInfos[i] = new KeyAttestationPackageInfo(packageNames[i],
-                        packageInfo.getLongVersionCode(), packageInfo.signatures);
+                KeyAttestationPackageInfo pInfo = new KeyAttestationPackageInfo();
+                pInfo.packageName = new String(packageNames[i]);
+                pInfo.versionCode = packageInfo.getLongVersionCode();
+                pInfo.signatures = new Signature[packageInfo.signatures.length];
+                for (int index = 0; index < packageInfo.signatures.length; index++) {
+                    Signature sign = new Signature();
+                    sign.data = packageInfo.signatures[index].toByteArray();
+                    pInfo.signatures[index] = sign;
+                }
+
+                keyAttestationPackageInfos[i] = pInfo;
             }
         } catch (NameNotFoundException nnfe) {
             throw new RemoteException(nnfe.getMessage());
         } finally {
             Binder.restoreCallingIdentity(token);
         }
-        return new KeyAttestationApplicationId(keyAttestationPackageInfos);
+        KeyAttestationApplicationId attestAppId = new KeyAttestationApplicationId();
+        attestAppId.packageInfos = keyAttestationPackageInfos;
+        return attestAppId;
     }
 }

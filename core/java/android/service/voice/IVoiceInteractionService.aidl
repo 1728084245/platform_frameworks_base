@@ -16,6 +16,10 @@
 
 package android.service.voice;
 
+import android.os.Bundle;
+
+import com.android.internal.app.IVoiceActionCheckCallback;
+
 /**
  * @hide
  */
@@ -24,4 +28,9 @@ oneway interface IVoiceInteractionService {
     void soundModelsChanged();
     void shutdown();
     void launchVoiceAssistFromKeyguard();
+    void getActiveServiceSupportedActions(in List<String> voiceActions,
+     in IVoiceActionCheckCallback callback);
+    void prepareToShowSession(in Bundle args, int flags);
+    void showSessionFailed(in Bundle args);
+    void detectorRemoteExceptionOccurred(in IBinder token, int detectorType);
 }

@@ -58,13 +58,13 @@ static void throwExceptionWithRowCol(JNIEnv* env, jint row, jint column) {
     msg.appendFormat("Couldn't read row %d, col %d from CursorWindow.  "
             "Make sure the Cursor is initialized correctly before accessing data from it.",
             row, column);
-    jniThrowException(env, "java/lang/IllegalStateException", msg.string());
+    jniThrowException(env, "java/lang/IllegalStateException", msg.c_str());
 }
 
 static void throwUnknownTypeException(JNIEnv * env, jint type) {
     String8 msg;
     msg.appendFormat("UNKNOWN type %d", type);
-    jniThrowException(env, "java/lang/IllegalStateException", msg.string());
+    jniThrowException(env, "java/lang/IllegalStateException", msg.c_str());
 }
 
 static int getFdCount() {
@@ -84,21 +84,31 @@ static int getFdCount() {
 }
 
 static jlong nativeCreate(JNIEnv* env, jclass clazz, jstring nameObj, jint cursorWindowSize) {
+    status_t status;
     String8 name;
+    CursorWindow* window;
+
     const char* nameStr = env->GetStringUTFChars(nameObj, NULL);
-    name.setTo(nameStr);
+    name = nameStr;
     env->ReleaseStringUTFChars(nameObj, nameStr);
 
-    CursorWindow* window;
-    status_t status = CursorWindow::create(name, cursorWindowSize, &window);
+    if (cursorWindowSize < 0) {
+        status = INVALID_OPERATION;
+        goto fail;
+    }
+    status = CursorWindow::create(name, cursorWindowSize, &window);
     if (status || !window) {
-        ALOGE("Could not allocate CursorWindow '%s' of size %d due to error %d.",
-                name.string(), cursorWindowSize, status);
-        return 0;
+        goto fail;
     }
 
     LOG_WINDOW("nativeInitializeEmpty: window = %p", window);
     return reinterpret_cast<jlong>(window);
+
+fail:
+    jniThrowExceptionFmt(env, "android/database/CursorWindowAllocationException",
+                         "Could not allocate CursorWindow '%s' of size %d due to error %d.",
+                         name.c_str(), cursorWindowSize, status);
+    return 0;
 }
 
 static jlong nativeCreateFromParcel(JNIEnv* env, jclass clazz, jobject parcelObj) {
@@ -107,7 +117,9 @@ static jlong nativeCreateFromParcel(JNIEnv* env, jclass clazz, jobject parcelObj
     CursorWindow* window;
     status_t status = CursorWindow::createFromParcel(parcel, &window);
     if (status || !window) {
-        ALOGE("Could not create CursorWindow from Parcel due to error %d, process fd count=%d",
+        jniThrowExceptionFmt(env,
+                "android/database/CursorWindowAllocationException",
+                "Could not create CursorWindow from Parcel due to error %d, process fd count=%d",
                 status, getFdCount());
         return 0;
     }
@@ -127,7 +139,7 @@ static void nativeDispose(JNIEnv* env, jclass clazz, jlong windowPtr) {
 
 static jstring nativeGetName(JNIEnv* env, jclass clazz, jlong windowPtr) {
     CursorWindow* window = reinterpret_cast<CursorWindow*>(windowPtr);
-    return env->NewStringUTF(window->name().string());
+    return env->NewStringUTF(window->name().c_str());
 }
 
 static void nativeWriteToParcel(JNIEnv * env, jclass clazz, jlong windowPtr,
@@ -139,7 +151,7 @@ static void nativeWriteToParcel(JNIEnv * env, jclass clazz, jlong windowPtr,
     if (status) {
         String8 msg;
         msg.appendFormat("Could not write CursorWindow to Parcel due to error %d.", status);
-        jniThrowRuntimeException(env, msg.string());
+        jniThrowRuntimeException(env, msg.c_str());
     }
 }
 
@@ -255,7 +267,7 @@ static jstring nativeGetString(JNIEnv* env, jclass clazz, jlong windowPtr,
         // doesn't like UTF-8 strings with high codepoints.  It actually expects
         // Modified UTF-8 with encoded surrogate pairs.
         String16 utf16(value, sizeIncludingNull - 1);
-        return env->NewString(reinterpret_cast<const jchar*>(utf16.string()), utf16.size());
+        return env->NewString(reinterpret_cast<const jchar*>(utf16.c_str()), utf16.size());
     } else if (type == CursorWindow::FIELD_TYPE_INTEGER) {
         int64_t value = window->getFieldSlotValueLong(fieldSlot);
         char buf[32];
@@ -462,7 +474,7 @@ static jboolean nativePutString(JNIEnv* env, jclass clazz, jlong windowPtr,
         return false;
     }
 
-    LOG_WINDOW("%d,%d is TEXT with %u bytes", row, column, sizeIncludingNull);
+    LOG_WINDOW("%d,%d is TEXT with %zu bytes", row, column, sizeIncludingNull);
     return true;
 }
 
@@ -476,7 +488,7 @@ static jboolean nativePutLong(JNIEnv* env, jclass clazz, jlong windowPtr,
         return false;
     }
 
-    LOG_WINDOW("%d,%d is INTEGER 0x%016llx", row, column, value);
+    LOG_WINDOW("%d,%d is INTEGER %" PRId64, row, column, value);
     return true;
 }
 

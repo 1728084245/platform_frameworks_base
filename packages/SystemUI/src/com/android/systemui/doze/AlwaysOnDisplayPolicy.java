@@ -28,12 +28,16 @@ import android.text.format.DateUtils;
 import android.util.KeyValueListParser;
 import android.util.Log;
 
-import com.android.systemui.R;
+import com.android.systemui.dagger.SysUISingleton;
+import com.android.systemui.res.R;
+
+import javax.inject.Inject;
 
 /**
  * Class to store the policy for AOD, which comes from
  * {@link android.provider.Settings.Global}
  */
+@SysUISingleton
 public class AlwaysOnDisplayPolicy {
     public static final String TAG = "AlwaysOnDisplayPolicy";
 
@@ -51,8 +55,31 @@ public class AlwaysOnDisplayPolicy {
     static final String KEY_WALLPAPER_VISIBILITY_MS = "wallpaper_visibility_timeout";
     static final String KEY_WALLPAPER_FADE_OUT_MS = "wallpaper_fade_out_duration";
 
+
     /**
-     * Integer array to map ambient brightness type to real screen brightness.
+     * Integer in the scale [1, 255] used to dim the screen while dozing.
+     *
+     * @see R.integer.config_screenBrightnessDoze
+     */
+    public int defaultDozeBrightness;
+
+    /**
+     * Integer in the scale [1, 255] used to dim the screen just before the screen turns off.
+     *
+     * @see R.integer.config_screenBrightnessDim
+     */
+    public int dimBrightness;
+
+    /**
+     * Float in the scale [0, 1] used to dim the screen just before the screen turns off.
+     *
+     * @see R.integer.config_screenBrightnessDimFloat
+     */
+    public float dimBrightnessFloat;
+
+    /**
+     * Integer array to map ambient brightness type to real screen brightness in the integer scale
+     * [1, 255].
      *
      * @see Settings.Global#ALWAYS_ON_DISPLAY_CONSTANTS
      * @see #KEY_SCREEN_BRIGHTNESS_ARRAY
@@ -115,6 +142,7 @@ public class AlwaysOnDisplayPolicy {
     private final Context mContext;
     private SettingsObserver mSettingsObserver;
 
+    @Inject
     public AlwaysOnDisplayPolicy(Context context) {
         context = context.getApplicationContext();
         mContext = context;
@@ -165,6 +193,12 @@ public class AlwaysOnDisplayPolicy {
                         DEFAULT_WALLPAPER_FADE_OUT_MS);
                 wallpaperVisibilityDuration = mParser.getLong(KEY_WALLPAPER_VISIBILITY_MS,
                         DEFAULT_WALLPAPER_VISIBILITY_MS);
+                defaultDozeBrightness = resources.getInteger(
+                        com.android.internal.R.integer.config_screenBrightnessDoze);
+                dimBrightness = resources.getInteger(
+                        com.android.internal.R.integer.config_screenBrightnessDim);
+                dimBrightnessFloat = resources.getFloat(
+                        com.android.internal.R.dimen.config_screenBrightnessDimFloat);
                 screenBrightnessArray = mParser.getIntArray(KEY_SCREEN_BRIGHTNESS_ARRAY,
                         resources.getIntArray(
                                 R.array.config_doze_brightness_sensor_to_brightness));

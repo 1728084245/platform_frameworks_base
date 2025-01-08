@@ -16,7 +16,7 @@
 
 package com.android.internal.os;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.util.Log;
 
 /**
@@ -24,6 +24,7 @@ import android.util.Log;
  *
  * {@hide}
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 class AndroidPrintStream extends LoggingPrintStream {
 
     private final int priority;

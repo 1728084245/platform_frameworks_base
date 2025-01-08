@@ -257,7 +257,17 @@ jobject JHwBlob::NewObject(JNIEnv *env, size_t size) {
     // XXX Again cannot refer to gFields.constructID because InitClass may
     // not have been called yet.
 
-    return env->NewObject(clazz.get(), constructID, size);
+    // Cases:
+    // - this originates from another process (something so large should not fit
+    //   in the binder buffer, and it should be rejected by the binder driver)
+    // - if this is used in process, this code makes too many heap copies (in
+    //   order to retrofit HIDL's scatter-gather format to java types) to
+    //   justify passing such a large amount of data over this path. So the
+    //   alternative (updating the constructor and other code to accept other
+    //   types, should also probably not be taken in this case).
+    CHECK_LE(size, static_cast<size_t>(std::numeric_limits<jint>::max()));
+
+    return env->NewObject(clazz.get(), constructID, static_cast<jint>(size));
 }
 
 }  // namespace android
@@ -338,6 +348,14 @@ static jstring JHwBlob_native_getString(
     }
 
     return env->NewStringUTF(s->c_str());
+}
+
+static jlong JHwBlob_native_getFieldHandle(JNIEnv* env,
+                                           jobject thiz,
+                                           jlong offset) {
+    sp<JHwBlob> blob = JHwBlob::GetNativeContext(env, thiz);
+
+    return reinterpret_cast<jlong>(blob->data()) + offset;
 }
 
 #define DEFINE_BLOB_ARRAY_COPIER(Suffix,Type,NewType)                          \
@@ -593,6 +611,7 @@ static JNINativeMethod gMethods[] = {
     { "getFloat", "(J)F", (void *)JHwBlob_native_getFloat },
     { "getDouble", "(J)D", (void *)JHwBlob_native_getDouble },
     { "getString", "(J)Ljava/lang/String;", (void *)JHwBlob_native_getString },
+    { "getFieldHandle", "(J)J", (void*) JHwBlob_native_getFieldHandle},
 
     { "copyToBoolArray", "(J[ZI)V", (void *)JHwBlob_native_copyToBoolArray },
     { "copyToInt8Array", "(J[BI)V", (void *)JHwBlob_native_copyToInt8Array },

@@ -18,13 +18,15 @@ package com.android.server.broadcastradio.hal1;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.util.Slog;
+
+import com.android.server.utils.Slogf;
 
 import java.util.Map;
 import java.util.Set;
 
-class Convert {
-    private static final String TAG = "BroadcastRadioService.Convert";
+final class Convert {
+
+    private static final String TAG = "BcRadio1Srv.Convert";
 
     /**
      * Converts string map to an array that's easily accessible by native code.
@@ -33,12 +35,12 @@ class Convert {
      * side, which requires several separate java calls for each element.
      *
      * @param map map to convert.
-     * @returns array (sized the same as map) of two-element string arrays
-     *          (first element is the key, second is value).
+     * @return array (sized the same as map) of two-element string arrays
+     *         (first element is the key, second is value).
      */
     static @NonNull String[][] stringMapToNative(@Nullable Map<String, String> map) {
         if (map == null) {
-            Slog.v(TAG, "map is null, returning zero-elements array");
+            Slogf.v(TAG, "map is null, returning zero-elements array");
             return new String[0][0];
         }
 
@@ -53,7 +55,7 @@ class Convert {
             i++;
         }
 
-        Slog.v(TAG, "converted " + i + " element(s)");
+        Slogf.v(TAG, "converted " + i + " element(s)");
         return arr;
     }
 }

@@ -18,14 +18,20 @@ package com.android.settingslib.utils;
 import android.os.Handler;
 import android.os.Looper;
 
-import java.util.concurrent.ExecutorService;
+import androidx.annotation.NonNull;
+
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.ListeningExecutorService;
+import com.google.common.util.concurrent.MoreExecutors;
+
+import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
 
 public class ThreadUtils {
 
     private static volatile Thread sMainThread;
     private static volatile Handler sMainThreadHandler;
-    private static volatile ExecutorService sSingleThreadExecutor;
+    private static volatile ListeningExecutorService sListeningService;
 
     /**
      * Returns true if the current thread is the UI thread.
@@ -40,6 +46,7 @@ public class ThreadUtils {
     /**
      * Returns a shared UI thread handler.
      */
+    @NonNull
     public static Handler getUiThreadHandler() {
         if (sMainThreadHandler == null) {
             sMainThreadHandler = new Handler(Looper.getMainLooper());
@@ -59,19 +66,48 @@ public class ThreadUtils {
 
     /**
      * Posts runnable in background using shared background thread pool.
+     *
+     * @return A future of the task that can be monitored for updates or cancelled.
      */
-    public static void postOnBackgroundThread(Runnable runnable) {
-        if (sSingleThreadExecutor == null) {
-            sSingleThreadExecutor = Executors.newSingleThreadExecutor();
-        }
-        sSingleThreadExecutor.execute(runnable);
+    @SuppressWarnings("rawtypes")
+    @NonNull
+    public static ListenableFuture postOnBackgroundThread(@NonNull Runnable runnable) {
+        return getBackgroundExecutor().submit(runnable);
+    }
+
+    /**
+     * Posts callable in background using shared background thread pool.
+     *
+     * @return A future of the task that can be monitored for updates or cancelled.
+     */
+    @NonNull
+    public static <T> ListenableFuture<T> postOnBackgroundThread(@NonNull Callable<T> callable) {
+        return getBackgroundExecutor().submit(callable);
     }
 
     /**
      * Posts the runnable on the main thread.
+     *
+     * @deprecated moving work to the main thread should be done via the main executor provided to
+     * {@link com.google.common.util.concurrent.FutureCallback} via
+     * {@link android.content.Context#getMainExecutor()} or by calling an SDK method such as
+     * {@link android.app.Activity#runOnUiThread(Runnable)} or
+     * {@link android.content.Context#getMainThreadHandler()} where appropriate.
      */
-    public static void postOnMainThread(Runnable runnable) {
+    @Deprecated
+    public static void postOnMainThread(@NonNull Runnable runnable) {
         getUiThreadHandler().post(runnable);
     }
 
+    /**
+     * Provides a shared {@link ListeningExecutorService} created using a fixed thread pool executor
+     */
+    @NonNull
+    public static synchronized ListeningExecutorService getBackgroundExecutor() {
+        if (sListeningService == null) {
+            sListeningService = MoreExecutors.listeningDecorator(Executors.newFixedThreadPool(
+                    Runtime.getRuntime().availableProcessors()));
+        }
+        return sListeningService;
+    }
 }

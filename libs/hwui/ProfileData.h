@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "Properties.h"
 #include "utils/Macros.h"
 
 #include <utils/Timers.h>
@@ -34,6 +35,7 @@ enum JankType {
     kSlowSync,
     kSlowRT,
     kMissedDeadline,
+    kMissedDeadlineLegacy,
 
     // must be last
     NUM_BUCKETS,
@@ -54,30 +56,41 @@ public:
     void mergeWith(const ProfileData& other);
     void dump(int fd) const;
     uint32_t findPercentile(int percentile) const;
+    uint32_t findGPUPercentile(int percentile) const;
 
     void reportFrame(int64_t duration);
+    void reportGPUFrame(int64_t duration);
     void reportJank() { mJankFrameCount++; }
+    void reportJankLegacy() { mJankLegacyFrameCount++; }
     void reportJankType(JankType type) { mJankTypeCounts[static_cast<int>(type)]++; }
 
     uint32_t totalFrameCount() const { return mTotalFrameCount; }
     uint32_t jankFrameCount() const { return mJankFrameCount; }
+    uint32_t jankLegacyFrameCount() const { return mJankLegacyFrameCount; }
     nsecs_t statsStartTime() const { return mStatStartTime; }
     uint32_t jankTypeCount(JankType type) const { return mJankTypeCounts[static_cast<int>(type)]; }
+    RenderPipelineType pipelineType() const { return mPipelineType; }
 
     struct HistogramEntry {
         uint32_t renderTimeMs;
         uint32_t frameCount;
     };
     void histogramForEach(const std::function<void(HistogramEntry)>& callback) const;
+    void histogramGPUForEach(const std::function<void(HistogramEntry)>& callback) const;
 
     constexpr static int HistogramSize() {
         return std::tuple_size<decltype(ProfileData::mFrameCounts)>::value +
                std::tuple_size<decltype(ProfileData::mSlowFrameCounts)>::value;
     }
 
+    constexpr static int GPUHistogramSize() {
+        return std::tuple_size<decltype(ProfileData::mGPUFrameCounts)>::value;
+    }
+
     // Visible for testing
     static uint32_t frameTimeForFrameCountIndex(uint32_t index);
     static uint32_t frameTimeForSlowFrameCountIndex(uint32_t index);
+    static uint32_t GPUFrameTimeForFrameCountIndex(uint32_t index);
 
 private:
     // Open our guts up to unit tests
@@ -88,10 +101,17 @@ private:
     std::array<uint32_t, 57> mFrameCounts;
     // Holds a histogram of frame times in 50ms increments from 150ms to 5s
     std::array<uint16_t, 97> mSlowFrameCounts;
+    // Holds a histogram of GPU draw times in 1ms increments. Frames longer than 25ms are placed in
+    // last bucket.
+    std::array<uint32_t, 26> mGPUFrameCounts;
 
     uint32_t mTotalFrameCount;
     uint32_t mJankFrameCount;
+    uint32_t mJankLegacyFrameCount;
     nsecs_t mStatStartTime;
+
+    // true if HWUI renders with Vulkan pipeline
+    RenderPipelineType mPipelineType;
 };
 
 // For testing

@@ -28,6 +28,17 @@
         ]]> appears at the top of your screen when VPN is active.
     </string>
 
+    <!-- TV specific dialog message to warn about the risk of using a VPN application. [CHAR LIMIT=NONE] -->
+    <string name="warning" product="tv">
+      <xliff:g id="app">%s</xliff:g> wants to set up a VPN connection
+        that allows it to monitor network traffic. Only accept if you trust the source.
+        <![CDATA[
+        <br />
+        <br />
+        <img src="vpn_icon" />
+        ]]> appears on your screen when VPN is active.
+    </string>
+
     <!-- Dialog title for built-in VPN. [CHAR LIMIT=40]  -->
     <string name="legacy_title">VPN is connected</string>
     <!-- Label for the name of the current VPN session. [CHAR LIMIT=20] -->
@@ -88,5 +99,34 @@
     <!-- This is the label of a button in a dialog. The button lets the user dismiss the dialog
          without any consequences. [CHAR LIMIT=20] -->
     <string name="dismiss">Dismiss</string>
+
+    <!-- Malicious VPN apps may provide very long labels or cunning HTML to trick the system dialogs
+         into displaying what they want. The system will attempt to sanitize the label, and if the
+         label is deemed dangerous, then this string is used instead. The first argument is the
+         first 30 characters of the label, and the second argument is the package name of the app.
+         Example : Normally a VPN app may be called "My VPN app" in which case the dialog will read
+         "My VPN app wants to set up a VPN connection...". If the label is very long, then, this
+         will be used to show "VerylongVPNlabel… (com.my.vpn.app) wants to set up a VPN
+         connection...". For this case, the code will refer to sanitized_vpn_label_with_ellipsis.
+    -->
+    <string name="sanitized_vpn_label_with_ellipsis">
+        <xliff:g id="sanitized_vpn_label_with_ellipsis" example="My VPN app">%1$s</xliff:g>… (
+        <xliff:g id="sanitized_vpn_label_with_ellipsis" example="com.my.vpn.app">%2$s</xliff:g>)
+    </string>
+
+    <!-- Malicious VPN apps may provide very long labels or cunning HTML to trick the system dialogs
+         into displaying what they want. The system will attempt to sanitize the label, and if the
+         label is deemed dangerous, then this string is used instead. The first argument is the
+         label, and the second argument is the package name of the app.
+         Example : Normally a VPN app may be called "My VPN app" in which case the dialog will read
+         "My VPN app wants to set up a VPN connection...". If the VPN label contains HTML tag but
+         the length is not very long, the dialog will show "VpnLabelWith&lt;br&gt;HtmlTag
+         (com.my.vpn.app) wants to set up a VPN connection...". For this case, the code will refer
+         to sanitized_vpn_label.
+    -->
+    <string name="sanitized_vpn_label">
+        <xliff:g id="sanitized_vpn_label" example="My VPN app">%1$s</xliff:g> (
+        <xliff:g id="sanitized_vpn_label" example="com.my.vpn.app">%2$s</xliff:g>)
+    </string>
 
 </resources>

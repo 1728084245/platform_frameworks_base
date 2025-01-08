@@ -19,15 +19,31 @@ package com.android.systemui;
 import android.app.Service;
 import android.content.Intent;
 import android.os.IBinder;
+import android.util.Log;
 
-import java.io.FileDescriptor;
-import java.io.PrintWriter;
+import com.android.systemui.process.ProcessWrapper;
+
+import javax.inject.Inject;
 
 public class SystemUISecondaryUserService extends Service {
+
+    private static final String TAG = "SysUISecondaryService";
+
+    private final ProcessWrapper mProcessWrapper;
+
+    @Inject
+    SystemUISecondaryUserService(ProcessWrapper processWrapper) {
+        mProcessWrapper = processWrapper;
+    }
 
     @Override
     public void onCreate() {
         super.onCreate();
+        if (mProcessWrapper.isSystemUser()) {
+            Log.w(TAG, "SecondaryServices started for System User. Stopping it.");
+            stopSelf();
+            return;
+        }
         ((SystemUIApplication) getApplication()).startSecondaryUserServicesIfNeeded();
     }
 
@@ -35,28 +51,4 @@ public class SystemUISecondaryUserService extends Service {
     public IBinder onBind(Intent intent) {
         return null;
     }
-
-    @Override
-    protected void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
-        SystemUI[] services = ((SystemUIApplication) getApplication()).getServices();
-        if (args == null || args.length == 0) {
-            for (SystemUI ui: services) {
-                if (ui != null) {
-                    pw.println("dumping service: " + ui.getClass().getName());
-                    ui.dump(fd, pw, args);
-                }
-            }
-        } else {
-            String svc = args[0];
-            for (SystemUI ui: services) {
-                if (ui != null) {
-                    String name = ui.getClass().getName();
-                    if (name.endsWith(svc)) {
-                        ui.dump(fd, pw, args);
-                    }
-                }
-            }
-        }
-    }
 }
-

@@ -16,10 +16,14 @@
 
 package android.util;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
+import android.os.SystemClock;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -28,15 +32,29 @@ import java.util.Iterator;
 /**
  * @hide
  */
+// Exported to Mainline modules; cannot use annotations
+// @android.ravenwood.annotation.RavenwoodKeepWholeClass
 public final class LocalLog {
 
     private final Deque<String> mLog;
     private final int mMaxLines;
 
+    /**
+     * {@code true} to use log timestamps expressed in local date/time, {@code false} to use log
+     * timestamped expressed with the elapsed realtime clock and UTC system clock. {@code false} is
+     * useful when logging behavior that modifies device time zone or system clock.
+     */
+    private final boolean mUseLocalTimestamps;
+
     @UnsupportedAppUsage
     public LocalLog(int maxLines) {
+        this(maxLines, true /* useLocalTimestamps */);
+    }
+
+    public LocalLog(int maxLines, boolean useLocalTimestamps) {
         mMaxLines = Math.max(0, maxLines);
         mLog = new ArrayDeque<>(mMaxLines);
+        mUseLocalTimestamps = useLocalTimestamps;
     }
 
     @UnsupportedAppUsage
@@ -44,7 +62,14 @@ public final class LocalLog {
         if (mMaxLines <= 0) {
             return;
         }
-        append(String.format("%s - %s", LocalDateTime.now(), msg));
+        final String logLine;
+        if (mUseLocalTimestamps) {
+            logLine = LocalDateTime.now() + " - " + msg;
+        } else {
+            logLine = Duration.ofMillis(SystemClock.elapsedRealtime())
+                    + " / " + Instant.now() + " - " + msg;
+        }
+        append(logLine);
     }
 
     private synchronized void append(String logLine) {
@@ -60,9 +85,19 @@ public final class LocalLog {
     }
 
     public synchronized void dump(PrintWriter pw) {
+        dump("", pw);
+    }
+
+    /**
+     * Dumps the content of local log to print writer with each log entry predeced with indent
+     *
+     * @param indent indent that precedes each log entry
+     * @param pw printer writer to write into
+     */
+    public synchronized void dump(String indent, PrintWriter pw) {
         Iterator<String> itr = mLog.iterator();
         while (itr.hasNext()) {
-            pw.println(itr.next());
+            pw.printf("%s%s\n", indent, itr.next());
         }
     }
 
@@ -77,12 +112,17 @@ public final class LocalLog {
         }
     }
 
+    // @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    public synchronized void clear() {
+        mLog.clear();
+    }
+
     public static class ReadOnlyLocalLog {
         private final LocalLog mLog;
         ReadOnlyLocalLog(LocalLog log) {
             mLog = log;
         }
-        @UnsupportedAppUsage
+        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
         public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
             mLog.dump(pw);
         }
@@ -97,7 +137,7 @@ public final class LocalLog {
         }
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public ReadOnlyLocalLog readOnlyLocalLog() {
         return new ReadOnlyLocalLog(this);
     }

@@ -20,9 +20,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import android.app.PropertyInvalidatedCache;
 import android.content.pm.UserInfo;
 import android.os.Looper;
-import android.os.UserManagerInternal;
+import android.platform.test.annotations.Postsubmit;
 
 import androidx.test.InstrumentationRegistry;
 import androidx.test.filters.MediumTest;
@@ -45,6 +46,7 @@ import java.util.LinkedHashSet;
  * -w com.android.frameworks.servicestests/androidx.test.runner.AndroidJUnitRunner
  * </pre>
  */
+@Postsubmit
 @RunWith(AndroidJUnit4.class)
 @MediumTest
 public class UserManagerServiceIdRecyclingTest {
@@ -57,6 +59,9 @@ public class UserManagerServiceIdRecyclingTest {
         if (Looper.myLooper() == null) {
             Looper.prepare();
         }
+        // Disable binder caches in this process.
+        PropertyInvalidatedCache.disableForTestMode();
+
         LocalServices.removeServiceForTest(UserManagerInternal.class);
         mUserManagerService = new UserManagerService(InstrumentationRegistry.getContext());
     }
@@ -106,7 +111,7 @@ public class UserManagerServiceIdRecyclingTest {
 
     private void removeUser(int userId) {
         mUserManagerService.removeUserInfo(userId);
-        mUserManagerService.addRemovingUserIdLocked(userId);
+        mUserManagerService.addRemovingUserId(userId);
     }
 
     private void assertNoNextIdAvailable(String message) {
@@ -122,4 +127,3 @@ public class UserManagerServiceIdRecyclingTest {
         return new UserInfo(userId, "User " + userId, 0);
     }
 }
-

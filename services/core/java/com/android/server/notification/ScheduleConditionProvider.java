@@ -20,7 +20,6 @@ import android.app.ActivityManager;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -28,7 +27,6 @@ import android.net.Uri;
 import android.os.Binder;
 import android.provider.Settings;
 import android.service.notification.Condition;
-import android.service.notification.IConditionProvider;
 import android.service.notification.ScheduleCalendar;
 import android.service.notification.ZenModeConfig;
 import android.text.TextUtils;
@@ -40,6 +38,7 @@ import android.util.Slog;
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.notification.NotificationManagerService.DumpFilter;
+import com.android.server.pm.PackageManagerService;
 
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -53,8 +52,6 @@ public class ScheduleConditionProvider extends SystemConditionProviderService {
     static final String TAG = "ConditionProviders.SCP";
     static final boolean DEBUG = true || Log.isLoggable("ConditionProviders", Log.DEBUG);
 
-    public static final ComponentName COMPONENT =
-            new ComponentName("android", ScheduleConditionProvider.class.getName());
     private static final String NOT_SHOWN = "...";
     private static final String SIMPLE_NAME = ScheduleConditionProvider.class.getSimpleName();
     private static final String ACTION_EVALUATE =  SIMPLE_NAME + ".EVALUATE";
@@ -65,7 +62,8 @@ public class ScheduleConditionProvider extends SystemConditionProviderService {
 
     private final Context mContext = this;
     private final ArrayMap<Uri, ScheduleCalendar> mSubscriptions = new ArrayMap<>();
-    private ArraySet<Uri> mSnoozedForAlarm = new ArraySet<>();
+    @GuardedBy("mSnoozedForAlarm")
+    private final ArraySet<Uri> mSnoozedForAlarm = new ArraySet<>();
 
     private AlarmManager mAlarmManager;
     private boolean mConnected;
@@ -74,11 +72,6 @@ public class ScheduleConditionProvider extends SystemConditionProviderService {
 
     public ScheduleConditionProvider() {
         if (DEBUG) Slog.d(TAG, "new " + SIMPLE_NAME + "()");
-    }
-
-    @Override
-    public ComponentName getComponent() {
-        return COMPONENT;
     }
 
     @Override
@@ -102,7 +95,10 @@ public class ScheduleConditionProvider extends SystemConditionProviderService {
                 pw.println(mSubscriptions.get(conditionId).toString());
             }
         }
-        pw.println("      snoozed due to alarm: " + TextUtils.join(SEPARATOR, mSnoozedForAlarm));
+        synchronized (mSnoozedForAlarm) {
+            pw.println(
+                    "      snoozed due to alarm: " + TextUtils.join(SEPARATOR, mSnoozedForAlarm));
+        }
         dumpUpcomingTime(pw, "mNextAlarmTime", mNextAlarmTime, now);
     }
 
@@ -146,16 +142,6 @@ public class ScheduleConditionProvider extends SystemConditionProviderService {
         }
         removeSnoozed(conditionId);
         evaluateSubscriptions();
-    }
-
-    @Override
-    public void attachBase(Context base) {
-        attachBaseContext(base);
-    }
-
-    @Override
-    public IConditionProvider asInterface() {
-        return (IConditionProvider) onBind(null);
     }
 
     private void evaluateSubscriptions() {
@@ -218,12 +204,7 @@ public class ScheduleConditionProvider extends SystemConditionProviderService {
 
     private void updateAlarm(long now, long time) {
         final AlarmManager alarms = (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
-        final PendingIntent pendingIntent = PendingIntent.getBroadcast(mContext,
-                REQUEST_CODE_EVALUATE,
-                new Intent(ACTION_EVALUATE)
-                        .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                        .putExtra(EXTRA_TIME, time),
-                PendingIntent.FLAG_UPDATE_CURRENT);
+        final PendingIntent pendingIntent = getPendingIntent(time);
         alarms.cancel(pendingIntent);
         if (time > now) {
             if (DEBUG) Slog.d(TAG, String.format("Scheduling evaluate for %s, in %s, now=%s",
@@ -232,6 +213,17 @@ public class ScheduleConditionProvider extends SystemConditionProviderService {
         } else {
             if (DEBUG) Slog.d(TAG, "Not scheduling evaluate");
         }
+    }
+
+    @VisibleForTesting
+    PendingIntent getPendingIntent(long time) {
+        return PendingIntent.getBroadcast(mContext,
+                REQUEST_CODE_EVALUATE,
+                new Intent(ACTION_EVALUATE)
+                        .setPackage(PackageManagerService.PLATFORM_PACKAGE_NAME)
+                        .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                        .putExtra(EXTRA_TIME, time),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
     public long getNextAlarm() {
@@ -254,7 +246,8 @@ public class ScheduleConditionProvider extends SystemConditionProviderService {
             filter.addAction(Intent.ACTION_TIMEZONE_CHANGED);
             filter.addAction(ACTION_EVALUATE);
             filter.addAction(AlarmManager.ACTION_NEXT_ALARM_CLOCK_CHANGED);
-            registerReceiver(mReceiver, filter);
+            registerReceiver(mReceiver, filter,
+                    Context.RECEIVER_EXPORTED_UNAUDITED);
         } else {
             unregisterReceiver(mReceiver);
         }
@@ -291,6 +284,7 @@ public class ScheduleConditionProvider extends SystemConditionProviderService {
         }
     }
 
+    @GuardedBy("mSnoozedForAlarm")
     private void saveSnoozedLocked() {
         final String setting = TextUtils.join(SEPARATOR, mSnoozedForAlarm);
         final int currentUser = ActivityManager.getCurrentUser();
@@ -302,7 +296,7 @@ public class ScheduleConditionProvider extends SystemConditionProviderService {
 
     private void readSnoozed() {
         synchronized (mSnoozedForAlarm) {
-            long identity = Binder.clearCallingIdentity();
+            final long identity = Binder.clearCallingIdentity();
             try {
                 final String setting = Settings.Secure.getStringForUser(
                         mContext.getContentResolver(),

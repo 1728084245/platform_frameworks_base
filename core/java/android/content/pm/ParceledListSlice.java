@@ -16,7 +16,7 @@
 
 package android.content.pm;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
@@ -62,7 +62,7 @@ public class ParceledListSlice<T extends Parcelable> extends BaseParceledListSli
     }
 
     @Override
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     protected void writeParcelableCreator(T parcelable, Parcel dest) {
         dest.writeParcelableCreator((Parcelable) parcelable);
     }

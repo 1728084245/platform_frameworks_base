@@ -16,7 +16,8 @@
 
 package android.security.keymaster;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
 
@@ -32,7 +33,7 @@ public class KeyCharacteristics implements Parcelable {
     public KeymasterArguments swEnforced;
     public KeymasterArguments hwEnforced;
 
-    public static final Parcelable.Creator<KeyCharacteristics> CREATOR =
+    public static final @android.annotation.NonNull Parcelable.Creator<KeyCharacteristics> CREATOR =
             new Parcelable.Creator<KeyCharacteristics>() {
                 @Override
                 public KeyCharacteristics createFromParcel(Parcel in) {
@@ -45,7 +46,7 @@ public class KeyCharacteristics implements Parcelable {
                 }
             };
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public KeyCharacteristics() {}
 
     protected KeyCharacteristics(Parcel in) {
@@ -71,7 +72,7 @@ public class KeyCharacteristics implements Parcelable {
         hwEnforced.writeToParcel(out, flags);
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void readFromParcel(Parcel in) {
         swEnforced = KeymasterArguments.CREATOR.createFromParcel(in);
         hwEnforced = KeymasterArguments.CREATOR.createFromParcel(in);

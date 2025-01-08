@@ -21,7 +21,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.RemoteException;
 
-import com.android.systemui.statusbar.policy.DataSaverController.Listener;
+import androidx.annotation.NonNull;
 
 import java.util.ArrayList;
 
@@ -36,14 +36,17 @@ public class DataSaverControllerImpl implements DataSaverController {
     }
 
     private void handleRestrictBackgroundChanged(boolean isDataSaving) {
+        ArrayList<DataSaverController.Listener> copy;
         synchronized (mListeners) {
-            for (int i = 0; i < mListeners.size(); i++) {
-                mListeners.get(i).onDataSaverChanged(isDataSaving);
-            }
+            copy = new ArrayList<>(mListeners);
+        }
+        for (int i = 0; i < copy.size(); i++) {
+            copy.get(i).onDataSaverChanged(isDataSaving);
         }
     }
 
-    public void addCallback(Listener listener) {
+    @Override
+    public void addCallback(@NonNull Listener listener) {
         synchronized (mListeners) {
             mListeners.add(listener);
             if (mListeners.size() == 1) {
@@ -53,7 +56,8 @@ public class DataSaverControllerImpl implements DataSaverController {
         listener.onDataSaverChanged(isDataSaverEnabled());
     }
 
-    public void removeCallback(Listener listener) {
+    @Override
+    public void removeCallback(@NonNull Listener listener) {
         synchronized (mListeners) {
             mListeners.remove(listener);
             if (mListeners.size() == 0) {

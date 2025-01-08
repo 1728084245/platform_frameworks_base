@@ -17,19 +17,16 @@
 package android.sax;
 
 import android.graphics.Bitmap;
-import android.sax.Element;
-import android.sax.ElementListener;
-import android.sax.EndTextElementListener;
-import android.sax.RootElement;
-import android.sax.StartElementListener;
-import android.sax.TextElementListener;
 import android.test.AndroidTestCase;
-import android.test.suitebuilder.annotation.LargeTest;
-import android.test.suitebuilder.annotation.SmallTest;
-import android.text.format.Time;
 import android.util.Log;
 import android.util.Xml;
+
+import androidx.test.filters.LargeTest;
+import androidx.test.filters.SmallTest;
+
+import com.android.frameworks.saxtests.R;
 import com.android.internal.util.XmlUtils;
+
 import org.xml.sax.Attributes;
 import org.xml.sax.ContentHandler;
 import org.xml.sax.SAXException;
@@ -39,8 +36,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-
-import com.android.frameworks.saxtests.R;
+import java.time.Instant;
 
 public class SafeSaxTest extends AndroidTestCase {
 
@@ -225,8 +221,7 @@ public class SafeSaxTest extends AndroidTestCase {
                     .setEndTextElementListener(new EndTextElementListener() {
                         public void end(String body) {
                             // TODO(tomtaylor): programmatically get the timezone
-                            video.dateAdded = new Time(Time.TIMEZONE_UTC);
-                            video.dateAdded.parse3339(body);
+                            video.dateAdded = Instant.parse(body);
                         }
                     });
 
@@ -472,8 +467,7 @@ public class SafeSaxTest extends AndroidTestCase {
             if (uri.equals(ATOM_NAMESPACE)) {
                 if (localName.equals("published")) {
                     // TODO(tomtaylor): programmatically get the timezone
-                    video.dateAdded = new Time(Time.TIMEZONE_UTC);
-                    video.dateAdded.parse3339(takeText());
+                    video.dateAdded = Instant.parse(takeText());
                     return;
                 }
 
@@ -532,7 +526,7 @@ public class SafeSaxTest extends AndroidTestCase {
         public float rating;       // ranges from 0.0 to 5.0
         public Boolean triedToLoadThumbnail;
         public String authorName;
-        public Time dateAdded;
+        public Instant dateAdded;
         public String category;
         public String tags;
         public String description;

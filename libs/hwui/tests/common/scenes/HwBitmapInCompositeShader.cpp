@@ -17,6 +17,8 @@
 #include "TestSceneBase.h"
 #include "utils/Color.h"
 
+#include <SkBlendMode.h>
+#include <SkColorSpace.h>
 #include <SkGradientShader.h>
 #include <SkImagePriv.h>
 #include <ui/PixelFormat.h>
@@ -50,7 +52,8 @@ public:
             pixels[4000 + 4 * i + 3] = 255;
         }
         buffer->unlock();
-        sk_sp<Bitmap> hardwareBitmap(Bitmap::createFrom(buffer));
+        sk_sp<Bitmap> hardwareBitmap(Bitmap::createFrom(buffer->toAHardwareBuffer(),
+                                                        SkColorSpace::MakeSRGB()));
         sk_sp<SkShader> hardwareShader(createBitmapShader(*hardwareBitmap));
 
         SkPoint center;
@@ -59,12 +62,12 @@ public:
         colors[0] = Color::Black;
         colors[1] = Color::White;
         sk_sp<SkShader> gradientShader = SkGradientShader::MakeRadial(
-                center, 50, colors, nullptr, 2, SkShader::TileMode::kRepeat_TileMode);
+                center, 50, colors, nullptr, 2, SkTileMode::kRepeat);
 
         sk_sp<SkShader> compositeShader(
-                SkShader::MakeComposeShader(hardwareShader, gradientShader, SkBlendMode::kDstATop));
+                SkShaders::Blend(SkBlendMode::kDstATop, hardwareShader, gradientShader));
 
-        SkPaint paint;
+        Paint paint;
         paint.setShader(std::move(compositeShader));
         canvas.drawRoundRect(0, 0, 400, 200, 10.0f, 10.0f, paint);
     }
@@ -72,9 +75,7 @@ public:
     void doFrame(int frameNr) override {}
 
     sk_sp<SkShader> createBitmapShader(Bitmap& bitmap) {
-        sk_sp<SkColorFilter> colorFilter;
-        sk_sp<SkImage> image = bitmap.makeImage(&colorFilter);
-        return image->makeShader(SkShader::TileMode::kClamp_TileMode,
-                                 SkShader::TileMode::kClamp_TileMode);
+        sk_sp<SkImage> image = bitmap.makeImage();
+        return image->makeShader(SkSamplingOptions());
     }
 };

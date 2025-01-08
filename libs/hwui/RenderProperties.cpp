@@ -44,8 +44,20 @@ void LayerProperties::reset() {
 }
 
 bool LayerProperties::setColorFilter(SkColorFilter* filter) {
-    if (mColorFilter == filter) return false;
-    SkRefCnt_SafeAssign(mColorFilter, filter);
+    if (mColorFilter.get() == filter) return false;
+    mColorFilter = sk_ref_sp(filter);
+    return true;
+}
+
+bool LayerProperties::setImageFilter(SkImageFilter* imageFilter) {
+    if(mImageFilter.get() == imageFilter) return false;
+    mImageFilter = sk_ref_sp(imageFilter);
+    return true;
+}
+
+bool LayerProperties::setBackdropImageFilter(SkImageFilter* imageFilter) {
+    if (mBackdropImageFilter.get() == imageFilter) return false;
+    mBackdropImageFilter = sk_ref_sp(imageFilter);
     return true;
 }
 
@@ -62,7 +74,10 @@ LayerProperties& LayerProperties::operator=(const LayerProperties& other) {
     setOpaque(other.opaque());
     setAlpha(other.alpha());
     setXferMode(other.xferMode());
-    setColorFilter(other.colorFilter());
+    setColorFilter(other.getColorFilter());
+    setImageFilter(other.getImageFilter());
+    setBackdropImageFilter(other.getBackdropImageFilter());
+    mStretchEffect = other.mStretchEffect;
     return *this;
 }
 

@@ -16,7 +16,8 @@
 
 package android.net;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
 
@@ -24,8 +25,8 @@ import android.os.Parcelable;
  *  Class that represents useful attributes of generic network links
  *  such as the upload/download throughput or packet error rate.
  *  Generally speaking, you should be dealing with instances of
- *  LinkQualityInfo subclasses, such as {@link android.net.#WifiLinkQualityInfo}
- *  or {@link android.net.#MobileLinkQualityInfo} which provide additional
+ *  LinkQualityInfo subclasses, such as {@link android.net.WifiLinkQualityInfo}
+ *  or {@link android.net.MobileLinkQualityInfo} which provide additional
  *  information.
  *  @hide
  */
@@ -111,7 +112,7 @@ public class LinkQualityInfo implements Parcelable {
     /**
      * @hide
      */
-    public static final Creator<LinkQualityInfo> CREATOR =
+    public static final @android.annotation.NonNull Creator<LinkQualityInfo> CREATOR =
             new Creator<LinkQualityInfo>() {
                 public LinkQualityInfo createFromParcel(Parcel in) {
                     int objectType = in.readInt();
@@ -190,7 +191,7 @@ public class LinkQualityInfo implements Parcelable {
     /**
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void setPacketCount(long packetCount) {
         mPacketCount = packetCount;
     }
@@ -206,7 +207,7 @@ public class LinkQualityInfo implements Parcelable {
     /**
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void setPacketErrorCount(long packetErrorCount) {
         mPacketErrorCount = packetErrorCount;
     }
@@ -268,7 +269,7 @@ public class LinkQualityInfo implements Parcelable {
     /**
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void setLastDataSampleTime(long lastDataSampleTime) {
         mLastDataSampleTime = lastDataSampleTime;
     }
@@ -284,7 +285,7 @@ public class LinkQualityInfo implements Parcelable {
     /**
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void setDataSampleDuration(int dataSampleDuration) {
         mDataSampleDuration = dataSampleDuration;
     }

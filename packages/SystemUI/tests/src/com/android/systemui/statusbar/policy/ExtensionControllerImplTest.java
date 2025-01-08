@@ -23,13 +23,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.content.res.Configuration;
-import android.testing.AndroidTestingRunner;
 import android.testing.TestableLooper;
 import android.testing.TestableLooper.RunWithLooper;
 
+import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.filters.SmallTest;
 
-import com.android.systemui.Dependency;
 import com.android.systemui.SysuiTestCase;
 import com.android.systemui.plugins.OverlayPlugin;
 import com.android.systemui.plugins.Plugin;
@@ -40,30 +39,40 @@ import com.android.systemui.statusbar.policy.ExtensionController.Extension;
 import com.android.systemui.statusbar.policy.ExtensionController.TunerFactory;
 import com.android.systemui.tuner.TunerService;
 import com.android.systemui.tuner.TunerService.Tunable;
+import com.android.systemui.util.leak.LeakDetector;
 
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
 
 import java.util.Map;
 import java.util.function.Consumer;
 
-@RunWith(AndroidTestingRunner.class)
+@RunWith(AndroidJUnit4.class)
 @SmallTest
 public class ExtensionControllerImplTest extends SysuiTestCase {
+
+    @Mock
+    private ConfigurationController mConfigurationController;
 
     private PluginManager mPluginManager;
     private TunerService mTunerService;
     private ExtensionController mExtensionController;
-    private ConfigurationController mConfigurationController;
 
     @Before
     public void setup() {
+        MockitoAnnotations.initMocks(this);
         mPluginManager = mDependency.injectMockDependency(PluginManager.class);
         mTunerService = mDependency.injectMockDependency(TunerService.class);
-        mConfigurationController = mDependency.injectMockDependency(ConfigurationController.class);
-        mExtensionController = Dependency.get(ExtensionController.class);
+        mExtensionController = new ExtensionControllerImpl(
+                mContext,
+                mock(LeakDetector.class),
+                mPluginManager,
+                mTunerService,
+                mConfigurationController);
     }
 
     @Test

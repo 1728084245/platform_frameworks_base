@@ -16,23 +16,16 @@
 
 package com.android.server.notification;
 
-import static android.app.NotificationManager.IMPORTANCE_HIGH;
-
 import android.app.Notification;
-import android.content.ContentValues;
 import android.content.Context;
-import android.database.Cursor;
-import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteFullException;
-import android.database.sqlite.SQLiteOpenHelper;
 import android.os.Handler;
-import android.os.HandlerThread;
 import android.os.Message;
 import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.ArraySet;
 import android.util.Log;
 
+import com.android.internal.annotations.GuardedBy;
 import com.android.internal.logging.MetricsLogger;
 import com.android.server.notification.NotificationManagerService.DumpFilter;
 
@@ -41,10 +34,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.PrintWriter;
-import java.lang.Math;
 import java.util.ArrayDeque;
-import java.util.Calendar;
-import java.util.GregorianCalendar;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -64,7 +54,6 @@ public class NotificationUsageStats {
     private static final String TAG = "NotificationUsageStats";
 
     private static final boolean ENABLE_AGGREGATED_IN_MEMORY_STATS = true;
-    private static final boolean ENABLE_SQLITE_LOG = true;
     private static final AggregatedStats[] EMPTY_AGGREGATED_STATS = new AggregatedStats[0];
     private static final String DEVICE_GLOBAL_STATS = "__global"; // packages start with letters
     private static final int MSG_EMIT = 1;
@@ -74,19 +63,20 @@ public class NotificationUsageStats {
     public static final int FOUR_HOURS = 1000 * 60 * 60 * 4;
     private static final long EMIT_PERIOD = DEBUG ? TEN_SECONDS : FOUR_HOURS;
 
-    // Guarded by synchronized(this).
+    @GuardedBy("this")
     private final Map<String, AggregatedStats> mStats = new HashMap<>();
+    @GuardedBy("this")
     private final ArrayDeque<AggregatedStats[]> mStatsArrays = new ArrayDeque<>();
+    @GuardedBy("this")
     private ArraySet<String> mStatExpiredkeys = new ArraySet<>();
-    private final SQLiteLog mSQLiteLog;
     private final Context mContext;
     private final Handler mHandler;
+    @GuardedBy("this")
     private long mLastEmitTime;
 
     public NotificationUsageStats(Context context) {
         mContext = context;
         mLastEmitTime = SystemClock.elapsedRealtime();
-        mSQLiteLog = ENABLE_SQLITE_LOG ? new SQLiteLog(context) : null;
         mHandler = new Handler(mContext.getMainLooper()) {
             @Override
             public void handleMessage(Message msg) {
@@ -108,11 +98,7 @@ public class NotificationUsageStats {
      */
     public synchronized float getAppEnqueueRate(String packageName) {
         AggregatedStats stats = getOrCreateAggregatedStatsLocked(packageName);
-        if (stats != null) {
-            return stats.getEnqueueRate(SystemClock.elapsedRealtime());
-        } else {
-            return 0f;
-        }
+        return stats.getEnqueueRate(SystemClock.elapsedRealtime());
     }
 
     /**
@@ -120,11 +106,7 @@ public class NotificationUsageStats {
      */
     public synchronized boolean isAlertRateLimited(String packageName) {
         AggregatedStats stats = getOrCreateAggregatedStatsLocked(packageName);
-        if (stats != null) {
-            return stats.isAlertRateLimited();
-        } else {
-            return false;
-        }
+        return stats.isAlertRateLimited();
     }
 
     /**
@@ -139,22 +121,36 @@ public class NotificationUsageStats {
     }
 
     /**
+     * Called when a notification that was enqueued by an app is effectively enqueued to be
+     * posted. This is after rate checking, to update the rate.
+     *
+     * <p>Note that if we updated the arrival estimate <em>before</em> checking it, then an app
+     * enqueueing at slightly above the acceptable rate would never get their notifications
+     * accepted; updating afterwards allows the rate to dip below the threshold and thus lets
+     * through some of them.
+     */
+    public synchronized void registerEnqueuedByAppAndAccepted(String packageName) {
+        final long now = SystemClock.elapsedRealtime();
+        AggregatedStats[] aggregatedStatsArray = getAggregatedStatsLocked(packageName);
+        for (AggregatedStats stats : aggregatedStatsArray) {
+            stats.updateInterarrivalEstimate(now);
+        }
+        releaseAggregatedStatsLocked(aggregatedStatsArray);
+    }
+
+    /**
      * Called when a notification has been posted.
      */
     public synchronized void registerPostedByApp(NotificationRecord notification) {
-        final long now = SystemClock.elapsedRealtime();
-        notification.stats.posttimeElapsedMs = now;
+        notification.stats.posttimeElapsedMs = SystemClock.elapsedRealtime();
 
         AggregatedStats[] aggregatedStatsArray = getAggregatedStatsLocked(notification);
         for (AggregatedStats stats : aggregatedStatsArray) {
             stats.numPostedByApp++;
-            stats.updateInterarrivalEstimate(now);
             stats.countApiUse(notification);
+            stats.numUndecoratedRemoteViews += (notification.hasUndecoratedRemoteView() ? 1 : 0);
         }
         releaseAggregatedStatsLocked(aggregatedStatsArray);
-        if (ENABLE_SQLITE_LOG) {
-            mSQLiteLog.logPosted(notification);
-        }
     }
 
     /**
@@ -166,13 +162,9 @@ public class NotificationUsageStats {
         AggregatedStats[] aggregatedStatsArray = getAggregatedStatsLocked(notification);
         for (AggregatedStats stats : aggregatedStatsArray) {
             stats.numUpdatedByApp++;
-            stats.updateInterarrivalEstimate(SystemClock.elapsedRealtime());
             stats.countApiUse(notification);
         }
         releaseAggregatedStatsLocked(aggregatedStatsArray);
-        if (ENABLE_SQLITE_LOG) {
-            mSQLiteLog.logPosted(notification);
-        }
     }
 
     /**
@@ -185,9 +177,6 @@ public class NotificationUsageStats {
             stats.numRemovedByApp++;
         }
         releaseAggregatedStatsLocked(aggregatedStatsArray);
-        if (ENABLE_SQLITE_LOG) {
-            mSQLiteLog.logRemoved(notification);
-        }
     }
 
     /**
@@ -197,9 +186,6 @@ public class NotificationUsageStats {
         MetricsLogger.histogram(mContext, "note_dismiss_longevity",
                 (int) (System.currentTimeMillis() - notification.getRankingTimeMs()) / (60 * 1000));
         notification.stats.onDismiss();
-        if (ENABLE_SQLITE_LOG) {
-            mSQLiteLog.logDismissed(notification);
-        }
     }
 
     /**
@@ -209,9 +195,6 @@ public class NotificationUsageStats {
         MetricsLogger.histogram(mContext, "note_click_longevity",
                 (int) (System.currentTimeMillis() - notification.getRankingTimeMs()) / (60 * 1000));
         notification.stats.onClick();
-        if (ENABLE_SQLITE_LOG) {
-            mSQLiteLog.logClicked(notification);
-        }
     }
 
     public synchronized void registerPeopleAffinity(NotificationRecord notification, boolean valid,
@@ -263,12 +246,31 @@ public class NotificationUsageStats {
         }
     }
 
-    // Locked by this.
-    private AggregatedStats[] getAggregatedStatsLocked(NotificationRecord record) {
-        return getAggregatedStatsLocked(record.sbn.getPackageName());
+    /**
+     * Call this when RemoteViews object has been removed from a notification because the images
+     * it contains are too big (even after rescaling).
+     */
+    public synchronized void registerImageRemoved(String packageName) {
+        AggregatedStats[] aggregatedStatsArray = getAggregatedStatsLocked(packageName);
+        for (AggregatedStats stats : aggregatedStatsArray) {
+            stats.numImagesRemoved++;
+        }
     }
 
-    // Locked by this.
+    public synchronized void registerTooOldBlocked(NotificationRecord notification) {
+        AggregatedStats[] aggregatedStatsArray = getAggregatedStatsLocked(notification);
+        for (AggregatedStats stats : aggregatedStatsArray) {
+            stats.numTooOld++;
+        }
+        releaseAggregatedStatsLocked(aggregatedStatsArray);
+    }
+
+    @GuardedBy("this")
+    private AggregatedStats[] getAggregatedStatsLocked(NotificationRecord record) {
+        return getAggregatedStatsLocked(record.getSbn().getPackageName());
+    }
+
+    @GuardedBy("this")
     private AggregatedStats[] getAggregatedStatsLocked(String packageName) {
         if (!ENABLE_AGGREGATED_IN_MEMORY_STATS) {
             return EMPTY_AGGREGATED_STATS;
@@ -283,7 +285,7 @@ public class NotificationUsageStats {
         return array;
     }
 
-    // Locked by this.
+    @GuardedBy("this")
     private void releaseAggregatedStatsLocked(AggregatedStats[] array) {
         for(int i = 0; i < array.length; i++) {
             array[i] = null;
@@ -291,7 +293,7 @@ public class NotificationUsageStats {
         mStatsArrays.offer(array);
     }
 
-    // Locked by this.
+    @GuardedBy("this")
     private AggregatedStats getOrCreateAggregatedStatsLocked(String key) {
         AggregatedStats result = mStats.get(key);
         if (result == null) {
@@ -317,14 +319,20 @@ public class NotificationUsageStats {
                 // pass
             }
         }
-        if (ENABLE_SQLITE_LOG) {
-            try {
-                dump.put("historical", mSQLiteLog.dumpJson(filter));
-            } catch (JSONException e) {
-                // pass
-            }
-        }
         return dump;
+    }
+
+    public PulledStats remoteViewStats(long startMs, boolean aggregate) {
+        if (ENABLE_AGGREGATED_IN_MEMORY_STATS) {
+            PulledStats stats = new PulledStats(startMs);
+            for (AggregatedStats as : mStats.values()) {
+                if (as.numUndecoratedRemoteViews > 0) {
+                    stats.addUndecoratedPackage(as.key, as.mCreated);
+                }
+            }
+            return stats;
+        }
+        return null;
     }
 
     public synchronized void dump(PrintWriter pw, String indent, DumpFilter filter) {
@@ -336,9 +344,6 @@ public class NotificationUsageStats {
             }
             pw.println(indent + "mStatsArrays.size(): " + mStatsArrays.size());
             pw.println(indent + "mStats.size(): " + mStats.size());
-        }
-        if (ENABLE_SQLITE_LOG) {
-            mSQLiteLog.dump(pw, indent, filter);
         }
     }
 
@@ -386,6 +391,7 @@ public class NotificationUsageStats {
         public int numWithBigText;
         public int numWithBigPicture;
         public int numForegroundService;
+        public int numUserInitiatedJob;
         public int numOngoing;
         public int numAutoCancel;
         public int numWithLargeIcon;
@@ -404,7 +410,10 @@ public class NotificationUsageStats {
         public int numRateViolations;
         public int numAlertViolations;
         public int numQuotaViolations;
+        public int numUndecoratedRemoteViews;
         public long mLastAccessTime;
+        public int numImagesRemoved;
+        public int numTooOld;
 
         public AggregatedStats(Context context, String key) {
             this.key = key;
@@ -432,6 +441,10 @@ public class NotificationUsageStats {
 
             if ((n.flags & Notification.FLAG_FOREGROUND_SERVICE) != 0) {
                 numForegroundService++;
+            }
+
+            if ((n.flags & Notification.FLAG_USER_INITIATED_JOB) != 0) {
+                numUserInitiatedJob++;
             }
 
             if ((n.flags & Notification.FLAG_ONGOING_EVENT) != 0) {
@@ -517,6 +530,7 @@ public class NotificationUsageStats {
             maybeCount("note_big_text", (numWithBigText - previous.numWithBigText));
             maybeCount("note_big_pic", (numWithBigPicture - previous.numWithBigPicture));
             maybeCount("note_fg", (numForegroundService - previous.numForegroundService));
+            maybeCount("note_uij", (numUserInitiatedJob - previous.numUserInitiatedJob));
             maybeCount("note_ongoing", (numOngoing - previous.numOngoing));
             maybeCount("note_auto", (numAutoCancel - previous.numAutoCancel));
             maybeCount("note_large_icon", (numWithLargeIcon - previous.numWithLargeIcon));
@@ -529,6 +543,8 @@ public class NotificationUsageStats {
             maybeCount("note_over_rate", (numRateViolations - previous.numRateViolations));
             maybeCount("note_over_alert_rate", (numAlertViolations - previous.numAlertViolations));
             maybeCount("note_over_quota", (numQuotaViolations - previous.numQuotaViolations));
+            maybeCount("note_images_removed", (numImagesRemoved - previous.numImagesRemoved));
+            maybeCount("not_too_old", (numTooOld - previous.numTooOld));
             noisyImportance.maybeCount(previous.noisyImportance);
             quietImportance.maybeCount(previous.quietImportance);
             finalImportance.maybeCount(previous.finalImportance);
@@ -550,6 +566,7 @@ public class NotificationUsageStats {
             previous.numWithBigText = numWithBigText;
             previous.numWithBigPicture = numWithBigPicture;
             previous.numForegroundService = numForegroundService;
+            previous.numUserInitiatedJob = numUserInitiatedJob;
             previous.numOngoing = numOngoing;
             previous.numAutoCancel = numAutoCancel;
             previous.numWithLargeIcon = numWithLargeIcon;
@@ -562,6 +579,8 @@ public class NotificationUsageStats {
             previous.numRateViolations = numRateViolations;
             previous.numAlertViolations = numAlertViolations;
             previous.numQuotaViolations = numQuotaViolations;
+            previous.numImagesRemoved = numImagesRemoved;
+            previous.numTooOld = numTooOld;
             noisyImportance.update(previous.noisyImportance);
             quietImportance.update(previous.quietImportance);
             finalImportance.update(previous.finalImportance);
@@ -644,6 +663,8 @@ public class NotificationUsageStats {
             output.append(indentPlusTwo);
             output.append("numForegroundService=").append(numForegroundService).append("\n");
             output.append(indentPlusTwo);
+            output.append("numUserInitiatedJob=").append(numUserInitiatedJob).append("\n");
+            output.append(indentPlusTwo);
             output.append("numOngoing=").append(numOngoing).append("\n");
             output.append(indentPlusTwo);
             output.append("numAutoCancel=").append(numAutoCancel).append("\n");
@@ -667,9 +688,15 @@ public class NotificationUsageStats {
             output.append("numAlertViolations=").append(numAlertViolations).append("\n");
             output.append(indentPlusTwo);
             output.append("numQuotaViolations=").append(numQuotaViolations).append("\n");
+            output.append(indentPlusTwo);
+            output.append("numImagesRemoved=").append(numImagesRemoved).append("\n");
+            output.append(indentPlusTwo);
+            output.append("numTooOld=").append(numTooOld).append("\n");
             output.append(indentPlusTwo).append(noisyImportance.toString()).append("\n");
             output.append(indentPlusTwo).append(quietImportance.toString()).append("\n");
             output.append(indentPlusTwo).append(finalImportance.toString()).append("\n");
+            output.append(indentPlusTwo);
+            output.append("numUndecorateRVs=").append(numUndecoratedRemoteViews).append("\n");
             output.append(indent).append("}");
             return output.toString();
         }
@@ -696,6 +723,7 @@ public class NotificationUsageStats {
             maybePut(dump, "numWithBigText", numWithBigText);
             maybePut(dump, "numWithBigPicture", numWithBigPicture);
             maybePut(dump, "numForegroundService", numForegroundService);
+            maybePut(dump, "numUserInitiatedJob", numUserInitiatedJob);
             maybePut(dump, "numOngoing", numOngoing);
             maybePut(dump, "numAutoCancel", numAutoCancel);
             maybePut(dump, "numWithLargeIcon", numWithLargeIcon);
@@ -709,6 +737,8 @@ public class NotificationUsageStats {
             maybePut(dump, "numQuotaLViolations", numQuotaViolations);
             maybePut(dump, "notificationEnqueueRate", getEnqueueRate());
             maybePut(dump, "numAlertViolations", numAlertViolations);
+            maybePut(dump, "numImagesRemoved", numImagesRemoved);
+            maybePut(dump, "numTooOld", numTooOld);
             noisyImportance.maybePut(dump, previous.noisyImportance);
             quietImportance.maybePut(dump, previous.quietImportance);
             finalImportance.maybePut(dump, previous.finalImportance);
@@ -917,6 +947,13 @@ public class NotificationUsageStats {
             updateVisiblyExpandedStats();
         }
 
+        /**
+         * Returns whether this notification has been visible and expanded at the same.
+         */
+        public boolean hasBeenVisiblyExpanded() {
+            return posttimeToFirstVisibleExpansionMs >= 0;
+        }
+
         private void updateVisiblyExpandedStats() {
             long elapsedNowMs = SystemClock.elapsedRealtime();
             if (isExpanded && isVisible) {
@@ -1008,327 +1045,6 @@ public class NotificationUsageStats {
                     ", avg=" + avg +
                     ", var=" + var +
                     '}';
-        }
-    }
-
-    private static class SQLiteLog {
-        private static final String TAG = "NotificationSQLiteLog";
-
-        // Message types passed to the background handler.
-        private static final int MSG_POST = 1;
-        private static final int MSG_CLICK = 2;
-        private static final int MSG_REMOVE = 3;
-        private static final int MSG_DISMISS = 4;
-
-        private static final String DB_NAME = "notification_log.db";
-        private static final int DB_VERSION = 5;
-
-        /** Age in ms after which events are pruned from the DB. */
-        private static final long HORIZON_MS = 7 * 24 * 60 * 60 * 1000L;  // 1 week
-        /** Delay between pruning the DB. Used to throttle pruning. */
-        private static final long PRUNE_MIN_DELAY_MS = 6 * 60 * 60 * 1000L;  // 6 hours
-        /** Mininum number of writes between pruning the DB. Used to throttle pruning. */
-        private static final long PRUNE_MIN_WRITES = 1024;
-
-        // Table 'log'
-        private static final String TAB_LOG = "log";
-        private static final String COL_EVENT_USER_ID = "event_user_id";
-        private static final String COL_EVENT_TYPE = "event_type";
-        private static final String COL_EVENT_TIME = "event_time_ms";
-        private static final String COL_KEY = "key";
-        private static final String COL_PKG = "pkg";
-        private static final String COL_NOTIFICATION_ID = "nid";
-        private static final String COL_TAG = "tag";
-        private static final String COL_WHEN_MS = "when_ms";
-        private static final String COL_DEFAULTS = "defaults";
-        private static final String COL_FLAGS = "flags";
-        private static final String COL_IMPORTANCE_REQ = "importance_request";
-        private static final String COL_IMPORTANCE_FINAL = "importance_final";
-        private static final String COL_NOISY = "noisy";
-        private static final String COL_MUTED = "muted";
-        private static final String COL_DEMOTED = "demoted";
-        private static final String COL_CATEGORY = "category";
-        private static final String COL_ACTION_COUNT = "action_count";
-        private static final String COL_POSTTIME_MS = "posttime_ms";
-        private static final String COL_AIRTIME_MS = "airtime_ms";
-        private static final String COL_FIRST_EXPANSIONTIME_MS = "first_expansion_time_ms";
-        private static final String COL_AIRTIME_EXPANDED_MS = "expansion_airtime_ms";
-        private static final String COL_EXPAND_COUNT = "expansion_count";
-
-
-        private static final int EVENT_TYPE_POST = 1;
-        private static final int EVENT_TYPE_CLICK = 2;
-        private static final int EVENT_TYPE_REMOVE = 3;
-        private static final int EVENT_TYPE_DISMISS = 4;
-
-        private static final int IDLE_CONNECTION_TIMEOUT_MS = 30000;
-
-        private static long sLastPruneMs;
-
-        private static long sNumWrites;
-        private final SQLiteOpenHelper mHelper;
-
-        private final Handler mWriteHandler;
-        private static final long DAY_MS = 24 * 60 * 60 * 1000;
-        private static final String STATS_QUERY = "SELECT " +
-                COL_EVENT_USER_ID + ", " +
-                COL_PKG + ", " +
-                // Bucket by day by looking at 'floor((midnight - eventTimeMs) / dayMs)'
-                "CAST(((%d - " + COL_EVENT_TIME + ") / " + DAY_MS + ") AS int) " +
-                "AS day, " +
-                "COUNT(*) AS cnt, " +
-                "SUM(" + COL_MUTED + ") as muted, " +
-                "SUM(" + COL_NOISY + ") as noisy, " +
-                "SUM(" + COL_DEMOTED + ") as demoted " +
-                "FROM " + TAB_LOG + " " +
-                "WHERE " +
-                COL_EVENT_TYPE + "=" + EVENT_TYPE_POST +
-                " AND " + COL_EVENT_TIME + " > %d " +
-                " GROUP BY " + COL_EVENT_USER_ID + ", day, " + COL_PKG;
-
-        public SQLiteLog(Context context) {
-            HandlerThread backgroundThread = new HandlerThread("notification-sqlite-log",
-                    android.os.Process.THREAD_PRIORITY_BACKGROUND);
-            backgroundThread.start();
-            mWriteHandler = new Handler(backgroundThread.getLooper()) {
-                @Override
-                public void handleMessage(Message msg) {
-                    NotificationRecord r = (NotificationRecord) msg.obj;
-                    long nowMs = System.currentTimeMillis();
-                    switch (msg.what) {
-                        case MSG_POST:
-                            writeEvent(r.sbn.getPostTime(), EVENT_TYPE_POST, r);
-                            break;
-                        case MSG_CLICK:
-                            writeEvent(nowMs, EVENT_TYPE_CLICK, r);
-                            break;
-                        case MSG_REMOVE:
-                            writeEvent(nowMs, EVENT_TYPE_REMOVE, r);
-                            break;
-                        case MSG_DISMISS:
-                            writeEvent(nowMs, EVENT_TYPE_DISMISS, r);
-                            break;
-                        default:
-                            Log.wtf(TAG, "Unknown message type: " + msg.what);
-                            break;
-                    }
-                }
-            };
-            mHelper = new SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
-                @Override
-                public void onCreate(SQLiteDatabase db) {
-                    db.execSQL("CREATE TABLE " + TAB_LOG + " (" +
-                            "_id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                            COL_EVENT_USER_ID + " INT," +
-                            COL_EVENT_TYPE + " INT," +
-                            COL_EVENT_TIME + " INT," +
-                            COL_KEY + " TEXT," +
-                            COL_PKG + " TEXT," +
-                            COL_NOTIFICATION_ID + " INT," +
-                            COL_TAG + " TEXT," +
-                            COL_WHEN_MS + " INT," +
-                            COL_DEFAULTS + " INT," +
-                            COL_FLAGS + " INT," +
-                            COL_IMPORTANCE_REQ + " INT," +
-                            COL_IMPORTANCE_FINAL + " INT," +
-                            COL_NOISY + " INT," +
-                            COL_MUTED + " INT," +
-                            COL_DEMOTED + " INT," +
-                            COL_CATEGORY + " TEXT," +
-                            COL_ACTION_COUNT + " INT," +
-                            COL_POSTTIME_MS + " INT," +
-                            COL_AIRTIME_MS + " INT," +
-                            COL_FIRST_EXPANSIONTIME_MS + " INT," +
-                            COL_AIRTIME_EXPANDED_MS + " INT," +
-                            COL_EXPAND_COUNT + " INT" +
-                            ")");
-                }
-
-                @Override
-                public void onConfigure(SQLiteDatabase db) {
-                    // Memory optimization - close idle connections after 30s of inactivity
-                    setIdleConnectionTimeout(IDLE_CONNECTION_TIMEOUT_MS);
-                }
-
-                @Override
-                public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-                    if (oldVersion != newVersion) {
-                        db.execSQL("DROP TABLE IF EXISTS " + TAB_LOG);
-                        onCreate(db);
-                    }
-                }
-            };
-        }
-
-        public void logPosted(NotificationRecord notification) {
-            mWriteHandler.sendMessage(mWriteHandler.obtainMessage(MSG_POST, notification));
-        }
-
-        public void logClicked(NotificationRecord notification) {
-            mWriteHandler.sendMessage(mWriteHandler.obtainMessage(MSG_CLICK, notification));
-        }
-
-        public void logRemoved(NotificationRecord notification) {
-            mWriteHandler.sendMessage(mWriteHandler.obtainMessage(MSG_REMOVE, notification));
-        }
-
-        public void logDismissed(NotificationRecord notification) {
-            mWriteHandler.sendMessage(mWriteHandler.obtainMessage(MSG_DISMISS, notification));
-        }
-
-        private JSONArray jsonPostFrequencies(DumpFilter filter) throws JSONException {
-            JSONArray frequencies = new JSONArray();
-            SQLiteDatabase db = mHelper.getReadableDatabase();
-            long midnight = getMidnightMs();
-            String q = String.format(STATS_QUERY, midnight, filter.since);
-            Cursor cursor = db.rawQuery(q, null);
-            try {
-                for (cursor.moveToFirst(); !cursor.isAfterLast(); cursor.moveToNext()) {
-                    int userId = cursor.getInt(0);
-                    String pkg = cursor.getString(1);
-                    if (filter != null && !filter.matches(pkg)) continue;
-                    int day = cursor.getInt(2);
-                    int count = cursor.getInt(3);
-                    int muted = cursor.getInt(4);
-                    int noisy = cursor.getInt(5);
-                    int demoted = cursor.getInt(6);
-                    JSONObject row = new JSONObject();
-                    row.put("user_id", userId);
-                    row.put("package", pkg);
-                    row.put("day", day);
-                    row.put("count", count);
-                    row.put("noisy", noisy);
-                    row.put("muted", muted);
-                    row.put("demoted", demoted);
-                    frequencies.put(row);
-                }
-            } finally {
-                cursor.close();
-            }
-            return frequencies;
-        }
-
-        public void printPostFrequencies(PrintWriter pw, String indent, DumpFilter filter) {
-            SQLiteDatabase db = mHelper.getReadableDatabase();
-            long midnight = getMidnightMs();
-            String q = String.format(STATS_QUERY, midnight, filter.since);
-            Cursor cursor = db.rawQuery(q, null);
-            try {
-                for (cursor.moveToFirst(); !cursor.isAfterLast(); cursor.moveToNext()) {
-                    int userId = cursor.getInt(0);
-                    String pkg = cursor.getString(1);
-                    if (filter != null && !filter.matches(pkg)) continue;
-                    int day = cursor.getInt(2);
-                    int count = cursor.getInt(3);
-                    int muted = cursor.getInt(4);
-                    int noisy = cursor.getInt(5);
-                    int demoted = cursor.getInt(6);
-                    pw.println(indent + "post_frequency{user_id=" + userId + ",pkg=" + pkg +
-                            ",day=" + day + ",count=" + count + ",muted=" + muted + "/" + noisy +
-                            ",demoted=" + demoted + "}");
-                }
-            } finally {
-                cursor.close();
-            }
-        }
-
-        private long getMidnightMs() {
-            GregorianCalendar midnight = new GregorianCalendar();
-            midnight.set(midnight.get(Calendar.YEAR), midnight.get(Calendar.MONTH),
-                    midnight.get(Calendar.DATE), 23, 59, 59);
-            return midnight.getTimeInMillis();
-        }
-
-        private void writeEvent(long eventTimeMs, int eventType, NotificationRecord r) {
-            ContentValues cv = new ContentValues();
-            cv.put(COL_EVENT_USER_ID, r.sbn.getUser().getIdentifier());
-            cv.put(COL_EVENT_TIME, eventTimeMs);
-            cv.put(COL_EVENT_TYPE, eventType);
-            putNotificationIdentifiers(r, cv);
-            if (eventType == EVENT_TYPE_POST) {
-                putNotificationDetails(r, cv);
-            } else {
-                putPosttimeVisibility(r, cv);
-            }
-            SQLiteDatabase db = mHelper.getWritableDatabase();
-            if (db.insert(TAB_LOG, null, cv) < 0) {
-                Log.wtf(TAG, "Error while trying to insert values: " + cv);
-            }
-            sNumWrites++;
-            pruneIfNecessary(db);
-        }
-
-        private void pruneIfNecessary(SQLiteDatabase db) {
-            // Prune if we haven't in a while.
-            long nowMs = System.currentTimeMillis();
-            if (sNumWrites > PRUNE_MIN_WRITES ||
-                    nowMs - sLastPruneMs > PRUNE_MIN_DELAY_MS) {
-                sNumWrites = 0;
-                sLastPruneMs = nowMs;
-                long horizonStartMs = nowMs - HORIZON_MS;
-                try {
-                    int deletedRows = db.delete(TAB_LOG, COL_EVENT_TIME + " < ?",
-                            new String[]{String.valueOf(horizonStartMs)});
-                    Log.d(TAG, "Pruned event entries: " + deletedRows);
-                } catch (SQLiteFullException e) {
-                    Log.e(TAG, String.format("%s: %s", e.toString(), e.getMessage()));
-                }
-            }
-        }
-
-        private static void putNotificationIdentifiers(NotificationRecord r, ContentValues outCv) {
-            outCv.put(COL_KEY, r.sbn.getKey());
-            outCv.put(COL_PKG, r.sbn.getPackageName());
-        }
-
-        private static void putNotificationDetails(NotificationRecord r, ContentValues outCv) {
-            outCv.put(COL_NOTIFICATION_ID, r.sbn.getId());
-            if (r.sbn.getTag() != null) {
-                outCv.put(COL_TAG, r.sbn.getTag());
-            }
-            outCv.put(COL_WHEN_MS, r.sbn.getPostTime());
-            outCv.put(COL_FLAGS, r.getNotification().flags);
-            final int before = r.stats.requestedImportance;
-            final int after = r.getImportance();
-            final boolean noisy = r.stats.isNoisy;
-            outCv.put(COL_IMPORTANCE_REQ, before);
-            outCv.put(COL_IMPORTANCE_FINAL, after);
-            outCv.put(COL_DEMOTED, after < before ? 1 : 0);
-            outCv.put(COL_NOISY, noisy);
-            if (noisy && after < IMPORTANCE_HIGH) {
-                outCv.put(COL_MUTED, 1);
-            } else {
-                outCv.put(COL_MUTED, 0);
-            }
-            if (r.getNotification().category != null) {
-                outCv.put(COL_CATEGORY, r.getNotification().category);
-            }
-            outCv.put(COL_ACTION_COUNT, r.getNotification().actions != null ?
-                    r.getNotification().actions.length : 0);
-        }
-
-        private static void putPosttimeVisibility(NotificationRecord r, ContentValues outCv) {
-            outCv.put(COL_POSTTIME_MS, r.stats.getCurrentPosttimeMs());
-            outCv.put(COL_AIRTIME_MS, r.stats.getCurrentAirtimeMs());
-            outCv.put(COL_EXPAND_COUNT, r.stats.userExpansionCount);
-            outCv.put(COL_AIRTIME_EXPANDED_MS, r.stats.getCurrentAirtimeExpandedMs());
-            outCv.put(COL_FIRST_EXPANSIONTIME_MS, r.stats.posttimeToFirstVisibleExpansionMs);
-        }
-
-        public void dump(PrintWriter pw, String indent, DumpFilter filter) {
-            printPostFrequencies(pw, indent, filter);
-        }
-
-        public JSONObject dumpJson(DumpFilter filter) {
-            JSONObject dump = new JSONObject();
-            try {
-                dump.put("post_frequency", jsonPostFrequencies(filter));
-                dump.put("since", filter.since);
-                dump.put("now", System.currentTimeMillis());
-            } catch (JSONException e) {
-                // pass
-            }
-            return dump;
         }
     }
 }

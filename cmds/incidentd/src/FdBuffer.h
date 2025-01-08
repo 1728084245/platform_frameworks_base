@@ -35,6 +35,7 @@ using namespace android::util;
 class FdBuffer {
 public:
     FdBuffer();
+    FdBuffer(sp<EncodedBuffer> buffer, bool isBufferPooled = false);
     ~FdBuffer();
 
     /**
@@ -64,6 +65,21 @@ public:
                                        const bool isSysfs = false);
 
     /**
+     * Write by hand into the buffer.
+     */
+    status_t write(uint8_t const* buf, size_t size);
+
+    /**
+     * Write all the data from a ProtoReader into our internal buffer.
+     */
+    status_t write(const sp<ProtoReader>& data);
+
+    /**
+     * Write size bytes of data from a ProtoReader into our internal buffer.
+     */
+    status_t write(const sp<ProtoReader>& data, size_t size);
+
+    /**
      * Whether we timed out.
      */
     bool timedOut() const { return mTimedOut; }
@@ -89,21 +105,17 @@ public:
     int64_t durationMs() const { return mFinishTime - mStartTime; }
 
     /**
-     * Reader API for data stored in FdBuffer
+     * Get the EncodedBuffer inside.
      */
-    EncodedBuffer::iterator data() const;
-
-    /**
-     * Return the internal buffer, don't call unless you are familiar with EncodedBuffer.
-     */
-    EncodedBuffer* getInternalBuffer() { return &mBuffer; }
+    sp<EncodedBuffer> data() const;
 
 private:
-    EncodedBuffer mBuffer;
+    sp<EncodedBuffer> mBuffer;
     int64_t mStartTime;
     int64_t mFinishTime;
     bool mTimedOut;
     bool mTruncated;
+    bool mIsBufferPooled;
 };
 
 }  // namespace incidentd

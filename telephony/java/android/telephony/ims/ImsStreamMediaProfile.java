@@ -16,8 +16,11 @@
 
 package android.telephony.ims;
 
+import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
 
@@ -83,16 +86,19 @@ public final class ImsStreamMediaProfile implements Parcelable {
 
     // Audio related information
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public int mAudioQuality;
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public int mAudioDirection;
+    // Audio codec attributes
+    private AudioCodecAttributes mAudioCodecAttributes;
+
     // Video related information
     /** @hide */
     public int mVideoQuality;
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public int mVideoDirection;
     // Rtt related information
     /** @hide */
@@ -163,7 +169,7 @@ public final class ImsStreamMediaProfile implements Parcelable {
     }
 
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public ImsStreamMediaProfile() {
         mAudioQuality = AUDIO_QUALITY_NONE;
         mAudioDirection = DIRECTION_SEND_RECEIVE;
@@ -189,19 +195,22 @@ public final class ImsStreamMediaProfile implements Parcelable {
     public void copyFrom(ImsStreamMediaProfile profile) {
         mAudioQuality = profile.mAudioQuality;
         mAudioDirection = profile.mAudioDirection;
+        mAudioCodecAttributes = profile.mAudioCodecAttributes;
         mVideoQuality = profile.mVideoQuality;
         mVideoDirection = profile.mVideoDirection;
         mRttMode = profile.mRttMode;
     }
 
+    @NonNull
     @Override
     public String toString() {
-        return "{ audioQuality=" + mAudioQuality +
-                ", audioDirection=" + mAudioDirection +
-                ", videoQuality=" + mVideoQuality +
-                ", videoDirection=" + mVideoDirection +
-                ", rttMode=" + mRttMode +
-                ", hasRttAudioSpeech=" + mIsReceivingRttAudio + " }";
+        return "{ audioQuality=" + mAudioQuality
+                + ", audioDirection=" + mAudioDirection
+                + ", audioCodecAttribute=" + mAudioCodecAttributes
+                + ", videoQuality=" + mVideoQuality
+                + ", videoDirection=" + mVideoDirection
+                + ", rttMode=" + mRttMode
+                + ", hasRttAudioSpeech=" + mIsReceivingRttAudio + " }";
     }
 
     @Override
@@ -213,6 +222,7 @@ public final class ImsStreamMediaProfile implements Parcelable {
     public void writeToParcel(Parcel out, int flags) {
         out.writeInt(mAudioQuality);
         out.writeInt(mAudioDirection);
+        out.writeTypedObject(mAudioCodecAttributes, flags);
         out.writeInt(mVideoQuality);
         out.writeInt(mVideoDirection);
         out.writeInt(mRttMode);
@@ -222,13 +232,14 @@ public final class ImsStreamMediaProfile implements Parcelable {
     private void readFromParcel(Parcel in) {
         mAudioQuality = in.readInt();
         mAudioDirection = in.readInt();
+        mAudioCodecAttributes = in.readTypedObject(AudioCodecAttributes.CREATOR);
         mVideoQuality = in.readInt();
         mVideoDirection = in.readInt();
         mRttMode = in.readInt();
         mIsReceivingRttAudio = in.readBoolean();
     }
 
-    public static final Creator<ImsStreamMediaProfile> CREATOR =
+    public static final @android.annotation.NonNull Creator<ImsStreamMediaProfile> CREATOR =
             new Creator<ImsStreamMediaProfile>() {
         @Override
         public ImsStreamMediaProfile createFromParcel(Parcel in) {
@@ -270,6 +281,23 @@ public final class ImsStreamMediaProfile implements Parcelable {
 
     public int getAudioDirection() {
         return mAudioDirection;
+    }
+
+    /**
+     * Get the audio codec attributes {@link AudioCodecAttributes} which may be {@code null} if
+     * ImsService doesn't support this information.
+     * @return audio codec attributes
+     */
+    public @Nullable AudioCodecAttributes getAudioCodecAttributes() {
+        return mAudioCodecAttributes;
+    }
+
+    /**
+     * Set the audio codec attributes {@link AudioCodecAttributes} which includes bitrate and
+     * bandwidth information.
+     */
+    public void setAudioCodecAttributes(@NonNull AudioCodecAttributes audioCodecAttributes) {
+        mAudioCodecAttributes = audioCodecAttributes;
     }
 
     public int getVideoQuality() {

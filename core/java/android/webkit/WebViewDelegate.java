@@ -19,19 +19,19 @@ package android.webkit;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
 import android.app.ActivityThread;
 import android.app.Application;
 import android.app.ResourcesManager;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.res.Resources;
 import android.graphics.Canvas;
+import android.graphics.RecordingCanvas;
 import android.os.RemoteException;
 import android.os.SystemProperties;
 import android.os.Trace;
 import android.util.SparseArray;
-import android.view.DisplayListCanvas;
 import android.view.View;
 import android.view.ViewRootImpl;
 
@@ -77,64 +77,55 @@ public final class WebViewDelegate {
     }
 
     /**
-     * Returns {@code true} if the draw GL functor can be invoked (see {@link #invokeDrawGlFunctor})
-     * and {@code false} otherwise.
+     * Throws {@link UnsupportedOperationException}
+     * @deprecated Use {@link #drawWebViewFunctor(Canvas, int)}
      */
+    @Deprecated
     public boolean canInvokeDrawGlFunctor(View containerView) {
-        return true;
+        throw new UnsupportedOperationException();
     }
 
     /**
-     * Invokes the draw GL functor. If waitForCompletion is {@code false} the functor
-     * may be invoked asynchronously.
-     *
-     * @param nativeDrawGLFunctor the pointer to the native functor that implements
-     *        system/core/include/utils/Functor.h
+     * Throws {@link UnsupportedOperationException}
+     * @deprecated Use {@link #drawWebViewFunctor(Canvas, int)}
      */
+    @Deprecated
     public void invokeDrawGlFunctor(View containerView, long nativeDrawGLFunctor,
             boolean waitForCompletion) {
-        ViewRootImpl.invokeFunctor(nativeDrawGLFunctor, waitForCompletion);
+        throw new UnsupportedOperationException();
     }
 
     /**
-     * Calls the function specified with the nativeDrawGLFunctor functor pointer. This
-     * functionality is used by the WebView for calling into their renderer from the
-     * framework display lists.
-     *
-     * @param canvas a hardware accelerated canvas (see {@link Canvas#isHardwareAccelerated()})
-     * @param nativeDrawGLFunctor the pointer to the native functor that implements
-     *        system/core/include/utils/Functor.h
-     * @throws IllegalArgumentException if the canvas is not hardware accelerated
+     * Throws {@link UnsupportedOperationException}
+     * @deprecated Use {@link #drawWebViewFunctor(Canvas, int)}
      */
+    @Deprecated
     public void callDrawGlFunction(Canvas canvas, long nativeDrawGLFunctor) {
-        if (!(canvas instanceof DisplayListCanvas)) {
-            // Canvas#isHardwareAccelerated() is only true for subclasses of HardwareCanvas.
-            throw new IllegalArgumentException(canvas.getClass().getName()
-                    + " is not a DisplayList canvas");
-        }
-        ((DisplayListCanvas) canvas).drawGLFunctor2(nativeDrawGLFunctor, null);
+        throw new UnsupportedOperationException();
     }
 
     /**
-     * Calls the function specified with the nativeDrawGLFunctor functor pointer. This
-     * functionality is used by the WebView for calling into their renderer from the
-     * framework display lists.
-     *
-     * @param canvas a hardware accelerated canvas (see {@link Canvas#isHardwareAccelerated()})
-     * @param nativeDrawGLFunctor the pointer to the native functor that implements
-     *        system/core/include/utils/Functor.h
-     * @param releasedRunnable Called when this nativeDrawGLFunctor is no longer referenced by this
-     *        canvas, so is safe to be destroyed.
-     * @throws IllegalArgumentException if the canvas is not hardware accelerated
+     * Throws {@link UnsupportedOperationException}
+     * @deprecated Use {@link #drawWebViewFunctor(Canvas, int)}
      */
+    @Deprecated
     public void callDrawGlFunction(@NonNull Canvas canvas, long nativeDrawGLFunctor,
             @Nullable Runnable releasedRunnable) {
-        if (!(canvas instanceof DisplayListCanvas)) {
-            // Canvas#isHardwareAccelerated() is only true for subclasses of HardwareCanvas.
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Call webview draw functor. See API in draw_fn.h.
+     * @param canvas a {@link RecordingCanvas}.
+     * @param functor created by AwDrawFn_CreateFunctor in draw_fn.h.
+     */
+    public void drawWebViewFunctor(@NonNull Canvas canvas, int functor) {
+        if (!(canvas instanceof RecordingCanvas)) {
+            // Canvas#isHardwareAccelerated() is only true for subclasses of RecordingCanvas.
             throw new IllegalArgumentException(canvas.getClass().getName()
-                    + " is not a DisplayList canvas");
+                    + " is not a RecordingCanvas canvas");
         }
-        ((DisplayListCanvas) canvas).drawGLFunctor2(nativeDrawGLFunctor, releasedRunnable);
+        ((RecordingCanvas) canvas).drawWebViewFunctor(functor);
     }
 
     /**
@@ -142,11 +133,17 @@ public final class WebViewDelegate {
      *
      * @param nativeDrawGLFunctor the pointer to the native functor that implements
      *        system/core/include/utils/Functor.h
+     * @deprecated Use {@link #drawWebViewFunctor(Canvas, int)}
      */
+    @Deprecated
     public void detachDrawGlFunctor(View containerView, long nativeDrawGLFunctor) {
-        ViewRootImpl viewRootImpl = containerView.getViewRootImpl();
-        if (nativeDrawGLFunctor != 0 && viewRootImpl != null) {
-            viewRootImpl.detachFunctor(nativeDrawGLFunctor);
+        if (Flags.mainlineApis()) {
+            throw new UnsupportedOperationException();
+        } else {
+            ViewRootImpl viewRootImpl = containerView.getViewRootImpl();
+            if (nativeDrawGLFunctor != 0 && viewRootImpl != null) {
+                viewRootImpl.detachFunctor(nativeDrawGLFunctor);
+            }
         }
     }
 
@@ -182,21 +179,27 @@ public final class WebViewDelegate {
 
     /**
      * Adds the WebView asset path to {@link android.content.res.AssetManager}.
+     * If {@link android.content.res.Flags#FLAG_REGISTER_RESOURCE_PATHS} is enabled, this function
+     * will be a no-op because the asset paths appending work will only be handled by
+     * {@link android.content.res.Resources#registerResourcePaths(String, ApplicationInfo)},
+     * otherwise it behaves the old way.
      */
     public void addWebViewAssetPath(Context context) {
-        final String newAssetPath = WebViewFactory.getLoadedPackageInfo().applicationInfo.sourceDir;
+        if (android.content.res.Flags.registerResourcePaths()) {
+            return;
+        }
 
+        final String[] newAssetPaths =
+                WebViewFactory.getLoadedPackageInfo().applicationInfo.getAllApkPaths();
         final ApplicationInfo appInfo = context.getApplicationInfo();
-        final String[] libs = appInfo.sharedLibraryFiles;
-        if (!ArrayUtils.contains(libs, newAssetPath)) {
-            // Build the new library asset path list.
-            final int newLibAssetsCount = 1 + (libs != null ? libs.length : 0);
-            final String[] newLibAssets = new String[newLibAssetsCount];
-            if (libs != null) {
-                System.arraycopy(libs, 0, newLibAssets, 0, libs.length);
-            }
-            newLibAssets[newLibAssetsCount - 1] = newAssetPath;
 
+        // Build the new library asset path list.
+        String[] newLibAssets = appInfo.sharedLibraryFiles;
+        for (String newAssetPath : newAssetPaths) {
+            newLibAssets = ArrayUtils.appendElement(String.class, newLibAssets, newAssetPath);
+        }
+
+        if (newLibAssets != appInfo.sharedLibraryFiles) {
             // Update the ApplicationInfo object with the new list.
             // We know this will persist and future Resources created via ResourcesManager
             // will include the shared library because this ApplicationInfo comes from the
@@ -205,8 +208,8 @@ public final class WebViewDelegate {
             appInfo.sharedLibraryFiles = newLibAssets;
 
             // Update existing Resources with the WebView library.
-            ResourcesManager.getInstance().appendLibAssetForMainAssetPath(
-                    appInfo.getBaseResourcePath(), newAssetPath);
+            ResourcesManager.getInstance().appendLibAssetsForMainAssetPath(
+                    appInfo.getBaseResourcePath(), newAssetPaths);
         }
     }
 
@@ -214,6 +217,14 @@ public final class WebViewDelegate {
      * Returns whether WebView should run in multiprocess mode.
      */
     public boolean isMultiProcessEnabled() {
+        if (Flags.updateServiceV2()) {
+            return true;
+        } else if (Flags.updateServiceIpcWrapper()) {
+            // We don't want to support this method in the new wrapper because updateServiceV2 is
+            // intended to ship in the same release (or sooner). It's only possible to disable it
+            // with an obscure adb command, so just return true here too.
+            return true;
+        }
         try {
             return WebViewFactory.getUpdateService().isMultiProcessEnabled();
         } catch (RemoteException e) {
@@ -226,5 +237,15 @@ public final class WebViewDelegate {
      */
     public String getDataDirectorySuffix() {
         return WebViewFactory.getDataDirectorySuffix();
+    }
+
+    /**
+     * Get the timestamps at which various WebView startup events occurred in this process.
+     * This method must be called on the same thread where the
+     * WebViewChromiumFactoryProvider#create method was invoked.
+     */
+    @NonNull
+    public WebViewFactory.StartupTimestamps getStartupTimestamps() {
+        return WebViewFactory.getStartupTimestamps();
     }
 }

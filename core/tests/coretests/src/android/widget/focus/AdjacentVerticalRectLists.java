@@ -16,12 +16,11 @@
 
 package android.widget.focus;
 
-import android.util.InternalSelectionView;
-
 import android.app.Activity;
 import android.os.Bundle;
-import android.widget.LinearLayout;
+import android.widget.InternalSelectionView;
 import android.view.ViewGroup;
+import android.widget.LinearLayout;
 
 /**
  * {@link android.view.FocusFinder#findNextFocus(android.view.ViewGroup, android.view.View, int)}
@@ -31,7 +30,7 @@ import android.view.ViewGroup;
  * rectangle of the previously focused view.  The view taking focus can use this
  * to set an internal selection more appropriate using this rect.
  *
- * This Activity excercises that behavior using three adjacent {@link android.util.InternalSelectionView}
+ * This Activity excercises that behavior using three adjacent {@link InternalSelectionView}
  * that report interesting rects when giving up focus, and use interesting rects
  * when taking focus to best select the internal row to show as selected.
  */

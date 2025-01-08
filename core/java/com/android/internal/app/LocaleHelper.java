@@ -17,8 +17,10 @@
 package com.android.internal.app;
 
 import android.annotation.IntRange;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.icu.text.CaseMap;
 import android.icu.text.ListFormatter;
+import android.icu.text.NumberingSystem;
 import android.icu.util.ULocale;
 import android.os.LocaleList;
 import android.text.TextUtils;
@@ -35,43 +37,13 @@ public class LocaleHelper {
     /**
      * Sentence-case (first character uppercased).
      *
-     * <p>There is no good API available for this, not even in ICU.
-     * We can revisit this if we get some ICU support later.</p>
-     *
-     * <p>There are currently several tickets requesting this feature:</p>
-     * <ul>
-     * <li>ICU needs to provide an easy way to titlecase only one first letter
-     *   http://bugs.icu-project.org/trac/ticket/11729</li>
-     * <li>Add "initial case"
-     *    http://bugs.icu-project.org/trac/ticket/8394</li>
-     * <li>Add code for initialCase, toTitlecase don't modify after Lt,
-     *   avoid 49Ers, low-level language-specific casing
-     *   http://bugs.icu-project.org/trac/ticket/10410</li>
-     * <li>BreakIterator.getFirstInstance: Often you need to titlecase just the first
-     *   word, and leave the rest of the string alone.  (closed as duplicate)
-     *   http://bugs.icu-project.org/trac/ticket/8946</li>
-     * </ul>
-     *
-     * <p>A (clunky) option with the current ICU API is:</p>
-     * {{
-     *   BreakIterator breakIterator = BreakIterator.getSentenceInstance(locale);
-     *   String result = UCharacter.toTitleCase(locale,
-     *       source, breakIterator, UCharacter.TITLECASE_NO_LOWERCASE);
-     * }}
-     *
-     * <p>That also means creating a BreakIterator for each locale. Expensive...</p>
-     *
      * @param str the string to sentence-case.
      * @param locale the locale used for the case conversion.
      * @return the string converted to sentence-case.
      */
     public static String toSentenceCase(String str, Locale locale) {
-        if (str.isEmpty()) {
-            return str;
-        }
-        final int firstCodePointLen = str.offsetByCodePoints(0, 1);
-        return str.substring(0, firstCodePointLen).toUpperCase(locale)
-                + str.substring(firstCodePointLen);
+        // Titlecases only the character at index 0, don't touch anything else
+        return CaseMap.toTitle().wholeString().noLowercase().apply(locale, null, str);
     }
 
     /**
@@ -202,13 +174,28 @@ public class LocaleHelper {
     }
 
     /**
+     * Returns numbering system value of a locale for display in the provided locale.
+     *
+     * @param locale The locale whose key value is displayed.
+     * @param displayLocale The locale in which to display the key value.
+     * @return The string of numbering system.
+     */
+    public static String getDisplayNumberingSystemKeyValue(
+            Locale locale, Locale displayLocale) {
+        ULocale uLocale = new ULocale.Builder()
+                .setUnicodeLocaleKeyword("nu", NumberingSystem.getInstance(locale).getName())
+                .build();
+        return uLocale.getDisplayKeywordValue("numbers", ULocale.forLocale(displayLocale));
+    }
+
+    /**
      * Adds the likely subtags for a provided locale ID.
      *
      * @param locale the locale to maximize.
      * @return the maximized Locale instance.
      */
     public static Locale addLikelySubtags(Locale locale) {
-        return libcore.icu.ICU.addLikelySubtags(locale);
+        return ULocale.addLikelySubtags(ULocale.forLocale(locale)).toLocale();
     }
 
     /**
@@ -263,7 +250,11 @@ public class LocaleHelper {
         public int compare(LocaleStore.LocaleInfo lhs, LocaleStore.LocaleInfo rhs) {
             // We don't care about the various suggestion types, just "suggested" (!= 0)
             // and "all others" (== 0)
-            if (lhs.isSuggested() == rhs.isSuggested()) {
+            if (lhs.isAppCurrentLocale() || rhs.isAppCurrentLocale()) {
+                return lhs.isAppCurrentLocale() ? -1 : 1;
+            } else if (lhs.isSystemLocale() || rhs.isSystemLocale()) {
+                    return lhs.isSystemLocale() ? -1 : 1;
+            } else if (lhs.isSuggested() == rhs.isSuggested()) {
                 // They are in the same "bucket" (suggested / others), so we compare the text
                 return mCollator.compare(
                         removePrefixForCompare(lhs.getLocale(), lhs.getLabel(mCountryMode)),

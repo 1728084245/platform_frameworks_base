@@ -20,13 +20,12 @@ import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.res.TypedArray;
 import android.graphics.Bitmap;
-import android.graphics.PorterDuff;
 import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
 import android.view.View;
 
 import com.android.settingslib.drawable.UserIconDrawable;
-import com.android.systemui.R;
+import com.android.systemui.res.R;
 
 /**
  * A view that displays a user image cropped to a circle with an optional frame.
@@ -73,6 +72,12 @@ public class UserAvatarView extends View {
 
     public UserAvatarView(Context context) {
         this(context, null);
+    }
+
+    @Override
+    public void setActivated(boolean activated) {
+        super.setActivated(activated);
+        mDrawable.invalidateSelf();
     }
 
     /**
@@ -131,5 +136,9 @@ public class UserAvatarView extends View {
         }
         mDrawable.setIconDrawable(d);
         mDrawable.setBadgeIfManagedUser(getContext(), userId);
+    }
+
+    public boolean isEmpty() {
+        return mDrawable.isEmpty();
     }
 }

@@ -18,7 +18,7 @@ package android.widget;
 
 import static android.os.Build.VERSION_CODES.JELLY_BEAN_MR1;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Canvas;
@@ -31,6 +31,8 @@ import android.view.ContextMenu;
 import android.view.ContextMenu.ContextMenuInfo;
 import android.view.SoundEffectConstants;
 import android.view.View;
+import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.ExpandableListConnector.PositionMetadata;
 
 import com.android.internal.R;
@@ -242,6 +244,8 @@ public class ExpandableListView extends ListView {
 
         final TypedArray a = context.obtainStyledAttributes(attrs,
                 com.android.internal.R.styleable.ExpandableListView, defStyleAttr, defStyleRes);
+        saveAttributeDataForStyleable(context, com.android.internal.R.styleable.ExpandableListView,
+                attrs, a, defStyleAttr, defStyleRes);
 
         mGroupIndicator = a.getDrawable(
                 com.android.internal.R.styleable.ExpandableListView_groupIndicator);
@@ -657,7 +661,11 @@ public class ExpandableListView extends ListView {
 
         // Internally handle the item click
         final int adjustedPosition = getFlatPositionForConnector(position);
-        return handleItemClick(v, adjustedPosition, id);
+        final boolean clicked = handleItemClick(v, adjustedPosition, id);
+        if (v != null) {
+            v.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_CLICKED);
+        }
+        return clicked;
     }
 
     /**
@@ -1005,7 +1013,7 @@ public class ExpandableListView extends ListView {
 
             flatChildPos = mConnector.getFlattenedPos(elChildPos);
 
-            // Sanity check
+            // Validity check
             if (flatChildPos == null) {
                 throw new IllegalStateException("Could not find child");
             }
@@ -1140,6 +1148,27 @@ public class ExpandableListView extends ListView {
         pm.recycle();
 
         return new ExpandableListContextMenuInfo(view, packedPosition, id);
+    }
+
+    /** @hide */
+    @Override
+    public void onInitializeAccessibilityNodeInfoForItem(
+            View view, int position, AccessibilityNodeInfo info) {
+        super.onInitializeAccessibilityNodeInfoForItem(view, position, info);
+        final PositionMetadata metadata = mConnector.getUnflattenedPos(position);
+        if (metadata.position.type == ExpandableListPosition.GROUP) {
+            if (view != null && view.isEnabled()) {
+                info.setClickable(true);
+                info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK);
+                if (isGroupExpanded(metadata.position.groupPos)) {
+                    info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_COLLAPSE);
+                } else {
+                    info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_EXPAND);
+                }
+            }
+        }
+
+        metadata.recycle();
     }
 
     /**
@@ -1307,7 +1336,7 @@ public class ExpandableListView extends ListView {
         private SavedState(Parcel in) {
             super(in);
             expandedGroupMetadataList = new ArrayList<ExpandableListConnector.GroupMetadata>();
-            in.readList(expandedGroupMetadataList, ExpandableListConnector.class.getClassLoader());
+            in.readList(expandedGroupMetadataList, ExpandableListConnector.class.getClassLoader(), android.widget.ExpandableListConnector.GroupMetadata.class);
         }
 
         @Override
@@ -1316,7 +1345,7 @@ public class ExpandableListView extends ListView {
             out.writeList(expandedGroupMetadataList);
         }
 
-        public static final Parcelable.Creator<SavedState> CREATOR
+        public static final @android.annotation.NonNull Parcelable.Creator<SavedState> CREATOR
                 = new Parcelable.Creator<SavedState>() {
             public SavedState createFromParcel(Parcel in) {
                 return new SavedState(in);

@@ -16,18 +16,30 @@
 
 package android.graphics.perftests;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+
+import android.content.Context;
 import android.graphics.Bitmap;
-import android.graphics.Color;
 import android.graphics.Bitmap.Config;
+import android.graphics.Color;
+import android.graphics.ColorSpace;
+import android.graphics.ImageDecoder;
 import android.graphics.Paint;
+import android.graphics.RecordingCanvas;
+import android.graphics.RenderNode;
 import android.perftests.utils.BenchmarkState;
 import android.perftests.utils.PerfStatusReporter;
-import android.support.test.filters.LargeTest;
-import android.view.DisplayListCanvas;
-import android.view.RenderNode;
+
+import androidx.test.InstrumentationRegistry;
+import androidx.test.filters.LargeTest;
+
+import com.android.perftests.core.R;
 
 import org.junit.Rule;
 import org.junit.Test;
+
+import java.io.IOException;
 
 @LargeTest
 public class CanvasPerfTest {
@@ -43,7 +55,7 @@ public class CanvasPerfTest {
         RenderNode child = RenderNode.create("child", null);
         child.setLeftTopRightBottom(50, 50, 100, 100);
 
-        DisplayListCanvas canvas = node.start(100, 100);
+        RecordingCanvas canvas = node.start(100, 100);
         node.end(canvas);
         canvas = child.start(50, 50);
         canvas.drawColor(Color.WHITE);
@@ -53,11 +65,11 @@ public class CanvasPerfTest {
             canvas = node.start(200, 200);
             int save = canvas.save();
             canvas.clipRect(1, 1, 199, 199);
-            canvas.insertReorderBarrier();
+            canvas.enableZ();
             for (int i = 0; i < 5; i++) {
                 canvas.drawRenderNode(child);
             }
-            canvas.insertInorderBarrier();
+            canvas.disableZ();
             canvas.restoreToCount(save);
             node.end(canvas);
         }
@@ -70,7 +82,7 @@ public class CanvasPerfTest {
         BenchmarkState state = mPerfStatusReporter.getBenchmarkState();
         RenderNode node = RenderNode.create("benchmark", null);
 
-        DisplayListCanvas canvas = node.start(100, 100);
+        RecordingCanvas canvas = node.start(100, 100);
         node.end(canvas);
         Bitmap bitmap = Bitmap.createBitmap(80, 80, Config.ARGB_8888);
         Paint paint = new Paint();
@@ -91,5 +103,66 @@ public class CanvasPerfTest {
             }
             node.end(canvas);
         }
+    }
+
+    @Test
+    public void testCreateScaledSrgbBitmap() throws IOException {
+        BenchmarkState state = mPerfStatusReporter.getBenchmarkState();
+        final Context context = InstrumentationRegistry.getContext();
+        Bitmap source = ImageDecoder.decodeBitmap(
+                ImageDecoder.createSource(context.getResources(), R.drawable.fountain_night),
+                (decoder, info, source1) -> {
+                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+                    decoder.setTargetColorSpace(ColorSpace.get(ColorSpace.Named.SRGB));
+                });
+        source.setGainmap(null);
+        assertEquals(source.getColorSpace().getId(), ColorSpace.Named.SRGB.ordinal());
+
+        while (state.keepRunning()) {
+            Bitmap.createScaledBitmap(source, source.getWidth() / 2, source.getHeight() / 2, true)
+                    .recycle();
+        }
+        source.recycle();
+        Runtime.getRuntime().gc();
+    }
+
+    @Test
+    public void testCreateScaledP3Bitmap() throws IOException {
+        BenchmarkState state = mPerfStatusReporter.getBenchmarkState();
+        final Context context = InstrumentationRegistry.getContext();
+        Bitmap source = ImageDecoder.decodeBitmap(
+                ImageDecoder.createSource(context.getResources(), R.drawable.fountain_night),
+                (decoder, info, source1) -> {
+                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+                    decoder.setTargetColorSpace(ColorSpace.get(ColorSpace.Named.DISPLAY_P3));
+                });
+        source.setGainmap(null);
+        assertEquals(source.getColorSpace().getId(), ColorSpace.Named.DISPLAY_P3.ordinal());
+
+        while (state.keepRunning()) {
+            Bitmap.createScaledBitmap(source, source.getWidth() / 2, source.getHeight() / 2, true)
+                    .recycle();
+        }
+        source.recycle();
+        Runtime.getRuntime().gc();
+    }
+
+    @Test
+    public void testCreateScaledBitmapWithGainmap() throws IOException {
+        BenchmarkState state = mPerfStatusReporter.getBenchmarkState();
+        final Context context = InstrumentationRegistry.getContext();
+        Bitmap source = ImageDecoder.decodeBitmap(
+                ImageDecoder.createSource(context.getResources(), R.drawable.fountain_night),
+                (decoder, info, source1) -> {
+                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+                });
+        assertTrue(source.hasGainmap());
+
+        while (state.keepRunning()) {
+            Bitmap.createScaledBitmap(source, source.getWidth() / 2, source.getHeight() / 2, true)
+                    .recycle();
+        }
+        source.recycle();
+        Runtime.getRuntime().gc();
     }
 }

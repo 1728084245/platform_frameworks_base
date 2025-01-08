@@ -16,7 +16,7 @@
 
 package com.android.internal.util;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 
 /**
  * An object that provides bitwise incremental write access to a byte array.
@@ -26,6 +26,7 @@ import android.annotation.UnsupportedAppUsage;
  *
  * NOTE -- This class is not threadsafe.
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public class BitwiseOutputStream {
 
     // The byte array being written to, which will be grown as needed.

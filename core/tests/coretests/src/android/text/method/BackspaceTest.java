@@ -17,14 +17,15 @@
 package android.text.method;
 
 import android.platform.test.annotations.Presubmit;
-import android.support.test.InstrumentationRegistry;
-import android.support.test.filters.SmallTest;
-import android.support.test.runner.AndroidJUnit4;
 import android.text.InputType;
 import android.util.KeyUtils;
 import android.view.KeyEvent;
 import android.widget.EditText;
 import android.widget.TextView.BufferType;
+
+import androidx.test.InstrumentationRegistry;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -192,8 +193,12 @@ public class BackspaceTest {
         backspace(state, 0);
         state.assertEquals("|");
 
-        // Emoji modifier can be appended to the first emoji.
+        // Emoji modifier can be appended to each emoji.
         state.setByString("U+1F469 U+1F3FB U+200D U+1F4BC |");
+        backspace(state, 0);
+        state.assertEquals("|");
+
+        state.setByString("U+1F468 U+1F3FF U+200D U+2764 U+FE0F U+200D U+1F468 U+1F3FB |");
         backspace(state, 0);
         state.assertEquals("|");
 

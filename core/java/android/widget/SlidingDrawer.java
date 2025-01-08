@@ -17,7 +17,7 @@
 package android.widget;
 
 import android.R;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Bitmap;
@@ -218,6 +218,8 @@ public class SlidingDrawer extends ViewGroup {
 
         final TypedArray a = context.obtainStyledAttributes(
                 attrs, R.styleable.SlidingDrawer, defStyleAttr, defStyleRes);
+        saveAttributeDataForStyleable(context, R.styleable.SlidingDrawer,
+                attrs, a, defStyleAttr, defStyleRes);
 
         int orientation = a.getInt(R.styleable.SlidingDrawer_orientation, ORIENTATION_VERTICAL);
         mVertical = orientation == ORIENTATION_VERTICAL;

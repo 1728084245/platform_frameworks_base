@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <gui/TraceUtils.h>
 #include "AnimationContext.h"
 #include "RenderNode.h"
 #include "renderthread/RenderProxy.h"
@@ -26,6 +27,20 @@
 #include <gui/Surface.h>
 #include <log/log.h>
 #include <ui/PixelFormat.h>
+
+// These are unstable internal APIs in google-benchmark. We should just implement our own variant
+// of these instead, but this was quicker. Disabled-by-default to avoid any breakages when
+// google-benchmark updates if they change anything
+#if 0
+#define USE_SKETCHY_INTERNAL_STATS
+namespace benchmark {
+std::vector<BenchmarkReporter::Run> ComputeStats(
+        const std::vector<BenchmarkReporter::Run> &reports);
+double StatisticsMean(const std::vector<double>& v);
+double StatisticsMedian(const std::vector<double>& v);
+double StatisticsStdDev(const std::vector<double>& v);
+}
+#endif
 
 using namespace android;
 using namespace android::uirenderer;
@@ -61,63 +76,41 @@ private:
     T mAverage;
 };
 
+using BenchmarkResults = std::vector<benchmark::BenchmarkReporter::Run>;
+
 void outputBenchmarkReport(const TestScene::Info& info, const TestScene::Options& opts,
-                           benchmark::BenchmarkReporter* reporter, RenderProxy* proxy,
-                           double durationInS) {
+                           double durationInS, int repetationIndex, BenchmarkResults* reports) {
     using namespace benchmark;
-
-    struct ReportInfo {
-        int percentile;
-        const char* suffix;
-    };
-
-    static std::array<ReportInfo, 4> REPORTS = {
-            ReportInfo{50, "_50th"}, ReportInfo{90, "_90th"}, ReportInfo{95, "_95th"},
-            ReportInfo{99, "_99th"},
-    };
-
-    // Although a vector is used, it must stay with only a single element
-    // otherwise the BenchmarkReporter will automatically compute
-    // mean and stddev which doesn't make sense for our usage
-    std::vector<BenchmarkReporter::Run> reports;
-    BenchmarkReporter::Run report;
+    benchmark::BenchmarkReporter::Run report;
+    report.repetitions = opts.repeatCount;
+    report.repetition_index = repetationIndex;
     report.run_name.function_name = info.name;
-    report.iterations = static_cast<int64_t>(opts.count);
+    report.iterations = static_cast<int64_t>(opts.frameCount);
     report.real_accumulated_time = durationInS;
     report.cpu_accumulated_time = durationInS;
-    report.counters["items_per_second"] = opts.count / durationInS;
-    reports.push_back(report);
-    reporter->ReportRuns(reports);
-
-    // Pretend the percentiles are single-iteration runs of the test
-    // If rendering offscreen skip this as it's fps that's more interesting
-    // in that test case than percentiles.
-    if (!opts.renderOffscreen) {
-        for (auto& ri : REPORTS) {
-            reports[0].run_name.function_name = info.name;
-            reports[0].run_name.function_name += ri.suffix;
-            durationInS = proxy->frameTimePercentile(ri.percentile) / 1000.0;
-            reports[0].real_accumulated_time = durationInS;
-            reports[0].cpu_accumulated_time = durationInS;
-            reports[0].iterations = 1;
-            reports[0].counters["items_per_second"] = 0;
-            reporter->ReportRuns(reports);
-        }
+    report.counters["FPS"] = opts.frameCount / durationInS;
+    if (opts.reportGpuMemoryUsage) {
+        size_t cpuUsage, gpuUsage;
+        RenderProxy::getMemoryUsage(&cpuUsage, &gpuUsage);
+        report.counters["Rendering RAM"] = Counter{static_cast<double>(cpuUsage + gpuUsage),
+                                                   Counter::kDefaults, Counter::kIs1024};
     }
+    reports->push_back(report);
 }
 
-void run(const TestScene::Info& info, const TestScene::Options& opts,
-         benchmark::BenchmarkReporter* reporter) {
-    // Switch to the real display
-    gDisplay = getBuiltInDisplay();
-
-    Properties::forceDrawFrame = true;
+static void doRun(const TestScene::Info& info, const TestScene::Options& opts, int repetitionIndex,
+                  BenchmarkResults* reports) {
+    if (opts.reportGpuMemoryUsage) {
+        // If we're reporting GPU memory usage we need to first start with a clean slate
+        RenderProxy::purgeCaches();
+    }
     TestContext testContext;
     testContext.setRenderOffscreen(opts.renderOffscreen);
 
     // create the native surface
-    const int width = gDisplay.w;
-    const int height = gDisplay.h;
+    const ui::Size& resolution = getActiveDisplayResolution();
+    const int width = resolution.getWidth();
+    const int height = resolution.getHeight();
     sp<Surface> surface = testContext.surface();
 
     std::unique_ptr<TestScene> scene(info.createScene(opts));
@@ -132,10 +125,10 @@ void run(const TestScene::Info& info, const TestScene::Options& opts,
     ContextFactory factory;
     std::unique_ptr<RenderProxy> proxy(new RenderProxy(false, rootNode.get(), &factory));
     proxy->loadSystemProperties();
-    proxy->initialize(surface);
+    proxy->setSurface(surface.get());
     float lightX = width / 2.0;
-    proxy->setup(dp(800.0f), 255 * 0.075, 255 * 0.15);
-    proxy->setLightCenter((Vector3){lightX, dp(-200.0f), dp(800.0f)});
+    proxy->setLightAlpha(255 * 0.075, 255 * 0.15);
+    proxy->setLightGeometry((Vector3){lightX, dp(-200.0f), dp(800.0f)}, dp(800.0f));
 
     // Do a few cold runs then reset the stats so that the caches are all hot
     int warmupFrameCount = 5;
@@ -145,8 +138,12 @@ void run(const TestScene::Info& info, const TestScene::Options& opts,
     }
     for (int i = 0; i < warmupFrameCount; i++) {
         testContext.waitForVsync();
-        nsecs_t vsync = systemTime(CLOCK_MONOTONIC);
-        UiFrameInfoBuilder(proxy->frameInfo()).setVsync(vsync, vsync);
+        nsecs_t vsync = systemTime(SYSTEM_TIME_MONOTONIC);
+        UiFrameInfoBuilder(proxy->frameInfo())
+            .setVsync(vsync, vsync, UiFrameInfoBuilder::INVALID_VSYNC_ID,
+                      UiFrameInfoBuilder::UNKNOWN_DEADLINE,
+                      UiFrameInfoBuilder::UNKNOWN_FRAME_INTERVAL);
+        proxy->forceDrawNextFrame();
         proxy->syncAndDrawFrame();
     }
 
@@ -155,19 +152,23 @@ void run(const TestScene::Info& info, const TestScene::Options& opts,
 
     ModifiedMovingAverage<double> avgMs(opts.reportFrametimeWeight);
 
-    nsecs_t start = systemTime(CLOCK_MONOTONIC);
-    for (int i = 0; i < opts.count; i++) {
+    nsecs_t start = systemTime(SYSTEM_TIME_MONOTONIC);
+    for (int i = 0; i < opts.frameCount; i++) {
         testContext.waitForVsync();
-        nsecs_t vsync = systemTime(CLOCK_MONOTONIC);
+        nsecs_t vsync = systemTime(SYSTEM_TIME_MONOTONIC);
         {
             ATRACE_NAME("UI-Draw Frame");
-            UiFrameInfoBuilder(proxy->frameInfo()).setVsync(vsync, vsync);
+            UiFrameInfoBuilder(proxy->frameInfo())
+                .setVsync(vsync, vsync, UiFrameInfoBuilder::INVALID_VSYNC_ID,
+                          UiFrameInfoBuilder::UNKNOWN_DEADLINE,
+                          UiFrameInfoBuilder::UNKNOWN_FRAME_INTERVAL);
             scene->doFrame(i);
+            proxy->forceDrawNextFrame();
             proxy->syncAndDrawFrame();
         }
         if (opts.reportFrametimeWeight) {
             proxy->fence();
-            nsecs_t done = systemTime(CLOCK_MONOTONIC);
+            nsecs_t done = systemTime(SYSTEM_TIME_MONOTONIC);
             avgMs.add((done - vsync) / 1000000.0);
             if (i % 10 == 9) {
                 printf("Average frametime %.3fms\n", avgMs.average());
@@ -175,11 +176,40 @@ void run(const TestScene::Info& info, const TestScene::Options& opts,
         }
     }
     proxy->fence();
-    nsecs_t end = systemTime(CLOCK_MONOTONIC);
+    nsecs_t end = systemTime(SYSTEM_TIME_MONOTONIC);
 
-    if (reporter) {
-        outputBenchmarkReport(info, opts, reporter, proxy.get(), (end - start) / (double)s2ns(1));
+    if (reports) {
+        outputBenchmarkReport(info, opts, (end - start) / (double)s2ns(1), repetitionIndex,
+                              reports);
     } else {
         proxy->dumpProfileInfo(STDOUT_FILENO, DumpFlags::JankStats);
+    }
+}
+
+void run(const TestScene::Info& info, const TestScene::Options& opts,
+         benchmark::BenchmarkReporter* reporter) {
+    BenchmarkResults results;
+    for (int i = 0; i < opts.repeatCount; i++) {
+        doRun(info, opts, i, reporter ? &results : nullptr);
+    }
+    if (reporter) {
+        reporter->ReportRuns(results);
+        if (results.size() > 1) {
+#ifdef USE_SKETCHY_INTERNAL_STATS
+            std::vector<benchmark::internal::Statistics> stats;
+            stats.reserve(3);
+            stats.emplace_back("mean", benchmark::StatisticsMean);
+            stats.emplace_back("median", benchmark::StatisticsMedian);
+            stats.emplace_back("stddev", benchmark::StatisticsStdDev);
+            for (auto& it : results) {
+                it.statistics = &stats;
+            }
+            auto summary = benchmark::ComputeStats(results);
+            reporter->ReportRuns(summary);
+#endif
+        }
+    }
+    if (opts.reportGpuMemoryUsageVerbose) {
+        RenderProxy::dumpGraphicsMemory(STDOUT_FILENO, false);
     }
 }

@@ -17,19 +17,29 @@
 #ifndef RENDERPROXY_H_
 #define RENDERPROXY_H_
 
-#include <SkBitmap.h>
+#include <SkRefCnt.h>
+#include <android/hardware_buffer.h>
+#include <android/native_window.h>
+#include <android/surface_control.h>
 #include <cutils/compiler.h>
-#include <gui/Surface.h>
 #include <utils/Functor.h>
 
 #include "../FrameMetricsObserver.h"
 #include "../IContextFactory.h"
+#include "ColorMode.h"
+#include "CopyRequest.h"
 #include "DrawFrameTask.h"
 #include "SwapBehavior.h"
 #include "hwui/Bitmap.h"
+#include "utils/ForceDark.h"
+
+class SkBitmap;
+class SkPicture;
+class SkImage;
 
 namespace android {
 class GraphicBuffer;
+class Surface;
 
 namespace uirenderer {
 
@@ -49,7 +59,7 @@ enum {
     Reset = 1 << 1,
     JankStats = 1 << 2,
 };
-};
+}
 
 /*
  * RenderProxy is strictly single threaded. All methods must be invoked on the owning
@@ -59,85 +69,93 @@ enum {
  * references RenderProxy fields. This is safe as RenderProxy cannot
  * be deleted if it is blocked inside a call.
  */
-class ANDROID_API RenderProxy {
+class RenderProxy {
 public:
-    ANDROID_API RenderProxy(bool opaque, RenderNode* rootNode, IContextFactory* contextFactory);
-    ANDROID_API virtual ~RenderProxy();
+    RenderProxy(bool opaque, RenderNode* rootNode, IContextFactory* contextFactory);
+    virtual ~RenderProxy();
 
     // Won't take effect until next EGLSurface creation
-    ANDROID_API void setSwapBehavior(SwapBehavior swapBehavior);
-    ANDROID_API bool loadSystemProperties();
-    ANDROID_API void setName(const char* name);
+    void setSwapBehavior(SwapBehavior swapBehavior);
+    bool loadSystemProperties();
+    void setName(const char* name);
+    void setHardwareBuffer(AHardwareBuffer* buffer);
+    void setSurface(ANativeWindow* window, bool enableTimeout = true);
+    void setSurfaceControl(ASurfaceControl* surfaceControl);
+    void allocateBuffers();
+    bool pause();
+    void setStopped(bool stopped);
+    void setLightAlpha(uint8_t ambientShadowAlpha, uint8_t spotShadowAlpha);
+    void setLightGeometry(const Vector3& lightCenter, float lightRadius);
+    void setHardwareBufferRenderParams(const HardwareBufferRenderParams& params);
+    void setOpaque(bool opaque);
+    float setColorMode(ColorMode mode);
+    void setRenderSdrHdrRatio(float ratio);
+    int64_t* frameInfo();
+    void forceDrawNextFrame();
+    int syncAndDrawFrame();
+    void destroy();
 
-    ANDROID_API void initialize(const sp<Surface>& surface);
-    ANDROID_API void allocateBuffers(const sp<Surface>& surface);
-    ANDROID_API void updateSurface(const sp<Surface>& surface);
-    ANDROID_API bool pauseSurface(const sp<Surface>& surface);
-    ANDROID_API void setStopped(bool stopped);
-    ANDROID_API void setup(float lightRadius, uint8_t ambientShadowAlpha, uint8_t spotShadowAlpha);
-    ANDROID_API void setLightCenter(const Vector3& lightCenter);
-    ANDROID_API void setOpaque(bool opaque);
-    ANDROID_API void setWideGamut(bool wideGamut);
-    ANDROID_API int64_t* frameInfo();
-    ANDROID_API int syncAndDrawFrame();
-    ANDROID_API void destroy();
+    static void destroyFunctor(int functor);
 
-    ANDROID_API static void invokeFunctor(Functor* functor, bool waitForCompletion);
+    DeferredLayerUpdater* createTextureLayer();
+    void buildLayer(RenderNode* node);
+    bool copyLayerInto(DeferredLayerUpdater* layer, SkBitmap& bitmap);
+    void pushLayerUpdate(DeferredLayerUpdater* layer);
+    void cancelLayerUpdate(DeferredLayerUpdater* layer);
+    void detachSurfaceTexture(DeferredLayerUpdater* layer);
 
-    ANDROID_API DeferredLayerUpdater* createTextureLayer();
-    ANDROID_API void buildLayer(RenderNode* node);
-    ANDROID_API bool copyLayerInto(DeferredLayerUpdater* layer, SkBitmap& bitmap);
-    ANDROID_API void pushLayerUpdate(DeferredLayerUpdater* layer);
-    ANDROID_API void cancelLayerUpdate(DeferredLayerUpdater* layer);
-    ANDROID_API void detachSurfaceTexture(DeferredLayerUpdater* layer);
+    void destroyHardwareResources();
+    static void trimMemory(int level);
+    static void trimCaches(int level);
+    static void purgeCaches();
+    static void overrideProperty(const char* name, const char* value);
 
-    ANDROID_API void destroyHardwareResources();
-    ANDROID_API static void trimMemory(int level);
-    ANDROID_API static void overrideProperty(const char* name, const char* value);
+    void fence();
+    static int maxTextureSize();
+    void stopDrawing();
+    void notifyFramePending();
+    void notifyCallbackPending();
+    void notifyExpensiveFrame();
 
-    ANDROID_API void fence();
-    ANDROID_API static void staticFence();
-    ANDROID_API void stopDrawing();
-    ANDROID_API void notifyFramePending();
-
-    ANDROID_API void dumpProfileInfo(int fd, int dumpFlags);
+    void dumpProfileInfo(int fd, int dumpFlags);
     // Not exported, only used for testing
     void resetProfileInfo();
     uint32_t frameTimePercentile(int p);
-    ANDROID_API static void dumpGraphicsMemory(int fd);
+    static void dumpGraphicsMemory(int fd, bool includeProfileData = true,
+                                   bool resetProfile = false);
+    static void getMemoryUsage(size_t* cpuUsage, size_t* gpuUsage);
 
-    ANDROID_API static void rotateProcessStatsBuffer();
-    ANDROID_API static void setProcessStatsBuffer(int fd);
-    ANDROID_API int getRenderThreadTid();
+    static void rotateProcessStatsBuffer();
+    static void setProcessStatsBuffer(int fd);
+    int getRenderThreadTid();
 
-    ANDROID_API void serializeDisplayListTree();
+    void addRenderNode(RenderNode* node, bool placeFront);
+    void removeRenderNode(RenderNode* node);
+    void drawRenderNode(RenderNode* node);
+    void setContentDrawBounds(int left, int top, int right, int bottom);
+    void setPictureCapturedCallback(const std::function<void(sk_sp<SkPicture>&&)>& callback);
+    void setASurfaceTransactionCallback(
+            const std::function<bool(int64_t, int64_t, int64_t)>& callback);
+    void setPrepareSurfaceControlForWebviewCallback(const std::function<void()>& callback);
+    void setFrameCallback(std::function<std::function<void(bool)>(int32_t, int64_t)>&& callback);
+    void setFrameCommitCallback(std::function<void(bool)>&& callback);
+    void setFrameCompleteCallback(std::function<void()>&& callback);
 
-    ANDROID_API void addRenderNode(RenderNode* node, bool placeFront);
-    ANDROID_API void removeRenderNode(RenderNode* node);
-    ANDROID_API void drawRenderNode(RenderNode* node);
-    ANDROID_API void setContentDrawBounds(int left, int top, int right, int bottom);
-    ANDROID_API void setFrameCallback(std::function<void(int64_t)>&& callback);
-    ANDROID_API void setFrameCompleteCallback(std::function<void(int64_t)>&& callback);
+    void addFrameMetricsObserver(FrameMetricsObserver* observer);
+    void removeFrameMetricsObserver(FrameMetricsObserver* observer);
+    void setForceDark(ForceDarkType type);
 
-    ANDROID_API void addFrameMetricsObserver(FrameMetricsObserver* observer);
-    ANDROID_API void removeFrameMetricsObserver(FrameMetricsObserver* observer);
-    ANDROID_API long getDroppedFrameReportCount();
+    static void copySurfaceInto(ANativeWindow* window, std::shared_ptr<CopyRequest>&& request);
+    static void prepareToDraw(Bitmap& bitmap);
 
-    ANDROID_API static int copySurfaceInto(sp<Surface>& surface, int left, int top, int right,
-                                           int bottom, SkBitmap* bitmap);
-    ANDROID_API static void prepareToDraw(Bitmap& bitmap);
+    static int copyHWBitmapInto(Bitmap* hwBitmap, SkBitmap* bitmap);
+    static int copyImageInto(const sk_sp<SkImage>& image, SkBitmap* bitmap);
 
-    static sk_sp<Bitmap> allocateHardwareBitmap(SkBitmap& bitmap);
+    static void disableVsync();
 
-    static int copyGraphicBufferInto(GraphicBuffer* buffer, SkBitmap* bitmap);
+    static void preload();
 
-    static void onBitmapDestroyed(uint32_t pixelRefId);
-
-    ANDROID_API static void disableVsync();
-
-    static void repackVectorDrawableAtlas();
-
-    static void releaseVDAtlasEntries();
+    static void setRtAnimationsEnabled(bool enabled);
 
 private:
     RenderThread& mRenderThread;

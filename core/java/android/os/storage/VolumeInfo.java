@@ -18,11 +18,12 @@ package android.os.storage;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Resources;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Environment;
 import android.os.IVold;
 import android.os.Parcel;
@@ -42,7 +43,9 @@ import com.android.internal.util.Preconditions;
 import java.io.CharArrayWriter;
 import java.io.File;
 import java.util.Comparator;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * Information about a storage volume that may be mounted. A volume may be a
@@ -53,11 +56,12 @@ import java.util.Objects;
  * <ul>
  * <li>{@link #MOUNT_FLAG_PRIMARY} means the volume provides primary external
  * storage, historically found at {@code /sdcard}.
- * <li>{@link #MOUNT_FLAG_VISIBLE} means the volume is visible to third-party
- * apps for direct filesystem access. The system should send out relevant
- * storage broadcasts and index any media on visible volumes. Visible volumes
- * are considered a more stable part of the device, which is why we take the
- * time to index them. In particular, transient volumes like USB OTG devices
+ * <li>{@link #MOUNT_FLAG_VISIBLE_FOR_READ} and
+ * {@link #MOUNT_FLAG_VISIBLE_FOR_WRITE} mean the volume is visible to
+ * third-party apps for direct filesystem access. The system should send out
+ * relevant storage broadcasts and index any media on visible volumes. Visible
+ * volumes are considered a more stable part of the device, which is why we take
+ * the time to index them. In particular, transient volumes like USB OTG devices
  * <em>should not</em> be marked as visible; their contents should be surfaced
  * to apps through the Storage Access Framework.
  * </ul>
@@ -97,7 +101,8 @@ public class VolumeInfo implements Parcelable {
     public static final int STATE_BAD_REMOVAL = IVold.VOLUME_STATE_BAD_REMOVAL;
 
     public static final int MOUNT_FLAG_PRIMARY = IVold.MOUNT_FLAG_PRIMARY;
-    public static final int MOUNT_FLAG_VISIBLE = IVold.MOUNT_FLAG_VISIBLE;
+    public static final int MOUNT_FLAG_VISIBLE_FOR_READ = IVold.MOUNT_FLAG_VISIBLE_FOR_READ;
+    public static final int MOUNT_FLAG_VISIBLE_FOR_WRITE = IVold.MOUNT_FLAG_VISIBLE_FOR_WRITE;
 
     private static SparseArray<String> sStateToEnvironment = new SparseArray<>();
     private static ArrayMap<String, String> sEnvironmentToBroadcast = new ArrayMap<>();
@@ -158,7 +163,7 @@ public class VolumeInfo implements Parcelable {
     public final DiskInfo disk;
     public final String partGuid;
     public int mountFlags = 0;
-    public int mountUserId = -1;
+    public int mountUserId = UserHandle.USER_NULL;
     @UnsupportedAppUsage
     public int state = STATE_UNMOUNTED;
     public String fsType;
@@ -178,24 +183,39 @@ public class VolumeInfo implements Parcelable {
         this.partGuid = partGuid;
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public VolumeInfo(Parcel parcel) {
-        id = parcel.readString();
+        id = parcel.readString8();
         type = parcel.readInt();
         if (parcel.readInt() != 0) {
             disk = DiskInfo.CREATOR.createFromParcel(parcel);
         } else {
             disk = null;
         }
-        partGuid = parcel.readString();
+        partGuid = parcel.readString8();
         mountFlags = parcel.readInt();
         mountUserId = parcel.readInt();
         state = parcel.readInt();
-        fsType = parcel.readString();
-        fsUuid = parcel.readString();
-        fsLabel = parcel.readString();
-        path = parcel.readString();
-        internalPath = parcel.readString();
+        fsType = parcel.readString8();
+        fsUuid = parcel.readString8();
+        fsLabel = parcel.readString8();
+        path = parcel.readString8();
+        internalPath = parcel.readString8();
+    }
+
+    public VolumeInfo(VolumeInfo volumeInfo) {
+        this.id = volumeInfo.id;
+        this.type = volumeInfo.type;
+        this.disk = volumeInfo.disk;
+        this.partGuid = volumeInfo.partGuid;
+        this.mountFlags = volumeInfo.mountFlags;
+        this.mountUserId = volumeInfo.mountUserId;
+        this.state = volumeInfo.state;
+        this.fsType = volumeInfo.fsType;
+        this.fsUuid = volumeInfo.fsUuid;
+        this.fsLabel = volumeInfo.fsLabel;
+        this.path = volumeInfo.path;
+        this.internalPath = volumeInfo.internalPath;
     }
 
     @UnsupportedAppUsage
@@ -254,6 +274,10 @@ public class VolumeInfo implements Parcelable {
         return fsUuid;
     }
 
+    public @Nullable String getNormalizedFsUuid() {
+        return fsUuid != null ? fsUuid.toLowerCase(Locale.US) : null;
+    }
+
     @UnsupportedAppUsage
     public int getMountUserId() {
         return mountUserId;
@@ -261,7 +285,7 @@ public class VolumeInfo implements Parcelable {
 
     @UnsupportedAppUsage
     public @Nullable String getDescription() {
-        if (ID_PRIVATE_INTERNAL.equals(id) || ID_EMULATED_INTERNAL.equals(id)) {
+        if (ID_PRIVATE_INTERNAL.equals(id) || id.startsWith(ID_EMULATED_INTERNAL + ";")) {
             return Resources.getSystem().getString(com.android.internal.R.string.storage_internal);
         } else if (!TextUtils.isEmpty(fsLabel)) {
             return fsLabel;
@@ -290,28 +314,49 @@ public class VolumeInfo implements Parcelable {
         return isPrimary() && (getType() == TYPE_PUBLIC);
     }
 
-    @UnsupportedAppUsage
-    public boolean isVisible() {
-        return (mountFlags & MOUNT_FLAG_VISIBLE) != 0;
+    private boolean isVisibleForRead() {
+        return (mountFlags & MOUNT_FLAG_VISIBLE_FOR_READ) != 0;
     }
 
-    public boolean isVisibleForUser(int userId) {
-        if ((type == TYPE_PUBLIC || type == TYPE_STUB) && mountUserId == userId) {
-            return isVisible();
-        } else if (type == TYPE_EMULATED) {
-            return isVisible();
-        } else {
+    private boolean isVisibleForWrite() {
+        return (mountFlags & MOUNT_FLAG_VISIBLE_FOR_WRITE) != 0;
+    }
+
+    @UnsupportedAppUsage
+    public boolean isVisible() {
+        return isVisibleForRead() || isVisibleForWrite();
+    }
+
+    private boolean isVolumeSupportedForUser(int userId) {
+        if (mountUserId != userId) {
             return false;
         }
+        return type == TYPE_PUBLIC || type == TYPE_STUB || type == TYPE_EMULATED;
+    }
+
+    /**
+     * Returns {@code true} if this volume is visible for {@code userId}, {@code false} otherwise.
+     */
+    public boolean isVisibleForUser(int userId) {
+        return isVolumeSupportedForUser(userId) && isVisible();
+    }
+
+    /**
+     * Returns {@code true} if this volume is the primary emulated volume for {@code userId},
+     * {@code false} otherwise.
+     */
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+    public boolean isPrimaryEmulatedForUser(int userId) {
+        return id.equals(ID_EMULATED_INTERNAL + ";" + userId);
     }
 
     public boolean isVisibleForRead(int userId) {
-        return isVisibleForUser(userId);
+        return isVolumeSupportedForUser(userId) && isVisibleForRead();
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public boolean isVisibleForWrite(int userId) {
-        return isVisibleForUser(userId);
+        return isVolumeSupportedForUser(userId) && isVisibleForWrite();
     }
 
     @UnsupportedAppUsage
@@ -319,7 +364,7 @@ public class VolumeInfo implements Parcelable {
         return (path != null) ? new File(path) : null;
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public File getInternalPath() {
         return (internalPath != null) ? new File(internalPath) : null;
     }
@@ -359,6 +404,7 @@ public class VolumeInfo implements Parcelable {
 
         final boolean removable;
         final boolean emulated;
+        final boolean externallyManaged = type == TYPE_STUB;
         final boolean allowMassStorage = false;
         final String envState = reportUnmounted
                 ? Environment.MEDIA_UNMOUNTED : getEnvironmentForState(state);
@@ -373,6 +419,7 @@ public class VolumeInfo implements Parcelable {
         }
 
         String description = null;
+        UUID uuid = null;
         String derivedFsUuid = fsUuid;
         long maxFileSize = 0;
 
@@ -382,10 +429,13 @@ public class VolumeInfo implements Parcelable {
             final VolumeInfo privateVol = storage.findPrivateForEmulated(this);
             if (privateVol != null) {
                 description = storage.getBestVolumeDescription(privateVol);
+                uuid = StorageManager.convert(privateVol.fsUuid);
                 derivedFsUuid = privateVol.fsUuid;
+            } else {
+                uuid = StorageManager.UUID_DEFAULT;
             }
 
-            if (ID_EMULATED_INTERNAL.equals(id)) {
+            if (isPrimaryEmulatedForUser(userId)) {
                 removable = false;
             } else {
                 removable = true;
@@ -410,8 +460,8 @@ public class VolumeInfo implements Parcelable {
         }
 
         return new StorageVolume(id, userPath, internalPath, description, isPrimary(), removable,
-                emulated, allowMassStorage, maxFileSize, new UserHandle(userId),
-                derivedFsUuid, envState);
+                emulated, externallyManaged, allowMassStorage, maxFileSize, new UserHandle(userId),
+                uuid, derivedFsUuid, envState);
     }
 
     @UnsupportedAppUsage
@@ -508,7 +558,7 @@ public class VolumeInfo implements Parcelable {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (o instanceof VolumeInfo) {
             return Objects.equals(id, ((VolumeInfo) o).id);
         } else {
@@ -521,8 +571,8 @@ public class VolumeInfo implements Parcelable {
         return id.hashCode();
     }
 
-    @UnsupportedAppUsage
-    public static final Creator<VolumeInfo> CREATOR = new Creator<VolumeInfo>() {
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+    public static final @android.annotation.NonNull Creator<VolumeInfo> CREATOR = new Creator<VolumeInfo>() {
         @Override
         public VolumeInfo createFromParcel(Parcel in) {
             return new VolumeInfo(in);
@@ -541,7 +591,7 @@ public class VolumeInfo implements Parcelable {
 
     @Override
     public void writeToParcel(Parcel parcel, int flags) {
-        parcel.writeString(id);
+        parcel.writeString8(id);
         parcel.writeInt(type);
         if (disk != null) {
             parcel.writeInt(1);
@@ -549,14 +599,14 @@ public class VolumeInfo implements Parcelable {
         } else {
             parcel.writeInt(0);
         }
-        parcel.writeString(partGuid);
+        parcel.writeString8(partGuid);
         parcel.writeInt(mountFlags);
         parcel.writeInt(mountUserId);
         parcel.writeInt(state);
-        parcel.writeString(fsType);
-        parcel.writeString(fsUuid);
-        parcel.writeString(fsLabel);
-        parcel.writeString(path);
-        parcel.writeString(internalPath);
+        parcel.writeString8(fsType);
+        parcel.writeString8(fsUuid);
+        parcel.writeString8(fsLabel);
+        parcel.writeString8(path);
+        parcel.writeString8(internalPath);
     }
 }

@@ -16,6 +16,7 @@
 
 package com.android.connectivitymanagertest;
 
+import android.net.IpConfiguration;
 import android.net.IpConfiguration.IpAssignment;
 import android.net.IpConfiguration.ProxySettings;
 import android.net.LinkAddress;
@@ -136,7 +137,7 @@ public class WifiConfigurationHelper {
         config.enterpriseConfig.setPhase2Method(phase2);
         config.enterpriseConfig.setIdentity(identity);
         config.enterpriseConfig.setAnonymousIdentity(anonymousIdentity);
-        config.enterpriseConfig.setCaCertificateAlias(caCert);
+        config.enterpriseConfig.setCaCertificateAliases(new String[] {caCert});
         config.enterpriseConfig.setClientCertificateAlias(clientCert);
         return config;
     }
@@ -147,8 +148,12 @@ public class WifiConfigurationHelper {
     private static WifiConfiguration createGenericConfig(String ssid) {
         WifiConfiguration config = new WifiConfiguration();
         config.SSID = quotedString(ssid);
-        config.setIpAssignment(IpAssignment.DHCP);
-        config.setProxySettings(ProxySettings.NONE);
+
+        IpConfiguration ipConfiguration = config.getIpConfiguration();
+        ipConfiguration.setIpAssignment(IpAssignment.DHCP);
+        ipConfiguration.setProxySettings(ProxySettings.NONE);
+        config.setIpConfiguration(ipConfiguration);
+
         return config;
     }
 
@@ -237,23 +242,27 @@ public class WifiConfigurationHelper {
                 throw new IllegalArgumentException();
         }
 
+        IpConfiguration ipConfiguration = config.getIpConfiguration();
         if (jsonConfig.has("ip")) {
-            StaticIpConfiguration staticIpConfig = new StaticIpConfiguration();
-
             InetAddress ipAddress = getInetAddress(jsonConfig.getString("ip"));
             int prefixLength = getPrefixLength(jsonConfig.getInt("prefix_length"));
-            staticIpConfig.ipAddress = new LinkAddress(ipAddress, prefixLength);
-            staticIpConfig.gateway = getInetAddress(jsonConfig.getString("gateway"));
-            staticIpConfig.dnsServers.add(getInetAddress(jsonConfig.getString("dns1")));
-            staticIpConfig.dnsServers.add(getInetAddress(jsonConfig.getString("dns2")));
 
-            config.setIpAssignment(IpAssignment.STATIC);
-            config.setStaticIpConfiguration(staticIpConfig);
+            final StaticIpConfiguration.Builder builder = new StaticIpConfiguration.Builder();
+            builder.setIpAddress(new LinkAddress(ipAddress, prefixLength));
+            builder.setGateway(getInetAddress(jsonConfig.getString("gateway")));
+            final ArrayList<InetAddress> dnsServers = new ArrayList<>();
+            dnsServers.add(getInetAddress(jsonConfig.getString("dns1")));
+            dnsServers.add(getInetAddress(jsonConfig.getString("dns2")));
+            builder.setDnsServers(dnsServers);
+            ipConfiguration.setStaticIpConfiguration(builder.build());
+
+            ipConfiguration.setIpAssignment(IpAssignment.STATIC);
         } else {
-            config.setIpAssignment(IpAssignment.DHCP);
+            ipConfiguration.setIpAssignment(IpAssignment.DHCP);
         }
+        ipConfiguration.setProxySettings(ProxySettings.NONE);
+        config.setIpConfiguration(ipConfiguration);
 
-        config.setProxySettings(ProxySettings.NONE);
         return config;
     }
 

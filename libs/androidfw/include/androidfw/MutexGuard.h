@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-#ifndef ANDROIDFW_MUTEXGUARD_H
-#define ANDROIDFW_MUTEXGUARD_H
+#pragma once
 
 #include <mutex>
+#include <optional>
 #include <type_traits>
+#include <utility>
 
 #include "android-base/macros.h"
 
@@ -44,37 +45,40 @@ class ScopedLock;
 //
 template <typename T>
 class Guarded {
-  static_assert(!std::is_pointer<T>::value, "T must not be a raw pointer");
+  static_assert(!std::is_pointer_v<T>, "T must not be a raw pointer");
 
  public:
-  explicit Guarded() : guarded_() {
+  Guarded() : guarded_(std::in_place) {
   }
 
-  template <typename U = T>
-  explicit Guarded(const T& guarded,
-                   typename std::enable_if<std::is_copy_constructible<U>::value>::type = void())
-      : guarded_(guarded) {
+  explicit Guarded(const T& guarded) : guarded_(std::in_place, guarded) {
   }
 
-  template <typename U = T>
-  explicit Guarded(T&& guarded,
-                   typename std::enable_if<std::is_move_constructible<U>::value>::type = void())
-      : guarded_(std::move(guarded)) {
+  explicit Guarded(T&& guarded) : guarded_(std::in_place, std::move(guarded)) {
+  }
+
+  // Unfortunately, some legacy designs make even class deletion race-prone, where some other
+  // thread may have not finished working with the same object. For those cases one may destroy the
+  // object under a lock (but please fix your code, at least eventually!).
+  template <class Func>
+  void safeDelete(Func f) {
+    std::lock_guard scoped_lock(lock_);
+    f(guarded_ ? &guarded_.value() : nullptr);
+    guarded_.reset();
   }
 
  private:
   friend class ScopedLock<T>;
-
   DISALLOW_COPY_AND_ASSIGN(Guarded);
 
   std::mutex lock_;
-  T guarded_;
+  std::optional<T> guarded_;
 };
 
 template <typename T>
 class ScopedLock {
  public:
-  explicit ScopedLock(Guarded<T>& guarded) : lock_(guarded.lock_), guarded_(guarded.guarded_) {
+  explicit ScopedLock(Guarded<T>& guarded) : lock_(guarded.lock_), guarded_(*guarded.guarded_) {
   }
 
   T& operator*() {
@@ -97,5 +101,3 @@ class ScopedLock {
 };
 
 }  // namespace android
-
-#endif  // ANDROIDFW_MUTEXGUARD_H

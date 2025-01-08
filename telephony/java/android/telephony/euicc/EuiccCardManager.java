@@ -17,12 +17,17 @@ package android.telephony.euicc;
 
 import android.annotation.CallbackExecutor;
 import android.annotation.IntDef;
+import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.RequiresFeature;
 import android.annotation.SystemApi;
 import android.content.Context;
+import android.content.pm.PackageManager;
+import android.os.Binder;
 import android.os.RemoteException;
-import android.os.ServiceManager;
 import android.service.euicc.EuiccProfileInfo;
+import android.telephony.TelephonyFrameworkInitializer;
+import android.telephony.TelephonyManager;
 import android.util.Log;
 
 import com.android.internal.telephony.euicc.IAuthenticateServerCallback;
@@ -58,19 +63,24 @@ import java.util.concurrent.Executor;
  * @hide
  */
 @SystemApi
+@RequiresFeature(PackageManager.FEATURE_TELEPHONY_EUICC)
 public class EuiccCardManager {
     private static final String TAG = "EuiccCardManager";
 
-    /** Reason for canceling a profile download session */
+    /**
+     * Reason for canceling a profile download session
+     *
+     * @removed mistakenly exposed previously
+     */
     @Retention(RetentionPolicy.SOURCE)
-    @IntDef(prefix = { "CANCEL_REASON_" }, value = {
+    @IntDef(prefix = {"CANCEL_REASON_"}, value = {
             CANCEL_REASON_END_USER_REJECTED,
             CANCEL_REASON_POSTPONED,
             CANCEL_REASON_TIMEOUT,
             CANCEL_REASON_PPR_NOT_ALLOWED
     })
-    /** @hide */
-    public @interface CancelReason {}
+    public @interface CancelReason {
+    }
 
     /**
      * The end user has rejected the download. The profile will be put into the error state and
@@ -91,15 +101,19 @@ public class EuiccCardManager {
      */
     public static final int CANCEL_REASON_PPR_NOT_ALLOWED = 3;
 
-    /** Options for resetting eUICC memory */
+    /**
+     * Options for resetting eUICC memory
+     *
+     * @removed mistakenly exposed previously
+     */
     @Retention(RetentionPolicy.SOURCE)
-    @IntDef(flag = true, prefix = { "RESET_OPTION_" }, value = {
+    @IntDef(flag = true, prefix = {"RESET_OPTION_"}, value = {
             RESET_OPTION_DELETE_OPERATIONAL_PROFILES,
             RESET_OPTION_DELETE_FIELD_LOADED_TEST_PROFILES,
             RESET_OPTION_RESET_DEFAULT_SMDP_ADDRESS
     })
-    /** @hide */
-    public @interface ResetOption {}
+    public @interface ResetOption {
+    }
 
     /** Deletes all operational profiles. */
     public static final int RESET_OPTION_DELETE_OPERATIONAL_PROFILES = 1;
@@ -109,6 +123,12 @@ public class EuiccCardManager {
 
     /** Resets the default SM-DP+ address. */
     public static final int RESET_OPTION_RESET_DEFAULT_SMDP_ADDRESS = 1 << 2;
+
+    /** Result code when the requested profile is not found.
+     * {@link #RESULT_PROFILE_NOT_FOUND} is not used in Android U+,
+     * use {@link #RESULT_PROFILE_DOES_NOT_EXIST} instead.
+     **/
+    public static final int RESULT_PROFILE_NOT_FOUND = 1;
 
     /** Result code of execution with no error. */
     public static final int RESULT_OK = 0;
@@ -122,6 +142,9 @@ public class EuiccCardManager {
     /** Result code indicating the caller is not the active LPA. */
     public static final int RESULT_CALLER_NOT_ALLOWED = -3;
 
+    /** Result code when the requested profile does not exist */
+    public static final int RESULT_PROFILE_DOES_NOT_EXIST = -4;
+
     /**
      * Callback to receive the result of an eUICC card API.
      *
@@ -132,9 +155,9 @@ public class EuiccCardManager {
          * This method will be called when an eUICC card API call is completed.
          *
          * @param resultCode This can be {@link #RESULT_OK} or other positive values returned by the
-         *     eUICC.
-         * @param result The result object. It can be null if the {@code resultCode} is not
-         *     {@link #RESULT_OK}.
+         *                   eUICC.
+         * @param result     The result object. It can be null if the {@code resultCode} is not
+         *                   {@link #RESULT_OK}.
          */
         void onComplete(int resultCode, T result);
     }
@@ -148,15 +171,21 @@ public class EuiccCardManager {
 
     private IEuiccCardController getIEuiccCardController() {
         return IEuiccCardController.Stub.asInterface(
-                ServiceManager.getService("euicc_card_controller"));
+                TelephonyFrameworkInitializer
+                        .getTelephonyServiceManager()
+                        .getEuiccCardControllerServiceRegisterer()
+                        .get());
     }
 
     /**
      * Requests all the profiles on eUicc.
      *
-     * @param cardId The Id of the eUICC.
+     * @param cardId   The Id of the eUICC.
      * @param executor The executor through which the callback should be invoked.
      * @param callback The callback to get the result code and all the profiles.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void requestAllProfiles(String cardId, @CallbackExecutor Executor executor,
             ResultCallback<EuiccProfileInfo[]> callback) {
@@ -165,7 +194,12 @@ public class EuiccCardManager {
                     new IGetAllProfilesCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, EuiccProfileInfo[] profiles) {
-                            executor.execute(() -> callback.onComplete(resultCode, profiles));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, profiles));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -177,10 +211,13 @@ public class EuiccCardManager {
     /**
      * Requests the profile of the given iccid.
      *
-     * @param cardId The Id of the eUICC.
-     * @param iccid The iccid of the profile.
+     * @param cardId   The Id of the eUICC.
+     * @param iccid    The iccid of the profile.
      * @param executor The executor through which the callback should be invoked.
      * @param callback The callback to get the result code and profile.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void requestProfile(String cardId, String iccid, @CallbackExecutor Executor executor,
             ResultCallback<EuiccProfileInfo> callback) {
@@ -189,7 +226,12 @@ public class EuiccCardManager {
                     new IGetProfileCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, EuiccProfileInfo profile) {
-                            executor.execute(() -> callback.onComplete(resultCode, profile));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, profile));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -199,13 +241,53 @@ public class EuiccCardManager {
     }
 
     /**
+     * Requests the enabled profile for a given port on an eUicc. Callback with result code
+     * {@link RESULT_PROFILE_DOES_NOT_EXIST} and {@code NULL} EuiccProfile if there is no enabled
+     * profile on the target port.
+     *
+     * @param cardId    The Id of the eUICC.
+     * @param portIndex The portIndex to use. The port may be active or inactive. As long as the
+     *                  ICCID is known, an APDU will be sent through to read the enabled profile.
+     * @param executor  The executor through which the callback should be invoked.
+     * @param callback  The callback to get the result code and the profile.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
+     */
+    public void requestEnabledProfileForPort(@NonNull String cardId, int portIndex,
+            @NonNull @CallbackExecutor Executor executor,
+            @NonNull ResultCallback<EuiccProfileInfo> callback) {
+        try {
+            getIEuiccCardController().getEnabledProfile(mContext.getOpPackageName(), cardId,
+                    portIndex,
+                    new IGetProfileCallback.Stub() {
+                        @Override
+                        public void onComplete(int resultCode, EuiccProfileInfo profile) {
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, profile));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
+                        }
+                    });
+        } catch (RemoteException e) {
+            Log.e(TAG, "Error calling requestEnabledProfileForPort", e);
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
      * Disables the profile of the given iccid.
      *
-     * @param cardId The Id of the eUICC.
-     * @param iccid The iccid of the profile.
-     * @param refresh Whether sending the REFRESH command to modem.
+     * @param cardId   The Id of the eUICC.
+     * @param iccid    The iccid of the profile.
+     * @param refresh  Whether sending the REFRESH command to modem.
      * @param executor The executor through which the callback should be invoked.
      * @param callback The callback to get the result code.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void disableProfile(String cardId, String iccid, boolean refresh,
             @CallbackExecutor Executor executor, ResultCallback<Void> callback) {
@@ -214,7 +296,12 @@ public class EuiccCardManager {
                     refresh, new IDisableProfileCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode) {
-                            executor.execute(() -> callback.onComplete(resultCode, null));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, null));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -227,20 +314,69 @@ public class EuiccCardManager {
      * Switches from the current profile to another profile. The current profile will be disabled
      * and the specified profile will be enabled.
      *
-     * @param cardId The Id of the eUICC.
-     * @param iccid The iccid of the profile to switch to.
-     * @param refresh Whether sending the REFRESH command to modem.
+     * @param cardId   The Id of the eUICC.
+     * @param iccid    The iccid of the profile to switch to.
+     * @param refresh  Whether sending the REFRESH command to modem.
      * @param executor The executor through which the callback should be invoked.
      * @param callback The callback to get the result code and the EuiccProfileInfo enabled.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
+     * @deprecated instead use {@link #switchToProfile(String, String, int, boolean, Executor,
+     * ResultCallback)}
      */
+    @Deprecated
     public void switchToProfile(String cardId, String iccid, boolean refresh,
             @CallbackExecutor Executor executor, ResultCallback<EuiccProfileInfo> callback) {
         try {
             getIEuiccCardController().switchToProfile(mContext.getOpPackageName(), cardId, iccid,
-                    refresh, new ISwitchToProfileCallback.Stub() {
+                    TelephonyManager.DEFAULT_PORT_INDEX, refresh,
+                    new ISwitchToProfileCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, EuiccProfileInfo profile) {
-                            executor.execute(() -> callback.onComplete(resultCode, profile));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, profile));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
+                        }
+                    });
+        } catch (RemoteException e) {
+            Log.e(TAG, "Error calling switchToProfile", e);
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Switches from the current profile to another profile. The current profile will be disabled
+     * and the specified profile will be enabled. Here portIndex specifies on which port the
+     * profile is to be enabled.
+     *
+     * @param cardId    The Id of the eUICC.
+     * @param iccid     The iccid of the profile to switch to.
+     * @param portIndex The Port index is the unique index referring to a port.
+     * @param refresh   Whether sending the REFRESH command to modem.
+     * @param executor  The executor through which the callback should be invoked.
+     * @param callback  The callback to get the result code and the EuiccProfileInfo enabled.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
+     */
+    public void switchToProfile(@Nullable String cardId, @Nullable String iccid, int portIndex,
+            boolean refresh, @NonNull @CallbackExecutor Executor executor,
+            @NonNull ResultCallback<EuiccProfileInfo> callback) {
+        try {
+            getIEuiccCardController().switchToProfile(mContext.getOpPackageName(), cardId, iccid,
+                    portIndex, refresh, new ISwitchToProfileCallback.Stub() {
+                        @Override
+                        public void onComplete(int resultCode, EuiccProfileInfo profile) {
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, profile));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -257,6 +393,9 @@ public class EuiccCardManager {
      * @param nickname The nickname of the profile.
      * @param executor The executor through which the callback should be invoked.
      * @param callback The callback to get the result code.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void setNickname(String cardId, String iccid, String nickname,
             @CallbackExecutor Executor executor, ResultCallback<Void> callback) {
@@ -265,7 +404,12 @@ public class EuiccCardManager {
                     nickname, new ISetNicknameCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode) {
-                            executor.execute(() -> callback.onComplete(resultCode, null));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, null));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -281,6 +425,9 @@ public class EuiccCardManager {
      * @param iccid The iccid of the profile.
      * @param executor The executor through which the callback should be invoked.
      * @param callback The callback to get the result code.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void deleteProfile(String cardId, String iccid, @CallbackExecutor Executor executor,
             ResultCallback<Void> callback) {
@@ -289,7 +436,12 @@ public class EuiccCardManager {
                     new IDeleteProfileCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode) {
-                            executor.execute(() -> callback.onComplete(resultCode, null));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, null));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -306,6 +458,9 @@ public class EuiccCardManager {
      *     EuiccCard for details.
      * @param executor The executor through which the callback should be invoked.
      * @param callback The callback to get the result code.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void resetMemory(String cardId, @ResetOption int options,
             @CallbackExecutor Executor executor, ResultCallback<Void> callback) {
@@ -314,7 +469,12 @@ public class EuiccCardManager {
                     new IResetMemoryCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode) {
-                            executor.execute(() -> callback.onComplete(resultCode, null));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, null));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -329,6 +489,9 @@ public class EuiccCardManager {
      * @param cardId The Id of the eUICC.
      * @param executor The executor through which the callback should be invoked.
      * @param callback The callback to get the result code and the default SM-DP+ address.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void requestDefaultSmdpAddress(String cardId, @CallbackExecutor Executor executor,
             ResultCallback<String> callback) {
@@ -337,7 +500,12 @@ public class EuiccCardManager {
                     new IGetDefaultSmdpAddressCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, String address) {
-                            executor.execute(() -> callback.onComplete(resultCode, address));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, address));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -352,6 +520,9 @@ public class EuiccCardManager {
      * @param cardId The Id of the eUICC.
      * @param executor The executor through which the callback should be invoked.
      * @param callback The callback to get the result code and the SM-DS address.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void requestSmdsAddress(String cardId, @CallbackExecutor Executor executor,
             ResultCallback<String> callback) {
@@ -360,7 +531,12 @@ public class EuiccCardManager {
                     new IGetSmdsAddressCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, String address) {
-                            executor.execute(() -> callback.onComplete(resultCode, address));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, address));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -376,6 +552,9 @@ public class EuiccCardManager {
      * @param defaultSmdpAddress The default SM-DP+ address to set.
      * @param executor The executor through which the callback should be invoked.
      * @param callback The callback to get the result code.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void setDefaultSmdpAddress(String cardId, String defaultSmdpAddress,
             @CallbackExecutor Executor executor, ResultCallback<Void> callback) {
@@ -385,7 +564,12 @@ public class EuiccCardManager {
                     new ISetDefaultSmdpAddressCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode) {
-                            executor.execute(() -> callback.onComplete(resultCode, null));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, null));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -400,6 +584,9 @@ public class EuiccCardManager {
      * @param cardId The Id of the eUICC.
      * @param executor The executor through which the callback should be invoked.
      * @param callback the callback to get the result code and the rule authorisation table.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void requestRulesAuthTable(String cardId, @CallbackExecutor Executor executor,
             ResultCallback<EuiccRulesAuthTable> callback) {
@@ -408,7 +595,12 @@ public class EuiccCardManager {
                     new IGetRulesAuthTableCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, EuiccRulesAuthTable rat) {
-                            executor.execute(() -> callback.onComplete(resultCode, rat));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, rat));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -423,6 +615,9 @@ public class EuiccCardManager {
      * @param cardId The Id of the eUICC.
      * @param executor The executor through which the callback should be invoked.
      * @param callback the callback to get the result code and the challenge.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void requestEuiccChallenge(String cardId, @CallbackExecutor Executor executor,
             ResultCallback<byte[]> callback) {
@@ -431,7 +626,12 @@ public class EuiccCardManager {
                     new IGetEuiccChallengeCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, byte[] challenge) {
-                            executor.execute(() -> callback.onComplete(resultCode, challenge));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, challenge));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -446,6 +646,9 @@ public class EuiccCardManager {
      * @param cardId The Id of the eUICC.
      * @param executor The executor through which the callback should be invoked.
      * @param callback the callback to get the result code and the info1.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void requestEuiccInfo1(String cardId, @CallbackExecutor Executor executor,
             ResultCallback<byte[]> callback) {
@@ -454,7 +657,12 @@ public class EuiccCardManager {
                     new IGetEuiccInfo1Callback.Stub() {
                         @Override
                         public void onComplete(int resultCode, byte[] info) {
-                            executor.execute(() -> callback.onComplete(resultCode, info));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, info));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -469,6 +677,9 @@ public class EuiccCardManager {
      * @param cardId The Id of the eUICC.
      * @param executor The executor through which the callback should be invoked.
      * @param callback the callback to get the result code and the info2.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void requestEuiccInfo2(String cardId, @CallbackExecutor Executor executor,
             ResultCallback<byte[]> callback) {
@@ -477,7 +688,12 @@ public class EuiccCardManager {
                     new IGetEuiccInfo2Callback.Stub() {
                         @Override
                         public void onComplete(int resultCode, byte[] info) {
-                            executor.execute(() -> callback.onComplete(resultCode, info));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, info));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -503,6 +719,9 @@ public class EuiccCardManager {
      * @param executor The executor through which the callback should be invoked.
      * @param callback the callback to get the result code and a byte array which represents a
      *     {@code AuthenticateServerResponse} defined in GSMA RSP v2.0+.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void authenticateServer(String cardId, String matchingId, byte[] serverSigned1,
             byte[] serverSignature1, byte[] euiccCiPkIdToBeUsed, byte[] serverCertificate,
@@ -519,7 +738,12 @@ public class EuiccCardManager {
                     new IAuthenticateServerCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, byte[] response) {
-                            executor.execute(() -> callback.onComplete(resultCode, response));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, response));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -543,6 +767,9 @@ public class EuiccCardManager {
      * @param executor The executor through which the callback should be invoked.
      * @param callback the callback to get the result code and a byte array which represents a
      *     {@code PrepareDownloadResponse} defined in GSMA RSP v2.0+
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void prepareDownload(String cardId, @Nullable byte[] hashCc, byte[] smdpSigned2,
             byte[] smdpSignature2, byte[] smdpCertificate, @CallbackExecutor Executor executor,
@@ -558,7 +785,12 @@ public class EuiccCardManager {
                     new IPrepareDownloadCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, byte[] response) {
-                            executor.execute(() -> callback.onComplete(resultCode, response));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, response));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -575,6 +807,9 @@ public class EuiccCardManager {
      * @param executor The executor through which the callback should be invoked.
      * @param callback the callback to get the result code and a byte array which represents a
      *     {@code LoadBoundProfilePackageResponse} defined in GSMA RSP v2.0+.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void loadBoundProfilePackage(String cardId, byte[] boundProfilePackage,
             @CallbackExecutor Executor executor, ResultCallback<byte[]> callback) {
@@ -586,7 +821,12 @@ public class EuiccCardManager {
                     new ILoadBoundProfilePackageCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, byte[] response) {
-                            executor.execute(() -> callback.onComplete(resultCode, response));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, response));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -604,6 +844,9 @@ public class EuiccCardManager {
      * @param executor The executor through which the callback should be invoked.
      * @param callback the callback to get the result code and an byte[] which represents a
      *     {@code CancelSessionResponse} defined in GSMA RSP v2.0+.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void cancelSession(String cardId, byte[] transactionId, @CancelReason int reason,
             @CallbackExecutor Executor executor, ResultCallback<byte[]> callback) {
@@ -616,7 +859,12 @@ public class EuiccCardManager {
                     new ICancelSessionCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, byte[] response) {
-                            executor.execute(() -> callback.onComplete(resultCode, response));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, response));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -632,6 +880,9 @@ public class EuiccCardManager {
      * @param events bits of the event types ({@link EuiccNotification.Event}) to list.
      * @param executor The executor through which the callback should be invoked.
      * @param callback the callback to get the result code and the list of notifications.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void listNotifications(String cardId, @EuiccNotification.Event int events,
             @CallbackExecutor Executor executor, ResultCallback<EuiccNotification[]> callback) {
@@ -640,7 +891,13 @@ public class EuiccCardManager {
                     new IListNotificationsCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, EuiccNotification[] notifications) {
-                            executor.execute(() -> callback.onComplete(resultCode, notifications));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(
+                                        resultCode, notifications));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -656,6 +913,9 @@ public class EuiccCardManager {
      * @param events bits of the event types ({@link EuiccNotification.Event}) to list.
      * @param executor The executor through which the callback should be invoked.
      * @param callback the callback to get the result code and the list of notifications.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void retrieveNotificationList(String cardId, @EuiccNotification.Event int events,
             @CallbackExecutor Executor executor, ResultCallback<EuiccNotification[]> callback) {
@@ -664,7 +924,13 @@ public class EuiccCardManager {
                     events, new IRetrieveNotificationListCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, EuiccNotification[] notifications) {
-                            executor.execute(() -> callback.onComplete(resultCode, notifications));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(
+                                        resultCode, notifications));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -680,6 +946,9 @@ public class EuiccCardManager {
      * @param seqNumber the sequence number of the notification.
      * @param executor The executor through which the callback should be invoked.
      * @param callback the callback to get the result code and the notification.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void retrieveNotification(String cardId, int seqNumber,
             @CallbackExecutor Executor executor, ResultCallback<EuiccNotification> callback) {
@@ -688,7 +957,13 @@ public class EuiccCardManager {
                     seqNumber, new IRetrieveNotificationCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode, EuiccNotification notification) {
-                            executor.execute(() -> callback.onComplete(resultCode, notification));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(
+                                        resultCode, notification));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {
@@ -704,6 +979,9 @@ public class EuiccCardManager {
      * @param seqNumber the sequence number of the notification.
      * @param executor The executor through which the callback should be invoked.
      * @param callback the callback to get the result code.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public void removeNotificationFromList(String cardId, int seqNumber,
             @CallbackExecutor Executor executor, ResultCallback<Void> callback) {
@@ -715,7 +993,12 @@ public class EuiccCardManager {
                     new IRemoveNotificationFromListCallback.Stub() {
                         @Override
                         public void onComplete(int resultCode) {
-                            executor.execute(() -> callback.onComplete(resultCode, null));
+                            final long token = Binder.clearCallingIdentity();
+                            try {
+                                executor.execute(() -> callback.onComplete(resultCode, null));
+                            } finally {
+                                Binder.restoreCallingIdentity(token);
+                            }
                         }
                     });
         } catch (RemoteException e) {

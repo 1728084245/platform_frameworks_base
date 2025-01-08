@@ -16,16 +16,18 @@
 
 package android.telephony;
 
-import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.FlaggedApi;
+import android.annotation.NonNull;
+import android.compat.annotation.UnsupportedAppUsage;
+
+import com.android.internal.telephony.flags.Flags;
 
 /**
  * Describes the cause of a disconnected call. Those disconnect causes can be converted into a more
  * generic {@link android.telecom.DisconnectCause} object.
  *
- * @hide
+ * Used in {@link PhoneStateListener#onCallDisconnectCauseChanged}.
  */
-@SystemApi
 public final class DisconnectCause {
 
     /** The disconnect cause is not valid (Not received a disconnect cause) */
@@ -336,9 +338,36 @@ public final class DisconnectCause {
     /**
      * Indicates that the call is dropped due to RTCP inactivity, primarily due to media path
      * disruption.
-     * @hide
      */
     public static final int MEDIA_TIMEOUT = 77;
+
+    /**
+     * Indicates that an emergency call cannot be placed over WFC because the service is not
+     * available in the current location.
+     */
+    public static final int EMERGENCY_CALL_OVER_WFC_NOT_AVAILABLE = 78;
+
+    /**
+     * Indicates that WiFi calling service is not available in the current location.
+     */
+    public static final int WFC_SERVICE_NOT_AVAILABLE_IN_THIS_LOCATION = 79;
+
+    /**
+     * Indicates that an emergency call was placed, which caused the existing connection to be
+     * hung up.
+     */
+    public static final int OUTGOING_EMERGENCY_CALL_PLACED = 80;
+
+    /**
+     * Indicates that incoming call was rejected by the modem before the call went in ringing
+     */
+    public static final int INCOMING_AUTO_REJECTED = 81;
+
+    /**
+     * Indicates that the call was unable to be made because the satellite modem is enabled.
+     */
+    @FlaggedApi(Flags.FLAG_OEM_ENABLED_SATELLITE_FLAG)
+    public static final int SATELLITE_ENABLED = 82;
 
     //*********************************************************************************************
     // When adding a disconnect type:
@@ -356,162 +385,172 @@ public final class DisconnectCause {
      * @hide
      */
     @UnsupportedAppUsage
-    public static String toString(int cause) {
+    public static @NonNull String toString(int cause) {
         switch (cause) {
-        case NOT_DISCONNECTED:
-            return "NOT_DISCONNECTED";
-        case INCOMING_MISSED:
-            return "INCOMING_MISSED";
-        case NORMAL:
-            return "NORMAL";
-        case LOCAL:
-            return "LOCAL";
-        case BUSY:
-            return "BUSY";
-        case CONGESTION:
-            return "CONGESTION";
-        case INVALID_NUMBER:
-            return "INVALID_NUMBER";
-        case NUMBER_UNREACHABLE:
-            return "NUMBER_UNREACHABLE";
-        case SERVER_UNREACHABLE:
-            return "SERVER_UNREACHABLE";
-        case INVALID_CREDENTIALS:
-            return "INVALID_CREDENTIALS";
-        case OUT_OF_NETWORK:
-            return "OUT_OF_NETWORK";
-        case SERVER_ERROR:
-            return "SERVER_ERROR";
-        case TIMED_OUT:
-            return "TIMED_OUT";
-        case LOST_SIGNAL:
-            return "LOST_SIGNAL";
-        case LIMIT_EXCEEDED:
-            return "LIMIT_EXCEEDED";
-        case INCOMING_REJECTED:
-            return "INCOMING_REJECTED";
-        case POWER_OFF:
-            return "POWER_OFF";
-        case OUT_OF_SERVICE:
-            return "OUT_OF_SERVICE";
-        case ICC_ERROR:
-            return "ICC_ERROR";
-        case CALL_BARRED:
-            return "CALL_BARRED";
-        case FDN_BLOCKED:
-            return "FDN_BLOCKED";
-        case CS_RESTRICTED:
-            return "CS_RESTRICTED";
-        case CS_RESTRICTED_NORMAL:
-            return "CS_RESTRICTED_NORMAL";
-        case CS_RESTRICTED_EMERGENCY:
-            return "CS_RESTRICTED_EMERGENCY";
-        case UNOBTAINABLE_NUMBER:
-            return "UNOBTAINABLE_NUMBER";
-        case CDMA_LOCKED_UNTIL_POWER_CYCLE:
-            return "CDMA_LOCKED_UNTIL_POWER_CYCLE";
-        case CDMA_DROP:
-            return "CDMA_DROP";
-        case CDMA_INTERCEPT:
-            return "CDMA_INTERCEPT";
-        case CDMA_REORDER:
-            return "CDMA_REORDER";
-        case CDMA_SO_REJECT:
-            return "CDMA_SO_REJECT";
-        case CDMA_RETRY_ORDER:
-            return "CDMA_RETRY_ORDER";
-        case CDMA_ACCESS_FAILURE:
-            return "CDMA_ACCESS_FAILURE";
-        case CDMA_PREEMPTED:
-            return "CDMA_PREEMPTED";
-        case CDMA_NOT_EMERGENCY:
-            return "CDMA_NOT_EMERGENCY";
-        case CDMA_ACCESS_BLOCKED:
-            return "CDMA_ACCESS_BLOCKED";
-        case EMERGENCY_ONLY:
-            return "EMERGENCY_ONLY";
-        case NO_PHONE_NUMBER_SUPPLIED:
-            return "NO_PHONE_NUMBER_SUPPLIED";
-        case DIALED_MMI:
-            return "DIALED_MMI";
-        case VOICEMAIL_NUMBER_MISSING:
-            return "VOICEMAIL_NUMBER_MISSING";
-        case CDMA_CALL_LOST:
-            return "CDMA_CALL_LOST";
-        case EXITED_ECM:
-            return "EXITED_ECM";
-        case DIAL_MODIFIED_TO_USSD:
-            return "DIAL_MODIFIED_TO_USSD";
-        case DIAL_MODIFIED_TO_SS:
-            return "DIAL_MODIFIED_TO_SS";
-        case DIAL_MODIFIED_TO_DIAL:
-            return "DIAL_MODIFIED_TO_DIAL";
-        case DIAL_MODIFIED_TO_DIAL_VIDEO:
-            return "DIAL_MODIFIED_TO_DIAL_VIDEO";
-        case DIAL_VIDEO_MODIFIED_TO_SS:
-            return "DIAL_VIDEO_MODIFIED_TO_SS";
-        case DIAL_VIDEO_MODIFIED_TO_USSD:
-            return "DIAL_VIDEO_MODIFIED_TO_USSD";
-        case DIAL_VIDEO_MODIFIED_TO_DIAL:
-            return "DIAL_VIDEO_MODIFIED_TO_DIAL";
-        case DIAL_VIDEO_MODIFIED_TO_DIAL_VIDEO:
-            return "DIAL_VIDEO_MODIFIED_TO_DIAL_VIDEO";
-        case ERROR_UNSPECIFIED:
-            return "ERROR_UNSPECIFIED";
-        case OUTGOING_FAILURE:
-            return "OUTGOING_FAILURE";
-        case OUTGOING_CANCELED:
-            return "OUTGOING_CANCELED";
-        case IMS_MERGED_SUCCESSFULLY:
-            return "IMS_MERGED_SUCCESSFULLY";
-        case CDMA_ALREADY_ACTIVATED:
-            return "CDMA_ALREADY_ACTIVATED";
-        case VIDEO_CALL_NOT_ALLOWED_WHILE_TTY_ENABLED:
-            return "VIDEO_CALL_NOT_ALLOWED_WHILE_TTY_ENABLED";
-        case CALL_PULLED:
-            return "CALL_PULLED";
-        case ANSWERED_ELSEWHERE:
-            return "ANSWERED_ELSEWHERE";
-        case MAXIMUM_NUMBER_OF_CALLS_REACHED:
-            return "MAXIMUM_NUMER_OF_CALLS_REACHED";
-        case DATA_DISABLED:
-            return "DATA_DISABLED";
-        case DATA_LIMIT_REACHED:
-            return "DATA_LIMIT_REACHED";
-        case DIALED_CALL_FORWARDING_WHILE_ROAMING:
-            return "DIALED_CALL_FORWARDING_WHILE_ROAMING";
-        case IMEI_NOT_ACCEPTED:
-            return "IMEI_NOT_ACCEPTED";
-        case WIFI_LOST:
-            return "WIFI_LOST";
-        case IMS_ACCESS_BLOCKED:
-            return "IMS_ACCESS_BLOCKED";
-        case LOW_BATTERY:
-            return "LOW_BATTERY";
-        case DIAL_LOW_BATTERY:
-            return "DIAL_LOW_BATTERY";
-        case EMERGENCY_TEMP_FAILURE:
-            return "EMERGENCY_TEMP_FAILURE";
-        case EMERGENCY_PERM_FAILURE:
-            return "EMERGENCY_PERM_FAILURE";
-        case NORMAL_UNSPECIFIED:
-            return "NORMAL_UNSPECIFIED";
-        case IMS_SIP_ALTERNATE_EMERGENCY_CALL:
-            return "IMS_SIP_ALTERNATE_EMERGENCY_CALL";
-        case ALREADY_DIALING:
-            return "ALREADY_DIALING";
-        case CANT_CALL_WHILE_RINGING:
-            return "CANT_CALL_WHILE_RINGING";
-        case CALLING_DISABLED:
-            return "CALLING_DISABLED";
-        case TOO_MANY_ONGOING_CALLS:
-            return "TOO_MANY_ONGOING_CALLS";
-        case OTASP_PROVISIONING_IN_PROCESS:
-            return "OTASP_PROVISIONING_IN_PROCESS";
-        case MEDIA_TIMEOUT:
-            return "MEDIA_TIMEOUT";
-        default:
-            return "INVALID: " + cause;
+            case NOT_DISCONNECTED:
+                return "NOT_DISCONNECTED";
+            case INCOMING_MISSED:
+                return "INCOMING_MISSED";
+            case NORMAL:
+                return "NORMAL";
+            case LOCAL:
+                return "LOCAL";
+            case BUSY:
+                return "BUSY";
+            case CONGESTION:
+                return "CONGESTION";
+            case INVALID_NUMBER:
+                return "INVALID_NUMBER";
+            case NUMBER_UNREACHABLE:
+                return "NUMBER_UNREACHABLE";
+            case SERVER_UNREACHABLE:
+                return "SERVER_UNREACHABLE";
+            case INVALID_CREDENTIALS:
+                return "INVALID_CREDENTIALS";
+            case OUT_OF_NETWORK:
+                return "OUT_OF_NETWORK";
+            case SERVER_ERROR:
+                return "SERVER_ERROR";
+            case TIMED_OUT:
+                return "TIMED_OUT";
+            case LOST_SIGNAL:
+                return "LOST_SIGNAL";
+            case LIMIT_EXCEEDED:
+                return "LIMIT_EXCEEDED";
+            case INCOMING_REJECTED:
+                return "INCOMING_REJECTED";
+            case POWER_OFF:
+                return "POWER_OFF";
+            case OUT_OF_SERVICE:
+                return "OUT_OF_SERVICE";
+            case ICC_ERROR:
+                return "ICC_ERROR";
+            case CALL_BARRED:
+                return "CALL_BARRED";
+            case FDN_BLOCKED:
+                return "FDN_BLOCKED";
+            case CS_RESTRICTED:
+                return "CS_RESTRICTED";
+            case CS_RESTRICTED_NORMAL:
+                return "CS_RESTRICTED_NORMAL";
+            case CS_RESTRICTED_EMERGENCY:
+                return "CS_RESTRICTED_EMERGENCY";
+            case UNOBTAINABLE_NUMBER:
+                return "UNOBTAINABLE_NUMBER";
+            case CDMA_LOCKED_UNTIL_POWER_CYCLE:
+                return "CDMA_LOCKED_UNTIL_POWER_CYCLE";
+            case CDMA_DROP:
+                return "CDMA_DROP";
+            case CDMA_INTERCEPT:
+                return "CDMA_INTERCEPT";
+            case CDMA_REORDER:
+                return "CDMA_REORDER";
+            case CDMA_SO_REJECT:
+                return "CDMA_SO_REJECT";
+            case CDMA_RETRY_ORDER:
+                return "CDMA_RETRY_ORDER";
+            case CDMA_ACCESS_FAILURE:
+                return "CDMA_ACCESS_FAILURE";
+            case CDMA_PREEMPTED:
+                return "CDMA_PREEMPTED";
+            case CDMA_NOT_EMERGENCY:
+                return "CDMA_NOT_EMERGENCY";
+            case CDMA_ACCESS_BLOCKED:
+                return "CDMA_ACCESS_BLOCKED";
+            case EMERGENCY_ONLY:
+                return "EMERGENCY_ONLY";
+            case NO_PHONE_NUMBER_SUPPLIED:
+                return "NO_PHONE_NUMBER_SUPPLIED";
+            case DIALED_MMI:
+                return "DIALED_MMI";
+            case VOICEMAIL_NUMBER_MISSING:
+                return "VOICEMAIL_NUMBER_MISSING";
+            case CDMA_CALL_LOST:
+                return "CDMA_CALL_LOST";
+            case EXITED_ECM:
+                return "EXITED_ECM";
+            case DIAL_MODIFIED_TO_USSD:
+                return "DIAL_MODIFIED_TO_USSD";
+            case DIAL_MODIFIED_TO_SS:
+                return "DIAL_MODIFIED_TO_SS";
+            case DIAL_MODIFIED_TO_DIAL:
+                return "DIAL_MODIFIED_TO_DIAL";
+            case DIAL_MODIFIED_TO_DIAL_VIDEO:
+                return "DIAL_MODIFIED_TO_DIAL_VIDEO";
+            case DIAL_VIDEO_MODIFIED_TO_SS:
+                return "DIAL_VIDEO_MODIFIED_TO_SS";
+            case DIAL_VIDEO_MODIFIED_TO_USSD:
+                return "DIAL_VIDEO_MODIFIED_TO_USSD";
+            case DIAL_VIDEO_MODIFIED_TO_DIAL:
+                return "DIAL_VIDEO_MODIFIED_TO_DIAL";
+            case DIAL_VIDEO_MODIFIED_TO_DIAL_VIDEO:
+                return "DIAL_VIDEO_MODIFIED_TO_DIAL_VIDEO";
+            case ERROR_UNSPECIFIED:
+                return "ERROR_UNSPECIFIED";
+            case OUTGOING_FAILURE:
+                return "OUTGOING_FAILURE";
+            case OUTGOING_CANCELED:
+                return "OUTGOING_CANCELED";
+            case IMS_MERGED_SUCCESSFULLY:
+                return "IMS_MERGED_SUCCESSFULLY";
+            case CDMA_ALREADY_ACTIVATED:
+                return "CDMA_ALREADY_ACTIVATED";
+            case VIDEO_CALL_NOT_ALLOWED_WHILE_TTY_ENABLED:
+                return "VIDEO_CALL_NOT_ALLOWED_WHILE_TTY_ENABLED";
+            case CALL_PULLED:
+                return "CALL_PULLED";
+            case ANSWERED_ELSEWHERE:
+                return "ANSWERED_ELSEWHERE";
+            case MAXIMUM_NUMBER_OF_CALLS_REACHED:
+                return "MAXIMUM_NUMER_OF_CALLS_REACHED";
+            case DATA_DISABLED:
+                return "DATA_DISABLED";
+            case DATA_LIMIT_REACHED:
+                return "DATA_LIMIT_REACHED";
+            case DIALED_CALL_FORWARDING_WHILE_ROAMING:
+                return "DIALED_CALL_FORWARDING_WHILE_ROAMING";
+            case IMEI_NOT_ACCEPTED:
+                return "IMEI_NOT_ACCEPTED";
+            case WIFI_LOST:
+                return "WIFI_LOST";
+            case IMS_ACCESS_BLOCKED:
+                return "IMS_ACCESS_BLOCKED";
+            case LOW_BATTERY:
+                return "LOW_BATTERY";
+            case DIAL_LOW_BATTERY:
+                return "DIAL_LOW_BATTERY";
+            case EMERGENCY_TEMP_FAILURE:
+                return "EMERGENCY_TEMP_FAILURE";
+            case EMERGENCY_PERM_FAILURE:
+                return "EMERGENCY_PERM_FAILURE";
+            case NORMAL_UNSPECIFIED:
+                return "NORMAL_UNSPECIFIED";
+            case IMS_SIP_ALTERNATE_EMERGENCY_CALL:
+                return "IMS_SIP_ALTERNATE_EMERGENCY_CALL";
+            case ALREADY_DIALING:
+                return "ALREADY_DIALING";
+            case CANT_CALL_WHILE_RINGING:
+                return "CANT_CALL_WHILE_RINGING";
+            case CALLING_DISABLED:
+                return "CALLING_DISABLED";
+            case TOO_MANY_ONGOING_CALLS:
+                return "TOO_MANY_ONGOING_CALLS";
+            case OTASP_PROVISIONING_IN_PROCESS:
+                return "OTASP_PROVISIONING_IN_PROCESS";
+            case MEDIA_TIMEOUT:
+                return "MEDIA_TIMEOUT";
+            case EMERGENCY_CALL_OVER_WFC_NOT_AVAILABLE:
+                return "EMERGENCY_CALL_OVER_WFC_NOT_AVAILABLE";
+            case WFC_SERVICE_NOT_AVAILABLE_IN_THIS_LOCATION:
+                return "WFC_SERVICE_NOT_AVAILABLE_IN_THIS_LOCATION";
+            case OUTGOING_EMERGENCY_CALL_PLACED:
+                return "OUTGOING_EMERGENCY_CALL_PLACED";
+            case INCOMING_AUTO_REJECTED:
+                return "INCOMING_AUTO_REJECTED";
+            case SATELLITE_ENABLED:
+                return "SATELLITE_ENABLED";
+            default:
+                return "INVALID: " + cause;
         }
     }
 }

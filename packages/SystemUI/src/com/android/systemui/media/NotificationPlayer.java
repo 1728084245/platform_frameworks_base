@@ -43,7 +43,7 @@ import java.util.LinkedList;
 public class NotificationPlayer implements OnCompletionListener, OnErrorListener {
     private static final int PLAY = 1;
     private static final int STOP = 2;
-    private static final boolean DEBUG = false;
+    private static final boolean DEBUG = true;
 
     private static final class Command {
         int code;
@@ -51,11 +51,12 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
         Uri uri;
         boolean looping;
         AudioAttributes attributes;
+        float volume;
         long requestTime;
 
         public String toString() {
             return "{ code=" + code + " looping=" + looping + " attributes=" + attributes
-                    + " uri=" + uri + " }";
+                    + " volume=" + volume + " uri=" + uri + " }";
         }
     }
 
@@ -86,11 +87,12 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
             // synchronized on mCompletionHandlingLock due to the Object.wait() in startSound(cmd)
             mLooper = Looper.myLooper();
             if (DEBUG) Log.d(mTag, "in run: new looper " + mLooper);
+            MediaPlayer player = null;
             synchronized(this) {
                 AudioManager audioManager =
                     (AudioManager) mCmd.context.getSystemService(Context.AUDIO_SERVICE);
                 try {
-                    MediaPlayer player = new MediaPlayer();
+                    player = new MediaPlayer();
                     if (mCmd.attributes == null) {
                         mCmd.attributes = new AudioAttributes.Builder()
                                 .setUsage(AudioAttributes.USAGE_NOTIFICATION)
@@ -100,6 +102,7 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
                     player.setAudioAttributes(mCmd.attributes);
                     player.setDataSource(mCmd.context, mCmd.uri);
                     player.setLooping(mCmd.looping);
+                    player.setVolume(mCmd.volume);
                     player.setOnCompletionListener(NotificationPlayer.this);
                     player.setOnErrorListener(NotificationPlayer.this);
                     player.prepare();
@@ -111,7 +114,7 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
                                     if (DEBUG) Log.d(mTag, "requesting AudioFocus");
                                     int focusGain = AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK;
                                     if (mCmd.looping) {
-                                        focusGain = AudioManager.AUDIOFOCUS_GAIN;
+                                        focusGain = AudioManager.AUDIOFOCUS_GAIN_TRANSIENT;
                                     }
                                     mNotificationRampTimeMs = audioManager.getFocusRampTimeMs(
                                             focusGain, mCmd.attributes);
@@ -137,25 +140,31 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
                         Log.e(mTag, "Exception while sleeping to sync notification playback"
                                 + " with ducking", e);
                     }
-                    try {
-                        player.start();
-                        if (DEBUG) { Log.d(mTag, "player.start"); }
-                    } catch (Exception e) {
+                    player.start();
+                    if (DEBUG) { Log.d(mTag, "player.start piid:" + player.getPlayerIId()); }
+                } catch (Exception e) {
+                    if (player != null) {
                         player.release();
                         player = null;
-                        // playing the notification didn't work, revert the focus request
-                        abandonAudioFocusAfterError();
                     }
-                    if (mPlayer != null) {
-                        if (DEBUG) { Log.d(mTag, "mPlayer.release"); }
-                        mPlayer.release();
-                    }
-                    mPlayer = player;
-                }
-                catch (Exception e) {
                     Log.w(mTag, "error loading sound for " + mCmd.uri, e);
                     // playing the notification didn't work, revert the focus request
                     abandonAudioFocusAfterError();
+                }
+                final MediaPlayer mp;
+                synchronized (mPlayerLock) {
+                    mp = mPlayer;
+                    mPlayer = player;
+                }
+                if (mp != null) {
+                    if (DEBUG) {
+                        Log.d(mTag, "mp.pause+release piid:" + mp.getPlayerIId());
+                    }
+                    mp.pause();
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException ie) { }
+                    mp.release();
                 }
                 this.notify();
             }
@@ -209,6 +218,58 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
         }
     }
 
+    private void stopSound(Command cmd) {
+        final MediaPlayer mp;
+        synchronized (mPlayerLock) {
+            mp = mPlayer;
+            mPlayer = null;
+        }
+        if (mp == null) {
+            Log.w(mTag, "STOP command without a player");
+            return;
+        }
+
+        long delay = SystemClock.uptimeMillis() - cmd.requestTime;
+        if (delay > 1000) {
+            Log.w(mTag, "Notification stop delayed by " + delay + "msecs");
+        }
+        try {
+            mp.stop();
+        } catch (Exception e) {
+            Log.w(mTag, "Failed to stop MediaPlayer", e);
+        }
+        if (DEBUG) {
+            Log.i(mTag, "About to release MediaPlayer piid:"
+                    + mp.getPlayerIId() + " due to notif cancelled");
+        }
+        try {
+            mp.release();
+        } catch (Exception e) {
+            Log.w(mTag, "Failed to release MediaPlayer", e);
+        }
+        synchronized (mQueueAudioFocusLock) {
+            if (mAudioManagerWithAudioFocus != null) {
+                if (DEBUG) {
+                    Log.d(mTag, "in STOP: abandonning AudioFocus");
+                }
+                try {
+                    mAudioManagerWithAudioFocus.abandonAudioFocus(null);
+                } catch (Exception e) {
+                    Log.w(mTag, "Failed to abandon audio focus", e);
+                }
+                mAudioManagerWithAudioFocus = null;
+            }
+        }
+        synchronized (mCompletionHandlingLock) {
+            if ((mLooper != null) && (mLooper.getThread().getState() != Thread.State.TERMINATED)) {
+                if (DEBUG) {
+                    Log.d(mTag, "in STOP: quitting looper " + mLooper);
+                }
+                mLooper.quit();
+            }
+        }
+    }
+
     private final class CmdThread extends java.lang.Thread {
         CmdThread() {
             super("NotificationPlayer-" + mTag);
@@ -222,52 +283,28 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
                     if (DEBUG) Log.d(mTag, "RemoveFirst");
                     cmd = mCmdQueue.removeFirst();
                 }
-
-                switch (cmd.code) {
-                case PLAY:
-                    if (DEBUG) Log.d(mTag, "PLAY");
-                    startSound(cmd);
-                    break;
-                case STOP:
-                    if (DEBUG) Log.d(mTag, "STOP");
-                    if (mPlayer != null) {
-                        long delay = SystemClock.uptimeMillis() - cmd.requestTime;
-                        if (delay > 1000) {
-                            Log.w(mTag, "Notification stop delayed by " + delay + "msecs");
-                        }
-                        mPlayer.stop();
-                        mPlayer.release();
-                        mPlayer = null;
-                        synchronized(mQueueAudioFocusLock) {
-                            if (mAudioManagerWithAudioFocus != null) {
-                                if (DEBUG) { Log.d(mTag, "in STOP: abandonning AudioFocus"); }
-                                mAudioManagerWithAudioFocus.abandonAudioFocus(null);
-                                mAudioManagerWithAudioFocus = null;
-                            }
-                        }
-                        synchronized (mCompletionHandlingLock) {
-                            if ((mLooper != null) &&
-                                    (mLooper.getThread().getState() != Thread.State.TERMINATED))
-                            {
-                                if (DEBUG) { Log.d(mTag, "in STOP: quitting looper "+ mLooper); }
-                                mLooper.quit();
-                            }
-                        }
-                    } else {
-                        Log.w(mTag, "STOP command without a player");
+                try {
+                    switch (cmd.code) {
+                        case PLAY:
+                            if (DEBUG) Log.d(mTag, "PLAY");
+                            startSound(cmd);
+                            break;
+                        case STOP:
+                            if (DEBUG) Log.d(mTag, "STOP");
+                            stopSound(cmd);
+                            break;
                     }
-                    break;
-                }
-
-                synchronized (mCmdQueue) {
-                    if (mCmdQueue.size() == 0) {
-                        // nothing left to do, quit
-                        // doing this check after we're done prevents the case where they
-                        // added it during the operation from spawning two threads and
-                        // trying to do them in parallel.
-                        mThread = null;
-                        releaseWakeLock();
-                        return;
+                } finally {
+                    synchronized (mCmdQueue) {
+                        if (mCmdQueue.size() == 0) {
+                            // nothing left to do, quit
+                            // doing this check after we're done prevents the case where they
+                            // added it during the operation from spawning two threads and
+                            // trying to do them in parallel.
+                            mThread = null;
+                            releaseWakeLock();
+                            return;
+                        }
                     }
                 }
             }
@@ -277,7 +314,7 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
     public void onCompletion(MediaPlayer mp) {
         synchronized(mQueueAudioFocusLock) {
             if (mAudioManagerWithAudioFocus != null) {
-                if (DEBUG) Log.d(mTag, "onCompletion() abandonning AudioFocus");
+                if (DEBUG) Log.d(mTag, "onCompletion() abandoning AudioFocus");
                 mAudioManagerWithAudioFocus.abandonAudioFocus(null);
                 mAudioManagerWithAudioFocus = null;
             } else {
@@ -297,6 +334,18 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
                 }
             }
         }
+        synchronized (mPlayerLock) {
+            if (mp == mPlayer) {
+                mPlayer = null;
+            }
+        }
+        if (mp != null) {
+            if (DEBUG) {
+                Log.i("NotificationPlayer", "About to release MediaPlayer piid:"
+                        + mp.getPlayerIId() + " due to onCompletion");
+            }
+            mp.release();
+        }
     }
 
     public boolean onError(MediaPlayer mp, int what, int extra) {
@@ -311,6 +360,8 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
     @GuardedBy("mCmdQueue")
     private CmdThread mThread;
 
+    private final Object mPlayerLock = new Object();
+    @GuardedBy("mPlayerLock")
     private MediaPlayer mPlayer;
 
 
@@ -352,10 +403,11 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
      *          (see {@link MediaPlayer#setLooping(boolean)})
      * @param stream the AudioStream to use.
      *          (see {@link MediaPlayer#setAudioStreamType(int)})
+     * @param volume the volume for the audio with values in range [0.0, 1.0]
      * @deprecated use {@link #play(Context, Uri, boolean, AudioAttributes)} instead.
      */
     @Deprecated
-    public void play(Context context, Uri uri, boolean looping, int stream) {
+    public void play(Context context, Uri uri, boolean looping, int stream, float volume) {
         if (DEBUG) { Log.d(mTag, "play uri=" + uri.toString()); }
         PlayerBase.deprecateStreamTypeForPlayback(stream, "NotificationPlayer", "play");
         Command cmd = new Command();
@@ -365,6 +417,7 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
         cmd.uri = uri;
         cmd.looping = looping;
         cmd.attributes = new AudioAttributes.Builder().setInternalLegacyStreamType(stream).build();
+        cmd.volume = volume;
         synchronized (mCmdQueue) {
             enqueueLocked(cmd);
             mState = PLAY;
@@ -383,8 +436,10 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
      *          (see {@link MediaPlayer#setLooping(boolean)})
      * @param attributes the AudioAttributes to use.
      *          (see {@link MediaPlayer#setAudioAttributes(AudioAttributes)})
+     * @param volume the volume for the audio with values in range [0.0, 1.0]
      */
-    public void play(Context context, Uri uri, boolean looping, AudioAttributes attributes) {
+    public void play(Context context, Uri uri, boolean looping, AudioAttributes attributes,
+            float volume) {
         if (DEBUG) { Log.d(mTag, "play uri=" + uri.toString()); }
         Command cmd = new Command();
         cmd.requestTime = SystemClock.uptimeMillis();
@@ -393,6 +448,7 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
         cmd.uri = uri;
         cmd.looping = looping;
         cmd.attributes = attributes;
+        cmd.volume = volume;
         synchronized (mCmdQueue) {
             enqueueLocked(cmd);
             mState = PLAY;

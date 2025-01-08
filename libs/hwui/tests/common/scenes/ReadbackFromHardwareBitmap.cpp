@@ -16,6 +16,12 @@
 
 #include "TestSceneBase.h"
 
+#include <SkBitmap.h>
+#include <SkCanvas.h>
+#include <SkPaint.h>
+#include <SkRect.h>
+#include <SkRefCnt.h>
+
 class ReadbackFromHardware;
 
 static TestScene::Registrar _SaveLayer(TestScene::Info{
@@ -51,7 +57,7 @@ public:
                                                          hardwareBitmap->height(), &canvasBitmap));
 
         SkCanvas skCanvas(canvasBitmap);
-        skCanvas.drawBitmap(readback, 0, 0);
+        skCanvas.drawImage(readback.asImage(), 0, 0);
         canvas.drawBitmap(*heapBitmap, 0, 0, nullptr);
 
         canvas.drawBitmap(*hardwareBitmap, 0, 500, nullptr);

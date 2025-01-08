@@ -15,9 +15,11 @@
  */
 package com.android.server.hdmi;
 
+import android.hardware.hdmi.IHdmiControlCallback;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.os.RemoteException;
 import android.util.Pair;
 import android.util.Slog;
 
@@ -25,6 +27,7 @@ import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.hdmi.HdmiControlService.DevicePollingCallback;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -50,6 +53,10 @@ abstract class HdmiCecFeatureAction {
     // Default state used in common by all the feature actions.
     protected static final int STATE_NONE = 0;
 
+    // Delay to query avr's audio status, some avrs could report the old volume first. It could
+    // show inverse mute state on TV.
+    protected static final long DELAY_GIVE_AUDIO_STATUS = 500;
+
     // Internal state indicating the progress of action.
     protected int mState = STATE_NONE;
 
@@ -61,7 +68,20 @@ abstract class HdmiCecFeatureAction {
 
     private ArrayList<Pair<HdmiCecFeatureAction, Runnable>> mOnFinishedCallbacks;
 
+    final List<IHdmiControlCallback> mCallbacks = new ArrayList<>();
+
     HdmiCecFeatureAction(HdmiCecLocalDevice source) {
+        this(source, new ArrayList<>());
+    }
+
+    HdmiCecFeatureAction(HdmiCecLocalDevice source, IHdmiControlCallback callback) {
+        this(source, Arrays.asList(callback));
+    }
+
+    HdmiCecFeatureAction(HdmiCecLocalDevice source, List<IHdmiControlCallback> callbacks) {
+        for (IHdmiControlCallback callback : callbacks) {
+            addCallback(callback);
+        }
         mSource = source;
         mService = mSource.getService();
         mActionTimer = createActionTimer(mService.getServiceLooper());
@@ -175,6 +195,11 @@ abstract class HdmiCecFeatureAction {
         mService.sendCecCommand(cmd, callback);
     }
 
+    protected final void sendCommandWithoutRetries(HdmiCecMessage cmd,
+            HdmiControlService.SendMessageCallback callback) {
+        mService.sendCecCommandWithoutRetries(cmd, callback);
+    }
+
     protected final void addAndStartAction(HdmiCecFeatureAction action) {
         mSource.addAndStartAction(action);
     }
@@ -208,7 +233,13 @@ abstract class HdmiCecFeatureAction {
 
     protected final void pollDevices(DevicePollingCallback callback, int pickStrategy,
             int retryCount) {
-        mService.pollDevices(callback, getSourceAddress(), pickStrategy, retryCount);
+        pollDevices(callback, pickStrategy, retryCount, 0);
+    }
+
+    protected final void pollDevices(DevicePollingCallback callback, int pickStrategy,
+            int retryCount, long pollingMessageInterval) {
+        mService.pollDevices(
+                callback, getSourceAddress(), pickStrategy, retryCount, pollingMessageInterval);
     }
 
     /**
@@ -252,8 +283,16 @@ abstract class HdmiCecFeatureAction {
         return (HdmiCecLocalDevicePlayback) mSource;
     }
 
+    protected final HdmiCecLocalDeviceSource source() {
+        return (HdmiCecLocalDeviceSource) mSource;
+    }
+
     protected final HdmiCecLocalDeviceTv tv() {
         return (HdmiCecLocalDeviceTv) mSource;
+    }
+
+    protected final HdmiCecLocalDeviceAudioSystem audioSystem() {
+        return (HdmiCecLocalDeviceAudioSystem) mSource;
     }
 
     protected final int getSourceAddress() {
@@ -273,5 +312,27 @@ abstract class HdmiCecFeatureAction {
             mOnFinishedCallbacks = new ArrayList<>();
         }
         mOnFinishedCallbacks.add(Pair.create(action, runnable));
+    }
+
+    protected void finishWithCallback(int returnCode) {
+        invokeCallback(returnCode);
+        finish();
+    }
+
+    public void addCallback(IHdmiControlCallback callback) {
+        mCallbacks.add(callback);
+    }
+
+    private void invokeCallback(int result) {
+        try {
+            for (IHdmiControlCallback callback : mCallbacks) {
+                if (callback == null) {
+                    continue;
+                }
+                callback.onComplete(result);
+            }
+        } catch (RemoteException e) {
+            Slog.e(TAG, "Callback failed:" + e);
+        }
     }
 }

@@ -14,14 +14,31 @@
 // limitations under the License.
 //
 
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_base_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_base_license"],
+}
+
 android_app {
     name: "startop_test_app",
     srcs: [
-        "src/EmptyActivity.java",
-        "src/LayoutInflationActivity.java",
+        "src/ApplicationBenchmarks.java",
         "src/ComplexLayoutInflationActivity.java",
+        "src/CPUIntensiveBenchmarkActivity.java",
+        "src/CPUIntensiveBenchmarks.java",
+        "src/EmptyActivity.java",
         "src/FrameLayoutInflationActivity.java",
+        "src/InitCheckOverheadBenchmarkActivity.java",
+        "src/InitCheckOverheadBenchmarks.java",
+        "src/LayoutInflationActivity.java",
+        "src/NonInteractiveMicrobenchmarkActivity.java",
+        "src/InteractiveMicrobenchmarkActivity.java",
+        "src/SystemServerBenchmarks.java",
         "src/TextViewInflationActivity.java",
     ],
-    platform_apis: true,
+    sdk_version: "26", // Android O (8.0) and higher
 }

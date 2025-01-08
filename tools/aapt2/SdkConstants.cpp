@@ -16,21 +16,35 @@
 
 #include "SdkConstants.h"
 
+#include <stdint.h>
+
 #include <algorithm>
 #include <string>
-#include <unordered_set>
-#include <vector>
+#include <string_view>
 
 using android::StringPiece;
+using namespace std::literals;
 
 namespace aapt {
 
-static ApiVersion sDevelopmentSdkLevel = 10000;
-static const auto sDevelopmentSdkCodeNames = std::unordered_set<StringPiece>({
-    "Q", "R"
-});
+static constexpr ApiVersion sDevelopmentSdkLevel = 10000;
 
-static const std::vector<std::pair<uint16_t, ApiVersion>> sAttrIdMap = {
+// clang-format off
+static constexpr StringPiece sDevelopmentSdkCodeNames[] = {
+    "Q"sv,
+    "R"sv,
+    "S"sv,
+    "Sv2"sv,
+    "Tiramisu"sv,
+    "UpsideDownCake"sv,
+    "VanillaIceCream"sv,
+    "Baklava"sv,
+};
+// clang-format on
+
+static constexpr auto sPrivacySandboxSuffix = "PrivacySandbox"sv;
+
+static constexpr std::pair<uint16_t, ApiVersion> sAttrIdMap[] = {
     {0x021c, 1},
     {0x021d, 2},
     {0x0269, SDK_CUPCAKE},
@@ -57,26 +71,49 @@ static const std::vector<std::pair<uint16_t, ApiVersion>> sAttrIdMap = {
     {0x0568, SDK_O},
     {0x056d, SDK_O_MR1},
     {0x0586, SDK_P},
+    {0x0606, SDK_Q},
+    {0x0616, SDK_R},
+    {0x064b, SDK_S},
+    {0x064c, SDK_S_V2},
+    // TODO(zyy): add these when we need more rules for converting new attributes to the
+    // older ones, but don't bother for now as this would increase the array size for no
+    // real benefit
+    //    {0x0672, SDK_TIRAMISU},
+    //    {0x0687, SDK_UPSIDE_DOWN_CAKE},
+    //    {0x06a3, SDK_VANILLA_ICE_CREAM},
 };
 
-static bool less_entry_id(const std::pair<uint16_t, ApiVersion>& p, uint16_t entryId) {
-  return p.first < entryId;
-}
+static_assert(std::is_sorted(std::begin(sAttrIdMap), std::end(sAttrIdMap),
+                             [](auto&& l, auto&& r) { return l.first < r.first; }));
 
 ApiVersion FindAttributeSdkLevel(const ResourceId& id) {
   if (id.package_id() != 0x01 || id.type_id() != 0x01) {
     return 0;
   }
-  auto iter = std::lower_bound(sAttrIdMap.begin(), sAttrIdMap.end(), id.entry_id(), less_entry_id);
-  if (iter == sAttrIdMap.end()) {
+  const auto it =
+      std::lower_bound(std::begin(sAttrIdMap), std::end(sAttrIdMap), id.entry_id(),
+                       [](const auto& pair, uint16_t entryId) { return pair.first < entryId; });
+  if (it == std::end(sAttrIdMap)) {
     return SDK_LOLLIPOP_MR1;
   }
-  return iter->second;
+  return it->second;
 }
 
-Maybe<ApiVersion> GetDevelopmentSdkCodeNameVersion(const StringPiece& code_name) {
-  return (sDevelopmentSdkCodeNames.find(code_name) == sDevelopmentSdkCodeNames.end())
-      ? Maybe<ApiVersion>() : sDevelopmentSdkLevel;
+std::optional<ApiVersion> GetDevelopmentSdkCodeNameVersion(StringPiece code_name) {
+  const auto it =
+      std::find_if(std::begin(sDevelopmentSdkCodeNames), std::end(sDevelopmentSdkCodeNames),
+                   [code_name](const auto& item) { return code_name.starts_with(item); });
+  if (it == std::end(sDevelopmentSdkCodeNames)) {
+    return {};
+  }
+  if (code_name.size() == it->size()) {
+    return sDevelopmentSdkLevel;
+  }
+  if (code_name.size() == it->size() + sPrivacySandboxSuffix.size() &&
+      code_name.ends_with(sPrivacySandboxSuffix)) {
+    return sDevelopmentSdkLevel;
+  }
+  return {};
 }
 
 }  // namespace aapt

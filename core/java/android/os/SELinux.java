@@ -16,7 +16,7 @@
 
 package android.os;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.util.Slog;
 
 import java.io.File;
@@ -40,6 +40,13 @@ public class SELinux {
     private static final int SELINUX_ANDROID_RESTORECON_SKIPCE = 32;
     private static final int SELINUX_ANDROID_RESTORECON_CROSS_FILESYSTEMS = 64;
     private static final int SELINUX_ANDROID_RESTORECON_SKIP_SEHASH = 128;
+
+    /**
+     * Get context associated with path by file_contexts.
+     * @param path path to the regular file to get the security context for.
+     * @return a String representing the security context or null on failure.
+     */
+    public static final native String fileSelabelLookup(String path);
 
     /**
      * Determine whether SELinux is disabled or enabled.
@@ -186,4 +193,31 @@ public class SELinux {
             return false;
         }
     }
+
+    /**
+     * Gets the genfs labels version of the vendor. The genfs labels version is
+     * specified in {@code /vendor/etc/selinux/genfs_labels_version.txt}. The
+     * version follows the VINTF version format "YYYYMM" and affects how {@code
+     * genfs_contexts} entries are applied.
+     *
+     * <p>The genfs labels version indicates changes in the SELinux labeling
+     * scheme over time. For example:
+     * <ul>
+     *   <li>For version 202504 and later, {@code /sys/class/udc} is labeled as
+     *   {@code sysfs_udc}.
+     *   <li>For version 202404 and earlier, {@code /sys/class/udc} is labeled
+     *   as {@code sysfs}.
+     * </ul>
+     * Check {@code /system/etc/selinux/plat_sepolicy_genfs_{version}.cil} to
+     * see which labels are new in {version}.
+     *
+     * <p>Older vendors may override {@code genfs_contexts} with vendor-specific
+     * extensions. The framework must not break such labellings to maintain
+     * compatibility with such vendors, by checking the genfs labels version and
+     * implementing a fallback mechanism.
+     *
+     * @return an integer representing the genfs labels version of /vendor, in
+     *         the format YYYYMM.
+     */
+    public static final native int getGenfsLabelsVersion();
 }

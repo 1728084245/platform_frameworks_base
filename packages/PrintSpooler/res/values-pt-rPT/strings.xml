@@ -33,7 +33,7 @@
     <string name="pages_range_example" msgid="8558694453556945172">"p. ex. 1-5, 8, 11-13"</string>
     <string name="print_preview" msgid="8010217796057763343">"Pré-visualização de impressão"</string>
     <string name="install_for_print_preview" msgid="6366303997385509332">"Instalar o leitor de PDF para pré-visualização"</string>
-    <string name="printing_app_crashed" msgid="854477616686566398">"A aplicação de impressão bloqueou"</string>
+    <string name="printing_app_crashed" msgid="854477616686566398">"A app de impressão bloqueou"</string>
     <string name="generating_print_job" msgid="3119608742651698916">"A gerar tarefa de impressão"</string>
     <string name="save_as_pdf" msgid="5718454119847596853">"Guardar como PDF"</string>
     <string name="all_printers" msgid="5018829726861876202">"Todas as impressoras..."</string>
@@ -56,6 +56,7 @@
     <string name="print_select_printer" msgid="7388760939873368698">"Selecionar impressora"</string>
     <string name="print_forget_printer" msgid="5035287497291910766">"Esquecer impressora"</string>
     <plurals name="print_search_result_count_utterance" formatted="false" msgid="6997663738361080868">
+      <item quantity="many"><xliff:g id="COUNT_1">%1$s</xliff:g> impressoras encontradas</item>
       <item quantity="other"><xliff:g id="COUNT_1">%1$s</xliff:g> impressoras encontradas</item>
       <item quantity="one"><xliff:g id="COUNT_0">%1$s</xliff:g> impressora encontrada</item>
     </plurals>
@@ -76,6 +77,7 @@
     <string name="disabled_services_title" msgid="7313253167968363211">"Serviços desativados"</string>
     <string name="all_services_title" msgid="5578662754874906455">"Todos os serviços"</string>
     <plurals name="print_services_recommendation_subtitle" formatted="false" msgid="5678487708807185138">
+      <item quantity="many">Instale para detetar <xliff:g id="COUNT_1">%1$s</xliff:g> impressoras</item>
       <item quantity="other">Instale para detetar <xliff:g id="COUNT_1">%1$s</xliff:g> impressoras</item>
       <item quantity="one">Instale para detetar <xliff:g id="COUNT_0">%1$s</xliff:g> impressora</item>
     </plurals>
@@ -87,7 +89,7 @@
     <string name="restart" msgid="2472034227037808749">"Reiniciar"</string>
     <string name="no_connection_to_printer" msgid="2159246915977282728">"Sem ligação à impressora"</string>
     <string name="reason_unknown" msgid="5507940196503246139">"desconhecido"</string>
-    <string name="print_service_security_warning_title" msgid="2160752291246775320">"Pretende utilizar o <xliff:g id="SERVICE">%1$s</xliff:g>?"</string>
+    <string name="print_service_security_warning_title" msgid="2160752291246775320">"Quer utilizar o <xliff:g id="SERVICE">%1$s</xliff:g>?"</string>
     <string name="print_service_security_warning_summary" msgid="1427434625361692006">"O seu documento pode passar por um ou mais servidores no respetivo caminho para a impressora."</string>
   <string-array name="color_mode_labels">
     <item msgid="7602948745415174937">"Preto e branco"</item>
@@ -103,7 +105,7 @@
     <item msgid="3199660090246166812">"Horizontal"</item>
   </string-array>
     <string name="print_write_error_message" msgid="5787642615179572543">"Não foi possível gravar no ficheiro"</string>
-    <string name="print_error_default_message" msgid="8602678405502922346">"Lamentamos, mas isso não funcionou. Tente novam."</string>
+    <string name="print_error_default_message" msgid="8602678405502922346">"Lamentamos, mas isso não funcionou. Tente novamente."</string>
     <string name="print_error_retry" msgid="1426421728784259538">"Tentar novamente"</string>
     <string name="print_error_printer_unavailable" msgid="8985614415253203381">"Esta impressora não está atualmente disponível."</string>
     <string name="print_cannot_load_page" msgid="6179560924492912009">"Não é possível apresentar a pré-visualização"</string>

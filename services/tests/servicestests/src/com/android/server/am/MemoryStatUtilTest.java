@@ -17,6 +17,7 @@
 package com.android.server.am;
 
 import static com.android.server.am.MemoryStatUtil.MemoryStat;
+import static com.android.server.am.MemoryStatUtil.PAGE_SIZE;
 import static com.android.server.am.MemoryStatUtil.parseMemoryStatFromMemcg;
 import static com.android.server.am.MemoryStatUtil.parseMemoryStatFromProcfs;
 
@@ -24,15 +25,18 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 
 import androidx.test.filters.SmallTest;
-import androidx.test.runner.AndroidJUnit4;
 
 import org.junit.Test;
-import org.junit.runner.RunWith;
 
-@RunWith(AndroidJUnit4.class)
+import java.util.Collections;
+
+/**
+ * Build/Install/Run:
+ *  atest FrameworksServicesTests:MemoryStatUtilTest
+ */
 @SmallTest
 public class MemoryStatUtilTest {
-    private String MEMORY_STAT_CONTENTS = String.join(
+    private static final String MEMORY_STAT_CONTENTS = String.join(
             "\n",
             "cache 96", // keep different from total_cache to catch reading wrong value
             "rss 97", // keep different from total_rss to catch reading wrong value
@@ -67,7 +71,7 @@ public class MemoryStatUtilTest {
             "total_active_file 81920",
             "total_unevictable 0");
 
-    private String PROC_STAT_CONTENTS = String.join(
+    private static final String PROC_STAT_CONTENTS = String.join(
             " ",
             "1040",
             "(system_server)",
@@ -90,9 +94,9 @@ public class MemoryStatUtilTest {
             "-2",
             "117",
             "0",
-            "2206",
+            "2222", // this in start time (in ticks per second)
             "1257177088",
-            "3", // this is rss in bytes
+            "3", // this is RSS in pages
             "4294967295",
             "2936971264",
             "2936991289",
@@ -123,17 +127,17 @@ public class MemoryStatUtilTest {
             "0");
 
     @Test
-    public void testParseMemoryStatFromMemcg_parsesCorrectValues() throws Exception {
+    public void testParseMemoryStatFromMemcg_parsesCorrectValues() {
         MemoryStat stat = parseMemoryStatFromMemcg(MEMORY_STAT_CONTENTS);
-        assertEquals(stat.pgfault, 1);
-        assertEquals(stat.pgmajfault, 2);
-        assertEquals(stat.rssInBytes, 3);
-        assertEquals(stat.cacheInBytes, 4);
-        assertEquals(stat.swapInBytes, 5);
+        assertEquals(1, stat.pgfault);
+        assertEquals(2, stat.pgmajfault);
+        assertEquals(3, stat.rssInBytes);
+        assertEquals(4, stat.cacheInBytes);
+        assertEquals(5, stat.swapInBytes);
     }
 
     @Test
-    public void testParseMemoryStatFromMemcg_emptyMemoryStatContents() throws Exception {
+    public void testParseMemoryStatFromMemcg_emptyMemoryStatContents() {
         MemoryStat stat = parseMemoryStatFromMemcg("");
         assertNull(stat);
 
@@ -142,21 +146,27 @@ public class MemoryStatUtilTest {
     }
 
     @Test
-    public void testParseMemoryStatFromProcfs_parsesCorrectValues() throws Exception {
+    public void testParseMemoryStatFromProcfs_parsesCorrectValues() {
         MemoryStat stat = parseMemoryStatFromProcfs(PROC_STAT_CONTENTS);
         assertEquals(1, stat.pgfault);
         assertEquals(2, stat.pgmajfault);
-        assertEquals(3, stat.rssInBytes);
+        assertEquals(3 * PAGE_SIZE, stat.rssInBytes);
         assertEquals(0, stat.cacheInBytes);
         assertEquals(0, stat.swapInBytes);
     }
 
     @Test
-    public void testParseMemoryStatFromProcfs_emptyContents() throws Exception {
+    public void testParseMemoryStatFromProcfs_emptyContents() {
         MemoryStat stat = parseMemoryStatFromProcfs("");
         assertNull(stat);
 
         stat = parseMemoryStatFromProcfs(null);
         assertNull(stat);
+    }
+
+    @Test
+    public void testParseMemoryStatFromProcfs_invalidValue() {
+        String contents = String.join(" ", Collections.nCopies(24, "memory"));
+        assertNull(parseMemoryStatFromProcfs(contents));
     }
 }

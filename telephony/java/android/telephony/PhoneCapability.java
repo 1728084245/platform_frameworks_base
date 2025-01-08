@@ -16,24 +16,58 @@
 
 package android.telephony;
 
+import android.annotation.IntDef;
+import android.annotation.IntRange;
+import android.annotation.NonNull;
+import android.annotation.SystemApi;
 import android.os.Parcel;
 import android.os.Parcelable;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
 /**
- * Define capability of a modem group. That is, the capabilities
- * are shared between those modems defined by list of modem IDs.
+ * Phone capability which describes the data connection capability of modem.
+ * It's used to evaluate possible phone config change, for example from single
+ * SIM device to multi-SIM device.
  * @hide
  */
-public class PhoneCapability implements Parcelable {
+@SystemApi
+public final class PhoneCapability implements Parcelable {
     // Hardcoded default DSDS capability.
+    /** @hide */
     public static final PhoneCapability DEFAULT_DSDS_CAPABILITY;
     // Hardcoded default Single SIM single standby capability.
+    /** @hide */
     public static final PhoneCapability DEFAULT_SSSS_CAPABILITY;
+
+    /** @hide */
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(prefix = { "DEVICE_NR_CAPABILITY_" }, value = {
+            DEVICE_NR_CAPABILITY_NSA,
+            DEVICE_NR_CAPABILITY_SA,
+    })
+    public @interface DeviceNrCapability {}
+
+    /**
+     * Indicates DEVICE_NR_CAPABILITY_NSA determine that the device enable the non-standalone
+     * (NSA) mode of 5G NR.
+     * @hide
+     */
+    @SystemApi
+    public static final int DEVICE_NR_CAPABILITY_NSA = 1;
+
+    /**
+     * Indicates DEVICE_NR_CAPABILITY_SA determine that the device enable the standalone (SA)
+     * mode of 5G NR.
+     * @hide
+     */
+    @SystemApi
+    public static final int DEVICE_NR_CAPABILITY_SA = 2;
 
     static {
         ModemInfo modemInfo1 = new ModemInfo(0, 0, true, true);
@@ -42,49 +76,111 @@ public class PhoneCapability implements Parcelable {
         List<ModemInfo> logicalModemList = new ArrayList<>();
         logicalModemList.add(modemInfo1);
         logicalModemList.add(modemInfo2);
-        DEFAULT_DSDS_CAPABILITY = new PhoneCapability(1, 1, 0, logicalModemList, false);
+        int[] deviceNrCapabilities = new int[0];
+
+        DEFAULT_DSDS_CAPABILITY = new PhoneCapability(1, 1, logicalModemList, false,
+                deviceNrCapabilities);
 
         logicalModemList = new ArrayList<>();
         logicalModemList.add(modemInfo1);
-        DEFAULT_SSSS_CAPABILITY = new PhoneCapability(1, 1, 0, logicalModemList, false);
+        DEFAULT_SSSS_CAPABILITY = new PhoneCapability(1, 1, logicalModemList, false,
+                deviceNrCapabilities);
     }
 
-    public final int maxActiveVoiceCalls;
-    public final int maxActiveData;
-    public final int max5G;
-    public final boolean validationBeforeSwitchSupported;
-    public final List<ModemInfo> logicalModemList;
+    /**
+     * mMaxActiveVoiceSubscriptions defines the maximum subscriptions that can support
+     * simultaneous voice calls. For a dual sim dual standby (DSDS) device it would be one, but
+     * for a dual sim dual active (DSDA) device, or a DSDS device that supports "virtual DSDA" (
+     * using the data line of 1 SIM to temporarily provide IMS voice connectivity to the other SIM)
+     * it would be 2.
+     *
+     * @hide
+     */
+    private final int mMaxActiveVoiceSubscriptions;
 
-    public PhoneCapability(int maxActiveVoiceCalls, int maxActiveData, int max5G,
-            List<ModemInfo> logicalModemList, boolean validationBeforeSwitchSupported) {
-        this.maxActiveVoiceCalls = maxActiveVoiceCalls;
-        this.maxActiveData = maxActiveData;
-        this.max5G = max5G;
+    /**
+     * mMaxActiveDataSubscriptions defines the maximum subscriptions that can support
+     * simultaneous data connections.
+     * For example, for dual sim dual active L+L device it should be 2.
+     *
+     * @hide
+     */
+    private final int mMaxActiveDataSubscriptions;
+
+    /**
+     * Whether modem supports both internet PDN up so
+     * that we can do ping test before tearing down the
+     * other one.
+     *
+     * @hide
+     */
+    private final boolean mNetworkValidationBeforeSwitchSupported;
+
+    /**
+     * List of logical modem information.
+     *
+     * @hide
+     */
+    @NonNull
+    private final List<ModemInfo> mLogicalModemList;
+
+    /**
+     * Device NR capabilities.
+     *
+     * @hide
+     */
+    @NonNull
+    private final int[] mDeviceNrCapabilities;
+
+    /** @hide */
+    public PhoneCapability(int maxActiveVoiceSubscriptions, int maxActiveDataSubscriptions,
+            List<ModemInfo> logicalModemList, boolean networkValidationBeforeSwitchSupported,
+            int[] deviceNrCapabilities) {
+        this.mMaxActiveVoiceSubscriptions = maxActiveVoiceSubscriptions;
+        this.mMaxActiveDataSubscriptions = maxActiveDataSubscriptions;
         // Make sure it's not null.
-        this.logicalModemList = logicalModemList == null ? new ArrayList<>() : logicalModemList;
-        this.validationBeforeSwitchSupported = validationBeforeSwitchSupported;
+        this.mLogicalModemList = logicalModemList == null ? new ArrayList<>() : logicalModemList;
+        this.mNetworkValidationBeforeSwitchSupported = networkValidationBeforeSwitchSupported;
+        this.mDeviceNrCapabilities = deviceNrCapabilities;
+    }
+
+    private PhoneCapability(@NonNull Builder builder) {
+        this.mMaxActiveVoiceSubscriptions = builder.mMaxActiveVoiceSubscriptions;
+        this.mMaxActiveDataSubscriptions = builder.mMaxActiveDataSubscriptions;
+        // Make sure it's not null.
+        this.mLogicalModemList = builder.mLogicalModemList == null ? new ArrayList<>()
+                : builder.mLogicalModemList;
+        this.mNetworkValidationBeforeSwitchSupported =
+                builder.mNetworkValidationBeforeSwitchSupported;
+        this.mDeviceNrCapabilities = builder.mDeviceNrCapabilities;
+
     }
 
     @Override
     public String toString() {
-        return "maxActiveVoiceCalls=" + maxActiveVoiceCalls + " maxActiveData=" + maxActiveData
-                + " max5G=" + max5G + "logicalModemList:"
-                + Arrays.toString(logicalModemList.toArray());
+        return "mMaxActiveVoiceSubscriptions=" + mMaxActiveVoiceSubscriptions
+                + " mMaxActiveDataSubscriptions=" + mMaxActiveDataSubscriptions
+                + " mNetworkValidationBeforeSwitchSupported="
+                + mNetworkValidationBeforeSwitchSupported
+                + " mDeviceNrCapability " + Arrays.toString(mDeviceNrCapabilities);
     }
 
     private PhoneCapability(Parcel in) {
-        maxActiveVoiceCalls = in.readInt();
-        maxActiveData = in.readInt();
-        max5G = in.readInt();
-        validationBeforeSwitchSupported = in.readBoolean();
-        logicalModemList = new ArrayList<>();
-        in.readList(logicalModemList, ModemInfo.class.getClassLoader());
+        mMaxActiveVoiceSubscriptions = in.readInt();
+        mMaxActiveDataSubscriptions = in.readInt();
+        mNetworkValidationBeforeSwitchSupported = in.readBoolean();
+        mLogicalModemList = new ArrayList<>();
+        in.readList(mLogicalModemList, ModemInfo.class.getClassLoader(), android.telephony.ModemInfo.class);
+        mDeviceNrCapabilities = in.createIntArray();
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(maxActiveVoiceCalls, maxActiveData, max5G, logicalModemList,
-                validationBeforeSwitchSupported);
+        return Objects.hash(mMaxActiveVoiceSubscriptions,
+                mMaxActiveDataSubscriptions,
+                mLogicalModemList,
+                mNetworkValidationBeforeSwitchSupported,
+                Arrays.hashCode(mDeviceNrCapabilities));
     }
 
     @Override
@@ -99,32 +195,34 @@ public class PhoneCapability implements Parcelable {
 
         PhoneCapability s = (PhoneCapability) o;
 
-        return (maxActiveVoiceCalls == s.maxActiveVoiceCalls
-                && maxActiveData == s.maxActiveData
-                && max5G == s.max5G
-                && validationBeforeSwitchSupported == s.validationBeforeSwitchSupported
-                && logicalModemList.equals(s.logicalModemList));
+        return (mMaxActiveVoiceSubscriptions == s.mMaxActiveVoiceSubscriptions
+                && mMaxActiveDataSubscriptions == s.mMaxActiveDataSubscriptions
+                && mNetworkValidationBeforeSwitchSupported
+                == s.mNetworkValidationBeforeSwitchSupported
+                && mLogicalModemList.equals(s.mLogicalModemList)
+                && Arrays.equals(mDeviceNrCapabilities, s.mDeviceNrCapabilities));
     }
 
     /**
      * {@link Parcelable#describeContents}
      */
-    public @Parcelable.ContentsFlags int describeContents() {
+    public int describeContents() {
         return 0;
     }
 
     /**
      * {@link Parcelable#writeToParcel}
      */
-    public void writeToParcel(Parcel dest, @Parcelable.WriteFlags int flags) {
-        dest.writeInt(maxActiveVoiceCalls);
-        dest.writeInt(maxActiveData);
-        dest.writeInt(max5G);
-        dest.writeBoolean(validationBeforeSwitchSupported);
-        dest.writeList(logicalModemList);
+    public void writeToParcel(@NonNull Parcel dest, @Parcelable.WriteFlags int flags) {
+        dest.writeInt(mMaxActiveVoiceSubscriptions);
+        dest.writeInt(mMaxActiveDataSubscriptions);
+        dest.writeBoolean(mNetworkValidationBeforeSwitchSupported);
+        dest.writeList(mLogicalModemList);
+        dest.writeIntArray(mDeviceNrCapabilities);
     }
 
-    public static final Parcelable.Creator<PhoneCapability> CREATOR = new Parcelable.Creator() {
+    public static final @android.annotation.NonNull Parcelable.Creator<PhoneCapability> CREATOR =
+            new Parcelable.Creator() {
         public PhoneCapability createFromParcel(Parcel in) {
             return new PhoneCapability(in);
         }
@@ -133,4 +231,174 @@ public class PhoneCapability implements Parcelable {
             return new PhoneCapability[size];
         }
     };
+
+    /**
+     * @return the maximum subscriptions that can support simultaneous voice calls. For a dual
+     * sim dual standby (DSDS) device it would be one, but for a dual sim dual active device it
+     * would be 2.
+     * @hide
+     */
+    @SystemApi
+    public @IntRange(from = 1) int getMaxActiveVoiceSubscriptions() {
+        return mMaxActiveVoiceSubscriptions;
+    }
+
+    /**
+     * @return the maximum subscriptions that can support simultaneous data connections.
+     * For example, for L+L device it should be 2.
+     * @hide
+     */
+    @SystemApi
+    public @IntRange(from = 1) int getMaxActiveDataSubscriptions() {
+        return mMaxActiveDataSubscriptions;
+    }
+
+    /**
+     * @return Check whether the Citizens Broadband Radio Service(CBRS) network validation before
+     * CBRS switch is supported or not.
+     *
+     * @hide
+     */
+    public boolean isNetworkValidationBeforeSwitchSupported() {
+        return mNetworkValidationBeforeSwitchSupported;
+    }
+
+    /**
+     * @return The list of logical modem information.
+     * @hide
+     */
+    public List<ModemInfo> getLogicalModemList() {
+        return mLogicalModemList;
+    }
+
+    /**
+     * Return List of the device's NR capability. If the device doesn't support NR capability,
+     * then this api return empty array.
+     * @see DEVICE_NR_CAPABILITY_NSA
+     * @see DEVICE_NR_CAPABILITY_SA
+     *
+     * @return List of the device's NR capability.
+     * @hide
+     */
+    @SystemApi
+    public @NonNull @DeviceNrCapability int[] getDeviceNrCapabilities() {
+        return mDeviceNrCapabilities == null ? (new int[0]) : mDeviceNrCapabilities;
+    }
+
+
+    /**
+     * Builder for {@link PhoneCapability}.
+     *
+     * @hide
+     */
+    public static class Builder {
+        /**
+         * mMaxActiveVoiceSubscriptions defines the maximum subscriptions that can support
+         * simultaneous voice calls. For a dual sim dual standby (DSDS) device it would be one, but
+         * for a dual sim dual active (DSDA) device, or a DSDS device that supports "virtual DSDA"
+         * (using the data line of 1 SIM to temporarily provide IMS voice connectivity to the other
+         * SIM) it would be 2.
+         *
+         * @hide
+         */
+        private int mMaxActiveVoiceSubscriptions = 0;
+
+        /**
+         * mMaxActiveDataSubscriptions defines the maximum subscriptions that can support
+         * simultaneous data connections. For example, for L+L device it should be 2.
+         *
+         * @hide
+         */
+        private int mMaxActiveDataSubscriptions = 0;
+
+        /**
+         * Whether modem supports both internet PDN up so that we can do ping test before tearing
+         * down the other one.
+         *
+         * @hide
+         */
+        private boolean mNetworkValidationBeforeSwitchSupported = false;
+
+        /**
+         * List of logical modem information.
+         *
+         * @hide
+         */
+        @NonNull
+        private List<ModemInfo> mLogicalModemList = new ArrayList<>();
+
+        /**
+         * Device NR capabilities.
+         *
+         * @hide
+         */
+        @NonNull
+        private int[] mDeviceNrCapabilities = new int[0];
+
+        /**
+         * Default constructor.
+         */
+        public Builder() {
+        }
+
+        public Builder(@NonNull PhoneCapability phoneCapability) {
+            mMaxActiveVoiceSubscriptions = phoneCapability.mMaxActiveVoiceSubscriptions;
+            mMaxActiveDataSubscriptions = phoneCapability.mMaxActiveDataSubscriptions;
+            mNetworkValidationBeforeSwitchSupported =
+                    phoneCapability.mNetworkValidationBeforeSwitchSupported;
+            mLogicalModemList = phoneCapability.mLogicalModemList;
+            mDeviceNrCapabilities = phoneCapability.mDeviceNrCapabilities;
+        }
+
+        /**
+         * Sets the max active voice subscriptions supported by the device.
+         */
+        public Builder setMaxActiveVoiceSubscriptions(int maxActiveVoiceSubscriptions) {
+            mMaxActiveVoiceSubscriptions = maxActiveVoiceSubscriptions;
+            return this;
+        }
+
+        /**
+         * Sets the max active voice subscriptions supported by the device.
+         */
+        public Builder setMaxActiveDataSubscriptions(int maxActiveDataSubscriptions) {
+            mMaxActiveDataSubscriptions = maxActiveDataSubscriptions;
+            return this;
+        }
+
+        /**
+         * Sets the max active data subscriptions supported by the device. Can be fewer than the
+         * active voice subscriptions.
+         */
+        public Builder setNetworkValidationBeforeSwitchSupported(
+                boolean networkValidationBeforeSwitchSupported) {
+            mNetworkValidationBeforeSwitchSupported = networkValidationBeforeSwitchSupported;
+            return this;
+        }
+
+        /**
+         * Sets the logical modem list of the device.
+         */
+        public Builder setLogicalModemList(@NonNull List<ModemInfo> logicalModemList) {
+            mLogicalModemList = logicalModemList;
+            return this;
+        }
+
+        /**
+         * Sets the NR capabilities supported by the device.
+         */
+        public Builder setDeviceNrCapabilities(@NonNull int[] deviceNrCapabilities) {
+            mDeviceNrCapabilities = deviceNrCapabilities;
+            return this;
+        }
+
+        /**
+         * Build the {@link PhoneCapability}.
+         *
+         * @return The {@link PhoneCapability} instance.
+         */
+        public PhoneCapability build() {
+            return new PhoneCapability(this);
+        }
+    }
 }

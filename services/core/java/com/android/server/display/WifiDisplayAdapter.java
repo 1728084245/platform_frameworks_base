@@ -16,13 +16,12 @@
 
 package com.android.server.display;
 
-import com.android.internal.util.DumpUtils;
-import com.android.internal.util.IndentingPrintWriter;
-
+import android.app.BroadcastOptions;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.WifiDisplay;
 import android.hardware.display.WifiDisplaySessionInfo;
@@ -35,8 +34,15 @@ import android.os.Message;
 import android.os.UserHandle;
 import android.util.Slog;
 import android.view.Display;
+import android.view.DisplayAddress;
+import android.view.DisplayShape;
 import android.view.Surface;
 import android.view.SurfaceControl;
+
+import com.android.internal.util.DumpUtils;
+import com.android.internal.util.IndentingPrintWriter;
+import com.android.server.display.feature.DisplayManagerFlags;
+import com.android.server.display.utils.DebugUtils;
 
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -61,7 +67,9 @@ import java.util.Objects;
 final class WifiDisplayAdapter extends DisplayAdapter {
     private static final String TAG = "WifiDisplayAdapter";
 
-    private static final boolean DEBUG = false;
+    // To enable these logs, run:
+    // 'adb shell setprop persist.log.tag.WifiDisplayAdapter DEBUG && adb reboot'
+    private static final boolean DEBUG = DebugUtils.isDebuggable(TAG);
 
     private static final int MSG_SEND_STATUS_CHANGE_BROADCAST = 1;
 
@@ -92,8 +100,14 @@ final class WifiDisplayAdapter extends DisplayAdapter {
     // Called with SyncRoot lock held.
     public WifiDisplayAdapter(DisplayManagerService.SyncRoot syncRoot,
             Context context, Handler handler, Listener listener,
-            PersistentDataStore persistentDataStore) {
-        super(syncRoot, context, handler, listener, TAG);
+            PersistentDataStore persistentDataStore, DisplayManagerFlags featureFlags) {
+        super(syncRoot, context, handler, listener, TAG, featureFlags);
+
+        if (!context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT)) {
+            throw new RuntimeException("WiFi display was requested, "
+                    + "but there is no WiFi Direct feature");
+        }
+
         mHandler = new WifiDisplayHandler(handler.getLooper());
         mPersistentDataStore = persistentDataStore;
         mSupportsProtectedBuffers = context.getResources().getBoolean(
@@ -139,7 +153,8 @@ final class WifiDisplayAdapter extends DisplayAdapter {
                         getContext(), getHandler(), mWifiDisplayListener);
 
                 getContext().registerReceiverAsUser(mBroadcastReceiver, UserHandle.ALL,
-                        new IntentFilter(ACTION_DISCONNECT), null, mHandler);
+                        new IntentFilter(ACTION_DISCONNECT), null, mHandler,
+                        Context.RECEIVER_NOT_EXPORTED);
             }
         });
     }
@@ -377,9 +392,9 @@ final class WifiDisplayAdapter extends DisplayAdapter {
 
         float refreshRate = 60.0f; // TODO: get this for real
 
-        String name = display.getFriendlyDisplayName();
-        String address = display.getDeviceAddress();
-        IBinder displayToken = SurfaceControl.createDisplay(name, secure);
+        final String name = display.getFriendlyDisplayName();
+        final String address = display.getDeviceAddress();
+        IBinder displayToken = DisplayControl.createVirtualDisplay(name, secure);
         mDisplayDevice = new WifiDisplayDevice(displayToken, name, width, height,
                 refreshRate, deviceFlags, address, surface);
         sendDisplayDeviceEventLocked(mDisplayDevice, DISPLAY_DEVICE_EVENT_ADDED);
@@ -411,6 +426,7 @@ final class WifiDisplayAdapter extends DisplayAdapter {
     // Runs on the handler.
     private void handleSendStatusChangeBroadcast() {
         final Intent intent;
+        final BroadcastOptions options;
         synchronized (getSyncRoot()) {
             if (!mPendingStatusChangeBroadcast) {
                 return;
@@ -421,10 +437,13 @@ final class WifiDisplayAdapter extends DisplayAdapter {
             intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY);
             intent.putExtra(DisplayManager.EXTRA_WIFI_DISPLAY_STATUS,
                     getWifiDisplayStatusLocked());
+
+            options = BroadcastOptions.makeBasic();
+            options.setDeliveryGroupPolicy(BroadcastOptions.DELIVERY_GROUP_POLICY_MOST_RECENT);
         }
 
         // Send protected broadcast about wifi display status to registered receivers.
-        getContext().sendBroadcastAsUser(intent, UserHandle.ALL);
+        getContext().sendBroadcastAsUser(intent, UserHandle.ALL, null, options.toBundle());
     }
 
     private final BroadcastReceiver mBroadcastReceiver = new BroadcastReceiver() {
@@ -581,7 +600,7 @@ final class WifiDisplayAdapter extends DisplayAdapter {
         private final int mHeight;
         private final float mRefreshRate;
         private final int mFlags;
-        private final String mAddress;
+        private final DisplayAddress mAddress;
         private final Display.Mode mMode;
 
         private Surface mSurface;
@@ -590,13 +609,14 @@ final class WifiDisplayAdapter extends DisplayAdapter {
         public WifiDisplayDevice(IBinder displayToken, String name,
                 int width, int height, float refreshRate, int flags, String address,
                 Surface surface) {
-            super(WifiDisplayAdapter.this, displayToken, DISPLAY_NAME_PREFIX + address);
+            super(WifiDisplayAdapter.this, displayToken, DISPLAY_NAME_PREFIX + address,
+                    getContext());
             mName = name;
             mWidth = width;
             mHeight = height;
             mRefreshRate = refreshRate;
             mFlags = flags;
-            mAddress = address;
+            mAddress = DisplayAddress.fromMacAddress(address);
             mSurface = surface;
             mMode = createMode(width, height, refreshRate);
         }
@@ -611,7 +631,7 @@ final class WifiDisplayAdapter extends DisplayAdapter {
                 mSurface.release();
                 mSurface = null;
             }
-            SurfaceControl.destroyDisplay(getDisplayTokenLocked());
+            DisplayControl.destroyVirtualDisplay(getDisplayTokenLocked());
         }
 
         public void setNameLocked(String name) {
@@ -635,6 +655,7 @@ final class WifiDisplayAdapter extends DisplayAdapter {
                 mInfo.width = mWidth;
                 mInfo.height = mHeight;
                 mInfo.modeId = mMode.getModeId();
+                mInfo.renderFrameRate = mMode.getRefreshRate();
                 mInfo.defaultModeId = mMode.getModeId();
                 mInfo.supportedModes = new Display.Mode[] { mMode };
                 mInfo.presentationDeadlineNanos = 1000000000L / (int) mRefreshRate; // 1 frame
@@ -643,6 +664,10 @@ final class WifiDisplayAdapter extends DisplayAdapter {
                 mInfo.address = mAddress;
                 mInfo.touch = DisplayDeviceInfo.TOUCH_EXTERNAL;
                 mInfo.setAssumedDensityForExternalDisplay(mWidth, mHeight);
+                // The display is trusted since it is created by system.
+                mInfo.flags |= DisplayDeviceInfo.FLAG_TRUSTED;
+                mInfo.displayShape =
+                        DisplayShape.createDefaultDisplayShape(mInfo.width, mInfo.height, false);
             }
             return mInfo;
         }

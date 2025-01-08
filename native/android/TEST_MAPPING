@@ -1,0 +1,31 @@
+{
+  "presubmit": [
+    {
+       "name": "CtsPermissionManagerNativeTestCases",
+       "file_patterns": ["permission_manager.cpp"]
+    },
+    {
+       "name": "CtsPermissionTestCases",
+       "options": [
+           {
+              "include-filter": "android.permission.cts.PermissionManagerNativeJniTest"
+           }
+       ],
+       "file_patterns": ["permission_manager.cpp"]
+    },
+    {
+       "name": "CtsOsTestCases_cts_performancehintmanagertest",
+       "file_patterns": ["performance_hint.cpp"]
+    }
+  ],
+  "postsubmit": [
+    {
+      "name": "CtsThermalTestCases",
+       "file_patterns": ["thermal.cpp"]
+    },
+    {
+      "name": "NativeThermalUnitTestCases",
+       "file_patterns": ["thermal.cpp"]
+    }
+  ]
+}

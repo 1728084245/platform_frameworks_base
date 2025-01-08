@@ -17,6 +17,11 @@
 #include "TestSceneBase.h"
 #include "utils/Color.h"
 
+#include <SkBitmap.h>
+#include <SkBlendMode.h>
+#include <SkColor.h>
+#include <SkRefCnt.h>
+
 class RecentsAnimation;
 
 static TestScene::Registrar _Recents(TestScene::Info{
@@ -36,7 +41,7 @@ public:
         int cardsize = std::min(width, height) - dp(64);
 
         renderer.drawColor(Color::White, SkBlendMode::kSrcOver);
-        renderer.insertReorderBarrier(true);
+        renderer.enableZ(true);
 
         int x = dp(32);
         for (int i = 0; i < 4; i++) {
@@ -52,7 +57,7 @@ public:
             mCards.push_back(card);
         }
 
-        renderer.insertReorderBarrier(false);
+        renderer.enableZ(false);
     }
 
     void doFrame(int frameNr) override {

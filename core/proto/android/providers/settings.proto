@@ -20,10 +20,12 @@ package android.providers.settings;
 option java_multiple_files = true;
 option java_outer_classname = "SettingsServiceProto";
 
+import "frameworks/base/core/proto/android/providers/settings/config.proto";
+import "frameworks/base/core/proto/android/providers/settings/generation.proto";
 import "frameworks/base/core/proto/android/providers/settings/global.proto";
 import "frameworks/base/core/proto/android/providers/settings/secure.proto";
 import "frameworks/base/core/proto/android/providers/settings/system.proto";
-import "frameworks/base/libs/incident/proto/android/privacy.proto";
+import "frameworks/base/core/proto/android/privacy.proto";
 
 message SettingsServiceDumpProto {
     option (android.msg_privacy).dest = DEST_EXPLICIT;
@@ -33,6 +35,12 @@ message SettingsServiceDumpProto {
 
     // Global settings
     optional GlobalSettingsProto global_settings = 2;
+
+    // Config settings
+    optional ConfigSettingsProto config_settings = 3;
+
+    // Generation registry stats
+    optional GenerationRegistryProto generation_registry = 4;
 }
 
 message UserSettingsProto {

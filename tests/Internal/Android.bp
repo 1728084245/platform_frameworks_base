@@ -1,3 +1,12 @@
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_base_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_base_license"],
+}
+
 android_test {
     name: "InternalTests",
     proto: {
@@ -5,14 +14,34 @@ android_test {
     },
     // Include some source files directly to be able to access package members
     srcs: ["src/**/*.java"],
-    libs: ["android.test.runner"],
+    libs: ["android.test.runner.stubs.system"],
     static_libs: [
         "junit",
-        "android-support-test",
+        "androidx.test.rules",
         "mockito-target-minus-junit4",
+        "truth",
+        "platform-test-annotations",
+        "flickerlib-parsers",
+        "perfetto_trace_java_protos",
+        "flickerlib-trace_processor_shell",
+        "ravenwood-junit",
     ],
     java_resource_dirs: ["res"],
     certificate: "platform",
     platform_apis: true,
     test_suites: ["device-tests"],
+}
+
+android_ravenwood_test {
+    name: "InternalTestsRavenwood",
+    static_libs: [
+        "androidx.annotation_annotation",
+        "androidx.test.rules",
+        "platform-test-annotations",
+    ],
+    srcs: [
+        "src/com/android/internal/graphics/ColorUtilsTest.java",
+        "src/com/android/internal/util/ParcellingTests.java",
+    ],
+    auto_gen_config: true,
 }

@@ -18,34 +18,33 @@ package com.android.server.broadcastradio.hal1;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.hardware.radio.ITuner;
 import android.hardware.radio.ITunerCallback;
 import android.hardware.radio.ProgramList;
 import android.hardware.radio.ProgramSelector;
 import android.hardware.radio.RadioManager;
-import android.hardware.radio.RadioMetadata;
 import android.hardware.radio.RadioTuner;
 import android.os.IBinder;
 import android.os.RemoteException;
-import android.util.Slog;
+
+import com.android.server.utils.Slogf;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 class TunerCallback implements ITunerCallback {
-    private static final String TAG = "BroadcastRadioService.TunerCallback";
+
+    private static final String TAG = "BcRadio1Srv.TunerCallback";
 
     /**
      * This field is used by native code, do not access or modify.
      */
     private final long mNativeContext;
 
-    @NonNull private final Tuner mTuner;
-    @NonNull private final ITunerCallback mClientCallback;
+    private final Tuner mTuner;
+    private final ITunerCallback mClientCallback;
 
     private final AtomicReference<ProgramList.Filter> mProgramListFilter = new AtomicReference<>();
     private boolean mInitialConfigurationDone = false;
@@ -78,7 +77,7 @@ class TunerCallback implements ITunerCallback {
         try {
             func.run();
         } catch (RemoteException e) {
-            Slog.e(TAG, "client died", e);
+            Slogf.e(TAG, "client died", e);
         }
     }
 
@@ -109,7 +108,7 @@ class TunerCallback implements ITunerCallback {
 
     @Override
     public void onTuneFailed(int result, ProgramSelector selector) {
-        Slog.e(TAG, "Not applicable for HAL 1.x");
+        Slogf.e(TAG, "Not applicable for HAL 1.x");
     }
 
     @Override
@@ -162,7 +161,7 @@ class TunerCallback implements ITunerCallback {
         try {
             modified = mTuner.getProgramList(filter.getVendorFilter());
         } catch (IllegalStateException ex) {
-            Slog.d(TAG, "Program list not ready yet");
+            Slogf.d(TAG, "Program list not ready yet");
             return;
         }
         Set<RadioManager.ProgramInfo> modifiedSet = modified.stream().collect(Collectors.toSet());
@@ -176,8 +175,13 @@ class TunerCallback implements ITunerCallback {
     }
 
     @Override
-    public void onParametersUpdated(Map parameters) {
-        Slog.e(TAG, "Not applicable for HAL 1.x");
+    public void onConfigFlagUpdated(int flag, boolean value) {
+        Slogf.w(TAG, "Not applicable for HAL 1.x");
+    }
+
+    @Override
+    public void onParametersUpdated(Map<String, String> parameters) {
+        Slogf.w(TAG, "Not applicable for HAL 1.x");
     }
 
     @Override

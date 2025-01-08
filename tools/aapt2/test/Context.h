@@ -19,10 +19,10 @@
 
 #include <list>
 
+#include "Diagnostics.h"
+#include "NameMangler.h"
 #include "android-base/logging.h"
 #include "android-base/macros.h"
-
-#include "NameMangler.h"
 #include "process/IResourceTableConsumer.h"
 #include "process/SymbolTable.h"
 #include "test/Common.h"
@@ -43,7 +43,7 @@ class Context : public IAaptContext {
     return &symbols_;
   }
 
-  IDiagnostics* GetDiagnostics() override {
+  android::IDiagnostics* GetDiagnostics() override {
     return &diagnostics_;
   }
 
@@ -52,8 +52,8 @@ class Context : public IAaptContext {
     return compilation_package_.value();
   }
 
-  void SetCompilationPackage(const android::StringPiece& package) {
-    compilation_package_ = package.to_string();
+  void SetCompilationPackage(android::StringPiece package) {
+    compilation_package_ = std::string(package);
   }
 
   uint8_t GetPackageId() override {
@@ -81,18 +81,27 @@ class Context : public IAaptContext {
     return min_sdk_version_;
   }
 
+  void SetMinSdkVersion(int min_sdk_version) {
+    min_sdk_version_ = min_sdk_version;
+  }
+
+ const std::set<std::string>& GetSplitNameDependencies() override {
+    return split_name_dependencies_;
+  }
+
  private:
   DISALLOW_COPY_AND_ASSIGN(Context);
 
   friend class ContextBuilder;
 
   PackageType package_type_ = PackageType::kApp;
-  Maybe<std::string> compilation_package_;
-  Maybe<uint8_t> package_id_;
+  std::optional<std::string> compilation_package_;
+  std::optional<uint8_t> package_id_;
   StdErrDiagnostics diagnostics_;
   NameMangler name_mangler_;
   SymbolTable symbols_;
   int min_sdk_version_;
+  std::set<std::string> split_name_dependencies_;
 };
 
 class ContextBuilder {
@@ -102,8 +111,8 @@ class ContextBuilder {
     return *this;
   }
 
-  ContextBuilder& SetCompilationPackage(const android::StringPiece& package) {
-    context_->compilation_package_ = package.to_string();
+  ContextBuilder& SetCompilationPackage(android::StringPiece package) {
+    context_->compilation_package_ = std::string(package);
     return *this;
   }
 
@@ -127,6 +136,11 @@ class ContextBuilder {
     return *this;
   }
 
+  ContextBuilder& SetSplitNameDependencies(const std::set<std::string>& split_name_dependencies) {
+    context_->split_name_dependencies_ = split_name_dependencies;
+    return *this;
+  }
+
   std::unique_ptr<Context> Build() { return std::move(context_); }
 
  private:
@@ -135,7 +149,7 @@ class ContextBuilder {
 
 class StaticSymbolSourceBuilder {
  public:
-  StaticSymbolSourceBuilder& AddPublicSymbol(const android::StringPiece& name, ResourceId id,
+  StaticSymbolSourceBuilder& AddPublicSymbol(android::StringPiece name, ResourceId id,
                                              std::unique_ptr<Attribute> attr = {}) {
     std::unique_ptr<SymbolTable::Symbol> symbol =
         util::make_unique<SymbolTable::Symbol>(id, std::move(attr), true);
@@ -145,7 +159,7 @@ class StaticSymbolSourceBuilder {
     return *this;
   }
 
-  StaticSymbolSourceBuilder& AddSymbol(const android::StringPiece& name, ResourceId id,
+  StaticSymbolSourceBuilder& AddSymbol(android::StringPiece name, ResourceId id,
                                        std::unique_ptr<Attribute> attr = {}) {
     std::unique_ptr<SymbolTable::Symbol> symbol =
         util::make_unique<SymbolTable::Symbol>(id, std::move(attr), false);
@@ -186,10 +200,11 @@ class StaticSymbolSourceBuilder {
 
    private:
     std::unique_ptr<SymbolTable::Symbol> CloneSymbol(SymbolTable::Symbol* sym) {
+      CloningValueTransformer cloner(nullptr);
       std::unique_ptr<SymbolTable::Symbol> clone = util::make_unique<SymbolTable::Symbol>();
       clone->id = sym->id;
       if (sym->attribute) {
-        clone->attribute = std::unique_ptr<Attribute>(sym->attribute->Clone(nullptr));
+        clone->attribute = std::unique_ptr<Attribute>(sym->attribute->Transform(cloner));
       }
       clone->is_public = sym->is_public;
       return clone;

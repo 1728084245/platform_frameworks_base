@@ -19,28 +19,22 @@ package com.android.systemui.statusbar.policy;
 import com.android.systemui.Dumpable;
 import com.android.systemui.statusbar.policy.CastController.Callback;
 
-import java.util.Set;
+import java.util.List;
 
 public interface CastController extends CallbackController<Callback>, Dumpable {
     void setDiscovering(boolean request);
     void setCurrentUserId(int currentUserId);
-    Set<CastDevice> getCastDevices();
+    List<CastDevice> getCastDevices();
     void startCasting(CastDevice device);
     void stopCasting(CastDevice device);
+
+    /**
+     * @return whether we have a connected device.
+     */
+    boolean hasConnectedCastDevice();
 
     public interface Callback {
         void onCastDevicesChanged();
     }
 
-    public static final class CastDevice {
-        public static final int STATE_DISCONNECTED = 0;
-        public static final int STATE_CONNECTING = 1;
-        public static final int STATE_CONNECTED = 2;
-
-        public String id;
-        public String name;
-        public String description;
-        public int state = STATE_DISCONNECTED;
-        public Object tag;
-    }
 }

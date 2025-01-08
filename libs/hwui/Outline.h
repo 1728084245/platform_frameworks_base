@@ -26,7 +26,7 @@ namespace uirenderer {
 
 class Outline {
 public:
-    enum class Type { None = 0, Empty = 1, ConvexPath = 2, RoundRect = 3 };
+    enum class Type { None = 0, Empty = 1, Path = 2, RoundRect = 3 };
 
     Outline() : mShouldClip(false), mType(Type::None), mRadius(0), mAlpha(0.0f) {}
 
@@ -42,9 +42,8 @@ public:
         mBounds.set(left, top, right, bottom);
         mRadius = radius;
 
-
         // Reuse memory if previous outline was the same shape (rect or round rect).
-        if ( mPath.countVerbs() > 10) {
+        if (mPath.countVerbs() > 10) {
             mPath.reset();
         } else {
             mPath.rewind();
@@ -58,12 +57,12 @@ public:
         }
     }
 
-    void setConvexPath(const SkPath* outline, float alpha) {
+    void setPath(const SkPath* outline, float alpha) {
         if (!outline) {
             setEmpty();
             return;
         }
-        mType = Type::ConvexPath;
+        mType = Type::Path;
         mPath = *outline;
         mBounds.set(outline->getBounds());
         mAlpha = alpha;
@@ -89,14 +88,10 @@ public:
 
     bool getShouldClip() const { return mShouldClip; }
 
-    bool willClip() const {
-        // only round rect outlines can be used for clipping
-        return mShouldClip && (mType == Type::RoundRect);
-    }
+    bool willClip() const { return mShouldClip; }
 
-    bool willRoundRectClip() const {
-        // only round rect outlines can be used for clipping
-        return willClip() && MathUtils::isPositive(mRadius);
+    bool willComplexClip() const {
+        return mShouldClip && (mType != Type::RoundRect || MathUtils::isPositive(mRadius));
     }
 
     bool getAsRoundRect(Rect* outRect, float* outRadius) const {

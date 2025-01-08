@@ -1,19 +1,36 @@
 package com.android.systemui.qs;
 
+import static com.android.systemui.qs.PageIndicator.PageScrollActionListener.LEFT;
+import static com.android.systemui.qs.PageIndicator.PageScrollActionListener.RIGHT;
+
 import android.content.Context;
 import android.content.res.ColorStateList;
+import android.content.res.Configuration;
+import android.content.res.Resources;
 import android.content.res.TypedArray;
+import android.graphics.drawable.Animatable2;
 import android.graphics.drawable.AnimatedVectorDrawable;
+import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
 import android.util.Log;
-import android.util.TypedValue;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
-import com.android.systemui.R;
+
+import androidx.annotation.IntDef;
+import androidx.annotation.NonNull;
+
+import com.android.settingslib.Utils;
+import com.android.systemui.res.R;
 
 import java.util.ArrayList;
 
+/**
+ * Page indicator for using with pageable layouts
+ *
+ * Supports {@code android.R.attr.tint}. If missing, it will use the current accent color.
+ */
 public class PageIndicator extends ViewGroup {
 
     private static final String TAG = "PageIndicator";
@@ -21,49 +38,142 @@ public class PageIndicator extends ViewGroup {
 
     private static final long ANIMATION_DURATION = 250;
 
-    // The size of a single dot in relation to the whole animation.
-    private static final float SINGLE_SCALE = .4f;
-
     private static final float MINOR_ALPHA = .42f;
 
     private final ArrayList<Integer> mQueuedPositions = new ArrayList<>();
 
-    private final int mPageIndicatorWidth;
-    private final int mPageIndicatorHeight;
-    private final int mPageDotWidth;
+    private int mPageIndicatorWidth;
+    private int mPageIndicatorHeight;
+    private int mPageDotWidth;
+    private @NonNull ColorStateList mTint;
 
     private int mPosition = -1;
     private boolean mAnimating;
+    private PageScrollActionListener mPageScrollActionListener;
+
+    private final Animatable2.AnimationCallback mAnimationCallback =
+            new Animatable2.AnimationCallback() {
+
+                @Override
+                public void onAnimationEnd(Drawable drawable) {
+                    super.onAnimationEnd(drawable);
+                    if (DEBUG) Log.d(TAG, "onAnimationEnd - queued: " + mQueuedPositions.size());
+                    if (drawable instanceof AnimatedVectorDrawable) {
+                        ((AnimatedVectorDrawable) drawable).unregisterAnimationCallback(
+                                mAnimationCallback);
+                    }
+                    mAnimating = false;
+                    if (mQueuedPositions.size() != 0) {
+                        setPosition(mQueuedPositions.remove(0));
+                    }
+                }
+            };
 
     public PageIndicator(Context context, AttributeSet attrs) {
         super(context, attrs);
-        mPageIndicatorWidth =
-                (int) mContext.getResources().getDimension(R.dimen.qs_page_indicator_width);
-        mPageIndicatorHeight =
-                (int) mContext.getResources().getDimension(R.dimen.qs_page_indicator_height);
-        mPageDotWidth = (int) (mPageIndicatorWidth * SINGLE_SCALE);
+
+        TypedArray array = context.obtainStyledAttributes(attrs, new int[]{android.R.attr.tint});
+        if (array.hasValue(0)) {
+            mTint = array.getColorStateList(0);
+        } else {
+            mTint = Utils.getColorAccent(context);
+        }
+        array.recycle();
+
+        Resources res = context.getResources();
+        mPageIndicatorWidth = res.getDimensionPixelSize(R.dimen.qs_page_indicator_width);
+        mPageIndicatorHeight = res.getDimensionPixelSize(R.dimen.qs_page_indicator_height);
+        mPageDotWidth = res.getDimensionPixelSize(R.dimen.qs_page_indicator_dot_width);
+        LeftRightArrowPressedListener arrowListener =
+                LeftRightArrowPressedListener.createAndRegisterListenerForView(this);
+        arrowListener.setArrowKeyPressedListener(keyCode -> {
+            if (mPageScrollActionListener != null) {
+                int swipeDirection = keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? LEFT : RIGHT;
+                mPageScrollActionListener.onScrollActionTriggered(swipeDirection);
+            }
+        });
+    }
+
+    @Override
+    protected void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        updateResources();
+    }
+
+    private void updateResources() {
+        Resources res = getResources();
+        boolean changed = false;
+        int pageIndicatorWidth = res.getDimensionPixelSize(R.dimen.qs_page_indicator_width);
+        if (pageIndicatorWidth != mPageIndicatorWidth) {
+            mPageIndicatorWidth = pageIndicatorWidth;
+            changed = true;
+        }
+        int pageIndicatorHeight = res.getDimensionPixelSize(R.dimen.qs_page_indicator_height);
+        if (pageIndicatorHeight != mPageIndicatorHeight) {
+            mPageIndicatorHeight = pageIndicatorHeight;
+            changed = true;
+        }
+        int pageIndicatorDotWidth = res.getDimensionPixelSize(R.dimen.qs_page_indicator_dot_width);
+        if (pageIndicatorDotWidth != mPageDotWidth) {
+            mPageDotWidth = pageIndicatorDotWidth;
+            changed = true;
+        }
+        if (changed) {
+            invalidate();
+        }
     }
 
     public void setNumPages(int numPages) {
         setVisibility(numPages > 1 ? View.VISIBLE : View.GONE);
+        int childCount = getChildCount();
+        // We're checking if the width needs to be updated as it's possible that the number of pages
+        // was changed while the page indicator was not visible, automatically skipping onMeasure.
+        if (numPages == childCount && calculateWidth(childCount) == getMeasuredWidth()) {
+            return;
+        }
         if (mAnimating) {
             Log.w(TAG, "setNumPages during animation");
         }
         while (numPages < getChildCount()) {
             removeViewAt(getChildCount() - 1);
         }
-        TypedArray array = getContext().obtainStyledAttributes(
-                new int[]{android.R.attr.colorControlActivated});
-        int color = array.getColor(0, 0);
-        array.recycle();
         while (numPages > getChildCount()) {
             ImageView v = new ImageView(mContext);
             v.setImageResource(R.drawable.minor_a_b);
-            v.setImageTintList(ColorStateList.valueOf(color));
+            v.setImageTintList(mTint);
             addView(v, new LayoutParams(mPageIndicatorWidth, mPageIndicatorHeight));
         }
         // Refresh state.
         setIndex(mPosition >> 1);
+        requestLayout();
+    }
+
+    /**
+     * @return the current tint list for this view.
+     */
+    @NonNull
+    public ColorStateList getTintList() {
+        return mTint;
+    }
+
+    /**
+     * Set the color for this view.
+     * <br>
+     * Calling this will change the color of the current view and any new dots that are added to it.
+     * @param color the new color
+     */
+    public void setTintList(@NonNull ColorStateList color) {
+        if (color.equals(mTint)) {
+            return;
+        }
+        mTint = color;
+        final int N = getChildCount();
+        for (int i = 0; i < N; i++) {
+            View v = getChildAt(i);
+            if (v instanceof ImageView) {
+                ((ImageView) v).setImageTintList(mTint);
+            }
+        }
     }
 
     public void setLocation(float location) {
@@ -152,10 +262,8 @@ public class PageIndicator extends ViewGroup {
         final AnimatedVectorDrawable avd = (AnimatedVectorDrawable) getContext().getDrawable(res);
         imageView.setImageDrawable(avd);
         avd.forceAnimationOnUI();
+        avd.registerAnimationCallback(mAnimationCallback);
         avd.start();
-        // TODO: Figure out how to user an AVD animation callback instead, which doesn't
-        // seem to be working right now...
-        postDelayed(mAnimationDone, ANIMATION_DURATION);
     }
 
     private int getTransition(boolean fromB, boolean isMajorAState, boolean isMajor) {
@@ -190,6 +298,10 @@ public class PageIndicator extends ViewGroup {
         }
     }
 
+    private int calculateWidth(int numPages) {
+        return (mPageIndicatorWidth - mPageDotWidth) * (numPages - 1) + mPageDotWidth;
+    }
+
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         final int N = getChildCount();
@@ -204,7 +316,7 @@ public class PageIndicator extends ViewGroup {
         for (int i = 0; i < N; i++) {
             getChildAt(i).measure(widthChildSpec, heightChildSpec);
         }
-        int width = (mPageIndicatorWidth - mPageDotWidth) * (N - 1) + mPageDotWidth;
+        int width = calculateWidth(N);
         setMeasuredDimension(width, mPageIndicatorHeight);
     }
 
@@ -220,14 +332,18 @@ public class PageIndicator extends ViewGroup {
         }
     }
 
-    private final Runnable mAnimationDone = new Runnable() {
-        @Override
-        public void run() {
-            if (DEBUG) Log.d(TAG, "onAnimationEnd - queued: " + mQueuedPositions.size());
-            mAnimating = false;
-            if (mQueuedPositions.size() != 0) {
-                setPosition(mQueuedPositions.remove(0));
-            }
-        }
-    };
+    void setPageScrollActionListener(PageScrollActionListener listener) {
+        mPageScrollActionListener = listener;
+    }
+
+    interface PageScrollActionListener {
+
+        @IntDef({LEFT, RIGHT})
+        @interface Direction { }
+
+        int LEFT = 0;
+        int RIGHT = 1;
+
+        void onScrollActionTriggered(@Direction int swipeDirection);
+    }
 }

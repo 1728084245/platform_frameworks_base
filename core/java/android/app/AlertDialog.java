@@ -21,10 +21,11 @@ import android.annotation.AttrRes;
 import android.annotation.DrawableRes;
 import android.annotation.StringRes;
 import android.annotation.StyleRes;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.res.ResourceId;
+import android.content.res.Resources;
 import android.database.Cursor;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
@@ -324,7 +325,7 @@ public class AlertDialog extends Dialog implements DialogInterface {
     }
 
     /**
-     * Set a listener to be invoked when the positive button of the dialog is pressed.
+     * Set a listener to be invoked when the specified button of the dialog is pressed.
      *
      * @param whichButton Which button to set the listener on, can be one of
      *            {@link DialogInterface#BUTTON_POSITIVE},
@@ -465,7 +466,7 @@ public class AlertDialog extends Dialog implements DialogInterface {
          * @param context the parent context
          */
         public Builder(Context context) {
-            this(context, resolveDialogTheme(context, ResourceId.ID_NULL));
+            this(context, resolveDialogTheme(context, Resources.ID_NULL));
         }
 
         /**

@@ -23,6 +23,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
+
 import com.android.printspooler.R;
 
 /**
@@ -366,7 +367,8 @@ public final class PrintContentView extends ViewGroup implements View.OnClickLis
             // and is janky. Now it is there but transparent, doing nothing.
             mEmbeddedContentScrim.setOnClickListener(null);
             mEmbeddedContentScrim.setClickable(false);
-            mExpandCollapseIcon.setBackgroundResource(R.drawable.ic_expand_more);
+            mExpandCollapseIcon.setBackgroundResource(
+                    com.android.internal.R.drawable.ic_expand_more);
         } else {
             if (mMoreOptionsButton.getVisibility() != View.GONE) {
                 mMoreOptionsButton.setVisibility(View.VISIBLE);
@@ -381,9 +383,7 @@ public final class PrintContentView extends ViewGroup implements View.OnClickLis
         if (focused != null && focused.isFocused()) {
             InputMethodManager imm = (InputMethodManager) mContext.getSystemService(
                     Context.INPUT_METHOD_SERVICE);
-            if (imm.isActive(focused)) {
-                imm.hideSoftInputFromWindow(getWindowToken(), 0);
-            }
+            imm.hideSoftInputFromView(focused, 0);
             focused.clearFocus();
         }
     }
@@ -400,7 +400,7 @@ public final class PrintContentView extends ViewGroup implements View.OnClickLis
 
         @Override
         public void onViewPositionChanged(View changedView, int left, int top, int dx, int dy) {
-            if ((isOptionsClosed() || isOptionsClosed()) && dy <= 0) {
+            if (isOptionsClosed() && dy <= 0) {
                 return;
             }
 

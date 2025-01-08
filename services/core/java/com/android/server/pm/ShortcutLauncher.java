@@ -20,20 +20,24 @@ import android.annotation.Nullable;
 import android.annotation.UserIdInt;
 import android.content.pm.PackageInfo;
 import android.content.pm.ShortcutInfo;
+import android.content.pm.UserPackage;
 import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.Slog;
+import android.util.Xml;
 
-import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.annotations.GuardedBy;
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
 import com.android.server.pm.ShortcutService.DumpFilter;
-import com.android.server.pm.ShortcutUser.PackageWithUser;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
-import org.xmlpull.v1.XmlSerializer;
 
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -42,7 +46,7 @@ import java.util.List;
 /**
  * Launcher information used by {@link ShortcutService}.
  *
- * All methods should be guarded by {@code #mShortcutUser.mService.mLock}.
+ * All methods should be guarded by {@code ShortcutPackageItem#mPackageItemLock}.
  */
 class ShortcutLauncher extends ShortcutPackageItem {
     private static final String TAG = ShortcutService.TAG;
@@ -62,7 +66,8 @@ class ShortcutLauncher extends ShortcutPackageItem {
     /**
      * Package name -> IDs.
      */
-    final private ArrayMap<PackageWithUser, ArraySet<String>> mPinnedShortcuts = new ArrayMap<>();
+    @GuardedBy("mPackageItemLock")
+    private final ArrayMap<UserPackage, ArraySet<String>> mPinnedShortcuts = new ArrayMap<>();
 
     private ShortcutLauncher(@NonNull ShortcutUser shortcutUser,
             @UserIdInt int ownerUserId, @NonNull String packageName,
@@ -93,12 +98,14 @@ class ShortcutLauncher extends ShortcutPackageItem {
      * Called when the new package can't receive the backup, due to signature or version mismatch.
      */
     private void onRestoreBlocked() {
-        final ArrayList<PackageWithUser> pinnedPackages =
-                new ArrayList<>(mPinnedShortcuts.keySet());
-        mPinnedShortcuts.clear();
+        final ArrayList<UserPackage> pinnedPackages;
+        synchronized (mPackageItemLock) {
+            pinnedPackages = new ArrayList<>(mPinnedShortcuts.keySet());
+            mPinnedShortcuts.clear();
+        }
         for (int i = pinnedPackages.size() - 1; i >= 0; i--) {
-            final PackageWithUser pu = pinnedPackages.get(i);
-            final ShortcutPackage p = mShortcutUser.getPackageShortcutsIfExists(pu.packageName);
+            final UserPackage up = pinnedPackages.get(i);
+            final ShortcutPackage p = mShortcutUser.getPackageShortcutsIfExists(up.packageName);
             if (p != null) {
                 p.refreshPinnedFlags();
             }
@@ -127,21 +134,21 @@ class ShortcutLauncher extends ShortcutPackageItem {
             return; // No need to instantiate.
         }
 
-        final PackageWithUser pu = PackageWithUser.of(packageUserId, packageName);
+        final UserPackage up = UserPackage.of(packageUserId, packageName);
 
         final int idSize = ids.size();
         if (idSize == 0) {
-            mPinnedShortcuts.remove(pu);
+            synchronized (mPackageItemLock) {
+                mPinnedShortcuts.remove(up);
+            }
         } else {
-            final ArraySet<String> prevSet = mPinnedShortcuts.get(pu);
-
             // Actually pin shortcuts.
-            // This logic here is to make sure a launcher cannot pin a shortcut that is floating
-            // (i.e. not dynamic nor manifest but is pinned) and pinned by another launcher.
-            // In this case, technically the shortcut doesn't exist to this launcher, so it can't
-            // pin it.
+            // This logic here is to make sure a launcher cannot pin a shortcut that is not
+            // dynamic nor long-lived nor manifest but is pinned.
+            // In this case, technically the shortcut doesn't exist to this launcher, so it
+            // can't pin it.
             // (Maybe unnecessarily strict...)
-
+            final ArraySet<String> floatingSet = new ArraySet<>();
             final ArraySet<String> newSet = new ArraySet<>();
 
             for (int i = 0; i < idSize; i++) {
@@ -150,15 +157,27 @@ class ShortcutLauncher extends ShortcutPackageItem {
                 if (si == null) {
                     continue;
                 }
-                if (si.isDynamic()
+                if (si.isDynamic() || si.isLongLived()
                         || si.isManifestShortcut()
-                        || (prevSet != null && prevSet.contains(id))
                         || forPinRequest) {
                     newSet.add(id);
+                } else {
+                    floatingSet.add(id);
                 }
             }
-            mPinnedShortcuts.put(pu, newSet);
+            synchronized (mPackageItemLock) {
+                final ArraySet<String> prevSet = mPinnedShortcuts.get(up);
+                if (prevSet != null) {
+                    for (String id : floatingSet) {
+                        if (prevSet.contains(id)) {
+                            newSet.add(id);
+                        }
+                    }
+                }
+                mPinnedShortcuts.put(up, newSet);
+            }
         }
+
         packageShortcuts.refreshPinnedFlags();
     }
 
@@ -168,16 +187,22 @@ class ShortcutLauncher extends ShortcutPackageItem {
     @Nullable
     public ArraySet<String> getPinnedShortcutIds(@NonNull String packageName,
             @UserIdInt int packageUserId) {
-        return mPinnedShortcuts.get(PackageWithUser.of(packageUserId, packageName));
+        synchronized (mPackageItemLock) {
+            final ArraySet<String> pinnedShortcuts = mPinnedShortcuts.get(
+                    UserPackage.of(packageUserId, packageName));
+            return pinnedShortcuts == null ? null : new ArraySet<>(pinnedShortcuts);
+        }
     }
 
     /**
      * Return true if the given shortcut is pinned by this launcher.<code></code>
      */
     public boolean hasPinned(ShortcutInfo shortcut) {
-        final ArraySet<String> pinned =
-                getPinnedShortcutIds(shortcut.getPackage(), shortcut.getUserId());
-        return (pinned != null) && pinned.contains(shortcut.getId());
+        synchronized (mPackageItemLock) {
+            final ArraySet<String> pinned = mPinnedShortcuts.get(
+                    UserPackage.of(shortcut.getUserId(), shortcut.getPackage()));
+            return (pinned != null) && pinned.contains(shortcut.getId());
+        }
     }
 
     /**
@@ -185,13 +210,16 @@ class ShortcutLauncher extends ShortcutPackageItem {
      */
     public void addPinnedShortcut(@NonNull String packageName, @UserIdInt int packageUserId,
             String id, boolean forPinRequest) {
-        final ArraySet<String> pinnedSet = getPinnedShortcutIds(packageName, packageUserId);
         final ArrayList<String> pinnedList;
-        if (pinnedSet != null) {
-            pinnedList = new ArrayList<>(pinnedSet.size() + 1);
-            pinnedList.addAll(pinnedSet);
-        } else {
-            pinnedList = new ArrayList<>(1);
+        synchronized (mPackageItemLock) {
+            final ArraySet<String> pinnedSet = mPinnedShortcuts.get(
+                    UserPackage.of(packageUserId, packageName));
+            if (pinnedSet != null) {
+                pinnedList = new ArrayList<>(pinnedSet.size() + 1);
+                pinnedList.addAll(pinnedSet);
+            } else {
+                pinnedList = new ArrayList<>(1);
+            }
         }
         pinnedList.add(id);
 
@@ -199,7 +227,9 @@ class ShortcutLauncher extends ShortcutPackageItem {
     }
 
     boolean cleanUpPackage(String packageName, @UserIdInt int packageUserId) {
-        return mPinnedShortcuts.remove(PackageWithUser.of(packageUserId, packageName)) != null;
+        synchronized (mPackageItemLock) {
+            return mPinnedShortcuts.remove(UserPackage.of(packageUserId, packageName)) != null;
+        }
     }
 
     public void ensurePackageInfo() {
@@ -216,13 +246,17 @@ class ShortcutLauncher extends ShortcutPackageItem {
      * Persist.
      */
     @Override
-    public void saveToXml(XmlSerializer out, boolean forBackup)
+    public void saveToXml(TypedXmlSerializer out, boolean forBackup)
             throws IOException {
         if (forBackup && !getPackageInfo().isBackupAllowed()) {
             // If an launcher app doesn't support backup&restore, then nothing to do.
             return;
         }
-        final int size = mPinnedShortcuts.size();
+        final ArrayMap<UserPackage, ArraySet<String>> pinnedShortcuts;
+        synchronized (mPackageItemLock) {
+            pinnedShortcuts = new ArrayMap<>(mPinnedShortcuts);
+        }
+        final int size = pinnedShortcuts.size();
         if (size == 0) {
             return; // Nothing to write.
         }
@@ -233,20 +267,26 @@ class ShortcutLauncher extends ShortcutPackageItem {
         getPackageInfo().saveToXml(mShortcutUser.mService, out, forBackup);
 
         for (int i = 0; i < size; i++) {
-            final PackageWithUser pu = mPinnedShortcuts.keyAt(i);
+            final UserPackage up = pinnedShortcuts.keyAt(i);
 
-            if (forBackup && (pu.userId != getOwnerUserId())) {
+            if (forBackup && (up.userId != getOwnerUserId())) {
                 continue; // Target package on a different user, skip. (i.e. work profile)
             }
 
             out.startTag(null, TAG_PACKAGE);
-            ShortcutService.writeAttr(out, ATTR_PACKAGE_NAME, pu.packageName);
-            ShortcutService.writeAttr(out, ATTR_PACKAGE_USER_ID, pu.userId);
+            ShortcutService.writeAttr(out, ATTR_PACKAGE_NAME, up.packageName);
+            ShortcutService.writeAttr(out, ATTR_PACKAGE_USER_ID, up.userId);
 
-            final ArraySet<String> ids = mPinnedShortcuts.valueAt(i);
+            final ArraySet<String> ids = pinnedShortcuts.valueAt(i);
             final int idSize = ids.size();
             for (int j = 0; j < idSize; j++) {
                 ShortcutService.writeTagValue(out, TAG_PIN, ids.valueAt(j));
+            }
+            if (ShortcutService.DEBUG_REBOOT) {
+                Slog.d(TAG, "Persist shortcut ids pinned by "
+                    + getPackageName() + " from "
+                    + up.userId + "@" + up.packageName + " ids=["
+                    + String.join(", ", ids) + "]");
             }
             out.endTag(null, TAG_PACKAGE);
         }
@@ -254,10 +294,50 @@ class ShortcutLauncher extends ShortcutPackageItem {
         out.endTag(null, TAG_ROOT);
     }
 
+    public static ShortcutLauncher loadFromFile(File path, ShortcutUser shortcutUser,
+            int ownerUserId, boolean fromBackup) {
+        try (ResilientAtomicFile file = getResilientFile(path)) {
+            FileInputStream in = null;
+            try {
+                in = file.openRead();
+                if (in == null) {
+                    Slog.d(TAG, "Not found " + path);
+                    return null;
+                }
+
+                ShortcutLauncher ret = null;
+                TypedXmlPullParser parser = Xml.resolvePullParser(in);
+
+                int type;
+                while ((type = parser.next()) != XmlPullParser.END_DOCUMENT) {
+                    if (type != XmlPullParser.START_TAG) {
+                        continue;
+                    }
+                    final int depth = parser.getDepth();
+
+                    final String tag = parser.getName();
+                    if (ShortcutService.DEBUG_LOAD) {
+                        Slog.d(TAG, String.format("depth=%d type=%d name=%s", depth, type, tag));
+                    }
+                    if ((depth == 1) && TAG_ROOT.equals(tag)) {
+                        ret = loadFromXml(parser, shortcutUser, ownerUserId, fromBackup);
+                        continue;
+                    }
+                    ShortcutService.throwForInvalidTag(depth, tag);
+                }
+                return ret;
+            } catch (Exception e) {
+                Slog.e(TAG, "Failed to read file " + file.getBaseFile(), e);
+                file.failRead(in, e);
+                return loadFromFile(path, shortcutUser, ownerUserId, fromBackup);
+            }
+        }
+    }
+
     /**
      * Load.
      */
-    public static ShortcutLauncher loadFromXml(XmlPullParser parser, ShortcutUser shortcutUser,
+    public static ShortcutLauncher loadFromXml(TypedXmlPullParser parser, ShortcutUser shortcutUser,
             int ownerUserId, boolean fromBackup) throws IOException, XmlPullParserException {
         final String launcherPackageName = ShortcutService.parseStringAttribute(parser,
                 ATTR_PACKAGE_NAME);
@@ -292,8 +372,10 @@ class ShortcutLauncher extends ShortcutPackageItem {
                                 : ShortcutService.parseIntAttribute(parser,
                                 ATTR_PACKAGE_USER_ID, ownerUserId);
                         ids = new ArraySet<>();
-                        ret.mPinnedShortcuts.put(
-                                PackageWithUser.of(packageUserId, packageName), ids);
+                        synchronized (ret.mPackageItemLock) {
+                            ret.mPinnedShortcuts.put(
+                                    UserPackage.of(packageUserId, packageName), ids);
+                        }
                         continue;
                     }
                 }
@@ -330,20 +412,24 @@ class ShortcutLauncher extends ShortcutPackageItem {
         getPackageInfo().dump(pw, prefix + "  ");
         pw.println();
 
-        final int size = mPinnedShortcuts.size();
+        final ArrayMap<UserPackage, ArraySet<String>> pinnedShortcuts;
+        synchronized (mPackageItemLock) {
+            pinnedShortcuts = new ArrayMap<>(mPinnedShortcuts);
+        }
+        final int size = pinnedShortcuts.size();
         for (int i = 0; i < size; i++) {
             pw.println();
 
-            final PackageWithUser pu = mPinnedShortcuts.keyAt(i);
+            final UserPackage up = pinnedShortcuts.keyAt(i);
 
             pw.print(prefix);
             pw.print("  ");
             pw.print("Package: ");
-            pw.print(pu.packageName);
+            pw.print(up.packageName);
             pw.print("  User: ");
-            pw.println(pu.userId);
+            pw.println(up.userId);
 
-            final ArraySet<String> ids = mPinnedShortcuts.valueAt(i);
+            final ArraySet<String> ids = pinnedShortcuts.valueAt(i);
             final int idSize = ids.size();
 
             for (int j = 0; j < idSize; j++) {
@@ -364,8 +450,13 @@ class ShortcutLauncher extends ShortcutPackageItem {
         return result;
     }
 
-    @VisibleForTesting
-    ArraySet<String> getAllPinnedShortcutsForTest(String packageName, int packageUserId) {
-        return new ArraySet<>(mPinnedShortcuts.get(PackageWithUser.of(packageUserId, packageName)));
+    @Override
+    protected File getShortcutPackageItemFile() {
+        final File path = new File(mShortcutUser.mService.injectUserDataPath(
+                mShortcutUser.getUserId()), ShortcutUser.DIRECTORY_LUANCHERS);
+        // Package user id and owner id can have different values for ShortcutLaunchers. Adding
+        // user Id to the file name to create a unique path. Owner id is used in the root path.
+        final String fileName = getPackageName() + getPackageUserId() + ".xml";
+        return new File(path, fileName);
     }
 }

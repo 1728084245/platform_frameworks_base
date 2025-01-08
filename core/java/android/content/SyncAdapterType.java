@@ -17,11 +17,12 @@
 package android.content;
 
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.TestApi;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Build;
-import android.text.TextUtils;
-import android.os.Parcelable;
 import android.os.Parcel;
+import android.os.Parcelable;
+import android.text.TextUtils;
 
 /**
  * Value type that represents a SyncAdapterType. This object overrides {@link #equals} and
@@ -35,11 +36,11 @@ public class SyncAdapterType implements Parcelable {
     private final boolean userVisible;
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
     private final boolean supportsUploading;
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private final boolean isAlwaysSyncable;
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private final boolean allowParallelSyncs;
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private final String settingsActivity;
     private final String packageName;
 
@@ -168,6 +169,7 @@ public class SyncAdapterType implements Parcelable {
      *
      * @hide
      */
+    @TestApi
     public @Nullable String getPackageName() {
         return packageName;
     }
@@ -176,7 +178,7 @@ public class SyncAdapterType implements Parcelable {
         return new SyncAdapterType(authority, accountType);
     }
 
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (o == this) return true;
         if (!(o instanceof SyncAdapterType)) return false;
         final SyncAdapterType other = (SyncAdapterType)o;
@@ -241,7 +243,7 @@ public class SyncAdapterType implements Parcelable {
                 source.readString());
     }
 
-    public static final Creator<SyncAdapterType> CREATOR = new Creator<SyncAdapterType>() {
+    public static final @android.annotation.NonNull Creator<SyncAdapterType> CREATOR = new Creator<SyncAdapterType>() {
         public SyncAdapterType createFromParcel(Parcel source) {
             return new SyncAdapterType(source);
         }

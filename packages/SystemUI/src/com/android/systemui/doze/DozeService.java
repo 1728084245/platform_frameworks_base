@@ -17,12 +17,14 @@
 package com.android.systemui.doze;
 
 import android.content.Context;
+import android.content.res.Configuration;
 import android.os.PowerManager;
 import android.os.SystemClock;
 import android.service.dreams.DreamService;
 import android.util.Log;
 
-import com.android.systemui.Dependency;
+import com.android.systemui.dagger.qualifiers.UiBackground;
+import com.android.systemui.doze.dagger.DozeComponent;
 import com.android.systemui.plugins.DozeServicePlugin;
 import com.android.systemui.plugins.DozeServicePlugin.RequestDoze;
 import com.android.systemui.plugins.PluginListener;
@@ -30,18 +32,30 @@ import com.android.systemui.plugins.PluginManager;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.util.concurrent.Executor;
+
+import javax.inject.Inject;
 
 public class DozeService extends DreamService
         implements DozeMachine.Service, RequestDoze, PluginListener<DozeServicePlugin> {
     private static final String TAG = "DozeService";
     static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
+    private final DozeComponent.Builder mDozeComponentBuilder;
 
     private DozeMachine mDozeMachine;
     private DozeServicePlugin mDozePlugin;
     private PluginManager mPluginManager;
+    private DozeLog mDozeLog;
+    private Executor mBgExecutor;
 
-    public DozeService() {
+    @Inject
+    public DozeService(DozeComponent.Builder dozeComponentBuilder, PluginManager pluginManager,
+            DozeLog dozeLog, @UiBackground Executor bgExecutor) {
+        mDozeLog = dozeLog;
+        mBgExecutor = bgExecutor;
+        mDozeComponentBuilder = dozeComponentBuilder;
         setDebug(DEBUG);
+        mPluginManager = pluginManager;
     }
 
     @Override
@@ -50,19 +64,19 @@ public class DozeService extends DreamService
 
         setWindowless(true);
 
-        if (DozeFactory.getHost(this) == null) {
-            finish();
-            return;
-        }
-        mPluginManager = Dependency.get(PluginManager.class);
         mPluginManager.addPluginListener(this, DozeServicePlugin.class, false /* allowMultiple */);
-        mDozeMachine = new DozeFactory().assembleMachine(this);
+        DozeComponent dozeComponent = mDozeComponentBuilder.build(this);
+        mDozeMachine = dozeComponent.getDozeMachine();
+        mDozeMachine.onConfigurationChanged(getResources().getConfiguration());
     }
 
     @Override
     public void onDestroy() {
-        mPluginManager.removePluginListener(this);
+        if (mPluginManager != null) {
+            mPluginManager.removePluginListener(this);
+        }
         super.onDestroy();
+        mDozeMachine.destroy();
         mDozeMachine = null;
     }
 
@@ -108,9 +122,10 @@ public class DozeService extends DreamService
     }
 
     @Override
-    public void requestWakeUp() {
-        PowerManager pm = getSystemService(PowerManager.class);
-        pm.wakeUp(SystemClock.uptimeMillis(), "com.android.systemui:NODOZE");
+    public void requestWakeUp(@DozeLog.Reason int reason) {
+        final PowerManager pm = getSystemService(PowerManager.class);
+        pm.wakeUp(SystemClock.uptimeMillis(), DozeLog.getPowerManagerWakeReason(reason),
+                "com.android.systemui:NODOZE " + DozeLog.reasonToString(reason));
     }
 
     @Override
@@ -121,9 +136,43 @@ public class DozeService extends DreamService
     }
 
     @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        mDozeMachine.onConfigurationChanged(newConfig);
+    }
+
+    @Override
     public void onRequestHideDoze() {
         if (mDozeMachine != null) {
             mDozeMachine.requestState(DozeMachine.State.DOZE);
         }
+    }
+
+    @Override
+    public void setDozeScreenState(int state) {
+        mDozeLog.traceDisplayState(state, /* afterRequest */ false);
+        super.setDozeScreenState(state);
+        mDozeLog.traceDisplayState(state, /* afterRequest */ true);
+        if (mDozeMachine != null) {
+            mDozeMachine.onScreenState(state);
+        }
+    }
+
+    @Override
+    public void setDozeScreenBrightness(int brightness) {
+        mBgExecutor.execute(() -> {
+            mDozeLog.traceDozeScreenBrightness(brightness, /* afterRequest */ false);
+            super.setDozeScreenBrightness(brightness);
+            mDozeLog.traceDozeScreenBrightness(brightness, /* afterRequest */ true);
+        });
+    }
+
+    @Override
+    public void setDozeScreenBrightnessFloat(float brightness) {
+        mBgExecutor.execute(() -> {
+            mDozeLog.traceDozeScreenBrightnessFloat(brightness, /* afterRequest */ false);
+            super.setDozeScreenBrightnessFloat(brightness);
+            mDozeLog.traceDozeScreenBrightnessFloat(brightness, /* afterRequest */ true);
+        });
     }
 }

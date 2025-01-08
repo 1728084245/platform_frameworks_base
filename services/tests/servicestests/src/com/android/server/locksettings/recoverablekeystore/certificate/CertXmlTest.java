@@ -47,7 +47,6 @@ public final class CertXmlTest {
     public void parse_succeeds() throws Exception {
         CertXml certXml = CertXml.parse(certXmlBytes);
         assertThat(certXml.getSerial()).isEqualTo(1000L);
-        assertThat(certXml.getRefreshInterval()).isEqualTo(2592000L);
     }
 
     @Test
@@ -71,7 +70,14 @@ public final class CertXmlTest {
         CertXml certXml = CertXml.parse(certXmlBytes);
         List<X509Certificate> endpointCerts = certXml.getAllEndpointCerts();
         assertThat(endpointCerts).hasSize(3);
-        assertThat(endpointCerts).containsAllOf(TestData.LEAF_CERT_1, TestData.LEAF_CERT_2);
+        assertThat(endpointCerts).containsAtLeast(TestData.LEAF_CERT_1, TestData.LEAF_CERT_2);
+    }
+
+    @Test
+    public void parse_doesNotThrowIfNoRefreshInterval() throws Exception {
+        CertXml.parse(
+                TestData.readTestFile(
+                        "xml/valid-cert-file-no-refresh-interval.xml"));
     }
 
     @Test
@@ -87,18 +93,6 @@ public final class CertXmlTest {
     }
 
     @Test
-    public void parse_throwsIfNoRefreshInterval() throws Exception {
-        CertParsingException expected =
-                expectThrows(
-                        CertParsingException.class,
-                        () ->
-                                CertXml.parse(
-                                        TestData.readTestFile(
-                                                "xml/invalid-cert-file-no-refresh-interval.xml")));
-        assertThat(expected.getMessage()).contains("exactly one");
-    }
-
-    @Test
     public void parse_throwsIfNoSerial() throws Exception {
         CertParsingException expected =
                 expectThrows(
@@ -107,19 +101,6 @@ public final class CertXmlTest {
                                 CertXml.parse(
                                         TestData.readTestFile(
                                                 "xml/invalid-cert-file-no-serial.xml")));
-        assertThat(expected.getMessage()).contains("exactly one");
-    }
-
-    @Test
-    public void parse_throwsIfTwoRefreshIntervals() throws Exception {
-        CertParsingException expected =
-                expectThrows(
-                        CertParsingException.class,
-                        () ->
-                                CertXml.parse(
-                                        TestData.readTestFile(
-                                                "xml/invalid-cert-file-two-refresh-intervals"
-                                                        + ".xml")));
         assertThat(expected.getMessage()).contains("exactly one");
     }
 

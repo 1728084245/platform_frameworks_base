@@ -16,7 +16,7 @@
 
 package android.webkit;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Build;
 
 /**
@@ -68,4 +68,4 @@ public class ConsoleMessage {
     public int lineNumber() {
         return mLineNumber;
     }
-};
+}

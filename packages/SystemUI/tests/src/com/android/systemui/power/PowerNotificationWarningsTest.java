@@ -16,61 +16,121 @@
 
 package com.android.systemui.power;
 
+import static com.google.common.truth.Truth.assertThat;
+
 import static junit.framework.Assert.assertFalse;
 import static junit.framework.Assert.assertTrue;
 
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyString;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-import android.app.KeyguardManager;
+import android.app.ActivityManager;
 import android.app.Notification;
 import android.app.NotificationManager;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.ContextWrapper;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.BatteryManager;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.UserHandle;
+import android.testing.TestableLooper;
 
-import androidx.test.runner.AndroidJUnit4;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
 
+import com.android.internal.logging.UiEventLogger;
 import com.android.internal.messages.nano.SystemMessageProto.SystemMessage;
+import com.android.settingslib.fuelgauge.BatterySaverUtils;
 import com.android.systemui.SysuiTestCase;
+import com.android.systemui.animation.DialogTransitionAnimator;
+import com.android.systemui.animation.Expandable;
+import com.android.systemui.broadcast.BroadcastSender;
+import com.android.systemui.plugins.ActivityStarter;
+import com.android.systemui.settings.UserTracker;
+import com.android.systemui.statusbar.phone.SystemUIDialog;
+import com.android.systemui.statusbar.policy.BatteryController;
 import com.android.systemui.util.NotificationChannels;
 
-import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+
+import java.lang.ref.WeakReference;
 
 @SmallTest
 @RunWith(AndroidJUnit4.class)
+@TestableLooper.RunWithLooper
 public class PowerNotificationWarningsTest extends SysuiTestCase {
 
     public static final String FORMATTED_45M = "0h 45m";
     public static final String FORMATTED_HOUR = "1h 0m";
     private final NotificationManager mMockNotificationManager = mock(NotificationManager.class);
-    private final KeyguardManager mMockKeyguardManager = mock(KeyguardManager.class);
-    private PowerNotificationWarnings mPowerNotificationWarnings, mSpyPowerNotificationWarnings;
+    private PowerNotificationWarnings mPowerNotificationWarnings;
+
+    @Mock
+    private BatteryController mBatteryController;
+    @Mock
+    private DialogTransitionAnimator mDialogTransitionAnimator;
+    @Mock
+    private UiEventLogger mUiEventLogger;
+    @Mock
+    private UserTracker mUserTracker;
+    @Mock
+    private Expandable mExpandable;
+    @Mock
+    private DialogTransitionAnimator.Controller mController;
+    @Mock
+    private SystemUIDialog.Factory mSystemUIDialogFactory;
+    @Mock
+    private SystemUIDialog mSystemUIDialog;
+
+    private BroadcastReceiver mReceiver;
 
     @Before
     public void setUp() throws Exception {
-        // Test Instance.
-        mContext.addMockSystemService(KeyguardManager.class, mMockKeyguardManager);
-        mContext.addMockSystemService(NotificationManager.class, mMockNotificationManager);
-        mPowerNotificationWarnings = new PowerNotificationWarnings(mContext);
-        mSpyPowerNotificationWarnings = spy(mPowerNotificationWarnings);
-    }
+        MockitoAnnotations.initMocks(this);
 
-    @After
-    public void tearDown() throws Exception {
-        if (mSpyPowerNotificationWarnings.mOverheatAlarmDialog != null) {
-            mSpyPowerNotificationWarnings.mOverheatAlarmDialog.dismiss();
-            mSpyPowerNotificationWarnings.mOverheatAlarmDialog = null;
-        }
+        Context wrapper = new ContextWrapper(mContext) {
+            @Override
+            public Intent registerReceiverAsUser(BroadcastReceiver receiver, UserHandle user,
+                    IntentFilter filter, String broadcastPermission, Handler scheduler, int flags) {
+                mReceiver = receiver;
+                return null;
+            }
+        };
+
+        // Test Instance.
+        mContext.addMockSystemService(NotificationManager.class, mMockNotificationManager);
+        ActivityStarter starter = mDependency.injectMockDependency(ActivityStarter.class);
+        BroadcastSender broadcastSender = mDependency.injectMockDependency(BroadcastSender.class);
+        when(mUserTracker.getUserId()).thenReturn(ActivityManager.getCurrentUser());
+        when(mUserTracker.getUserHandle()).thenReturn(
+                UserHandle.of(ActivityManager.getCurrentUser()));
+        when(mSystemUIDialogFactory.create()).thenReturn(mSystemUIDialog);
+        mPowerNotificationWarnings = new PowerNotificationWarnings(
+                wrapper,
+                starter,
+                broadcastSender,
+                () -> mBatteryController,
+                mDialogTransitionAnimator,
+                mUiEventLogger,
+                mUserTracker,
+                mSystemUIDialogFactory);
+        BatteryStateSnapshot snapshot = new BatteryStateSnapshot(100, false, false, 1,
+                BatteryManager.BATTERY_HEALTH_GOOD, 5, 15);
+        mPowerNotificationWarnings.updateSnapshot(snapshot);
     }
 
     @Test
@@ -166,69 +226,58 @@ public class PowerNotificationWarningsTest extends SysuiTestCase {
     }
 
     @Test
-    public void testSetOverheatAlarmDialog_Overheat_ShouldShowing() {
-        final boolean overheat = true;
-        final boolean shouldBeepSound = false;
-        mSpyPowerNotificationWarnings.notifyHighTemperatureAlarm(overheat, shouldBeepSound);
+    public void testShowUsbHighTemperatureAlarm() {
+        mPowerNotificationWarnings.showUsbHighTemperatureAlarm();
         waitForIdleSync(mContext.getMainThreadHandler());
+        assertThat(mPowerNotificationWarnings.mUsbHighTempDialog).isNotNull();
 
-        verify(mSpyPowerNotificationWarnings, times(1)).setOverheatAlarmDialogShowing(overheat);
-        verify(mSpyPowerNotificationWarnings, times(1)).setAlarmShouldSound(shouldBeepSound);
+        mPowerNotificationWarnings.mUsbHighTempDialog.dismiss();
     }
 
     @Test
-    public void testSetOverheatAlarmDialog_Overheat_ShouldShowingWithBeepSound() {
-        final boolean overheat = true;
-        final boolean shouldBeepSound = true;
-        mSpyPowerNotificationWarnings.notifyHighTemperatureAlarm(overheat, shouldBeepSound);
-        waitForIdleSync(mContext.getMainThreadHandler());
+    public void testDialogStartedFromLauncher_viewVisible() {
+        when(mBatteryController.getLastPowerSaverStartExpandable())
+                .thenReturn(new WeakReference<>(mExpandable));
+        when(mExpandable.dialogTransitionController(any())).thenReturn(mController);
 
-        verify(mSpyPowerNotificationWarnings, times(1)).setOverheatAlarmDialogShowing(overheat);
-        verify(mSpyPowerNotificationWarnings, times(1)).setAlarmShouldSound(shouldBeepSound);
+        Intent intent = new Intent(BatterySaverUtils.ACTION_SHOW_START_SAVER_CONFIRMATION);
+        intent.putExtras(new Bundle());
+
+        mReceiver.onReceive(mContext, intent);
+
+        verify(mDialogTransitionAnimator).show(any(), eq(mController));
+
+        mPowerNotificationWarnings.getSaverConfirmationDialog().dismiss();
     }
 
     @Test
-    public void testSetOverheatAlarmDialog_NotOverheat_ShouldNotShowing() {
-        final boolean overheat = false;
-        final boolean shouldBeepSound = false;
-        mSpyPowerNotificationWarnings.notifyHighTemperatureAlarm(overheat, shouldBeepSound);
-        waitForIdleSync(mContext.getMainThreadHandler());
+    public void testDialogStartedNotFromLauncher_viewNotVisible() {
+        when(mBatteryController.getLastPowerSaverStartExpandable())
+                .thenReturn(new WeakReference<>(mExpandable));
 
-        verify(mSpyPowerNotificationWarnings, never()).setOverheatAlarmDialogShowing(overheat);
-        verify(mSpyPowerNotificationWarnings, never()).setAlarmShouldSound(shouldBeepSound);
+        Intent intent = new Intent(BatterySaverUtils.ACTION_SHOW_START_SAVER_CONFIRMATION);
+        intent.putExtras(new Bundle());
+
+        mReceiver.onReceive(mContext, intent);
+
+        verify(mDialogTransitionAnimator, never()).show(any(), any());
+
+        verify(mPowerNotificationWarnings.getSaverConfirmationDialog()).show();
+        mPowerNotificationWarnings.getSaverConfirmationDialog().dismiss();
     }
 
     @Test
-    public void testSetOverheatAlarmDialog_NotOverheat_ShouldNotAlarmBeepSound() {
-        final boolean overheat = false;
-        final boolean configBeepSound = true;
-        mSpyPowerNotificationWarnings.notifyHighTemperatureAlarm(overheat, configBeepSound);
-        waitForIdleSync(mContext.getMainThreadHandler());
+    public void testDialogShownNotFromLauncher() {
+        when(mBatteryController.getLastPowerSaverStartExpandable()).thenReturn(null);
 
-        verify(mSpyPowerNotificationWarnings, never()).setOverheatAlarmDialogShowing(overheat);
-        verify(mSpyPowerNotificationWarnings, never()).setAlarmShouldSound(configBeepSound);
+        Intent intent = new Intent(BatterySaverUtils.ACTION_SHOW_START_SAVER_CONFIRMATION);
+        intent.putExtras(new Bundle());
+
+        mReceiver.onReceive(mContext, intent);
+
+        verify(mDialogTransitionAnimator, never()).showFromView(any(), any());
+
+        verify(mPowerNotificationWarnings.getSaverConfirmationDialog()).show();
+        mPowerNotificationWarnings.getSaverConfirmationDialog().dismiss();
     }
-
-    @Test
-    public void testOverheatAlarmDialogShowing() {
-        final boolean overheat = true;
-        final boolean shouldBeepSound = false;
-        mSpyPowerNotificationWarnings.notifyHighTemperatureAlarm(overheat, shouldBeepSound);
-        waitForIdleSync(mContext.getMainThreadHandler());
-
-        verify(mSpyPowerNotificationWarnings, atLeastOnce()).setOverheatAlarmDialogShowing(
-                overheat);
-    }
-
-    @Test
-    public void testOverheatAlarmDialogNotShowing() {
-        final boolean overheat = false;
-        final boolean shouldBeepSound = false;
-        mSpyPowerNotificationWarnings.notifyHighTemperatureAlarm(overheat, shouldBeepSound);
-
-        waitForIdleSync(mContext.getMainThreadHandler());
-        verify(mSpyPowerNotificationWarnings, never()).setOverheatAlarmDialogShowing(
-                overheat);
-    }
-
 }

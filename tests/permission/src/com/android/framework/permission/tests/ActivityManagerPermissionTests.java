@@ -17,10 +17,12 @@
 package com.android.framework.permission.tests;
 
 import android.app.ActivityManager;
+import android.app.ActivityTaskManager;
 import android.app.IActivityManager;
 import android.content.res.Configuration;
 import android.os.RemoteException;
-import android.test.suitebuilder.annotation.SmallTest;
+
+import androidx.test.filters.SmallTest;
 
 import junit.framework.TestCase;
 
@@ -39,17 +41,7 @@ public class ActivityManagerPermissionTests extends TestCase {
     @SmallTest
     public void testREORDER_TASKS() {
         try {
-            mAm.moveTaskToFront(0, 0, null);
-            fail("IActivityManager.moveTaskToFront did not throw SecurityException as"
-                    + " expected");
-        } catch (SecurityException e) {
-            // expected
-        } catch (RemoteException e) {
-            fail("Unexpected remote exception");
-        }
-
-        try {
-            mAm.moveTaskBackwards(-1);
+            mAm.moveTaskToFront(null, null, 0, 0, null);
             fail("IActivityManager.moveTaskToFront did not throw SecurityException as"
                     + " expected");
         } catch (SecurityException e) {
@@ -62,7 +54,7 @@ public class ActivityManagerPermissionTests extends TestCase {
     @SmallTest
     public void testCHANGE_CONFIGURATION() {
         try {
-            mAm.updateConfiguration(new Configuration());
+            ActivityTaskManager.getService().updateConfiguration(new Configuration());
             fail("IActivityManager.updateConfiguration did not throw SecurityException as"
                     + " expected");
         } catch (SecurityException e) {

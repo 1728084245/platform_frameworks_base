@@ -16,6 +16,7 @@
 
 #include <hwui/Paint.h>
 #include <minikin/Layout.h>
+#include <SkBlendMode.h>
 #include <string>
 #include "TestSceneBase.h"
 
@@ -41,14 +42,13 @@ public:
         int top = bounds.fTop;
 
         mBluePaint.setColor(SkColorSetARGB(255, 0, 0, 255));
-        mBluePaint.setTextSize(padding);
+        mBluePaint.getSkFont().setSize(padding);
         mGreenPaint.setColor(SkColorSetARGB(255, 0, 255, 0));
-        mGreenPaint.setTextSize(padding);
+        mGreenPaint.getSkFont().setSize(padding);
 
         // interleave drawText and drawRect with saveLayer ops
         for (int i = 0; i < regions; i++, top += smallRectHeight) {
-            canvas.saveLayer(bounds.fLeft, top, bounds.fRight, top + padding, &mBluePaint,
-                             SaveFlags::ClipToLayer | SaveFlags::MatrixClip);
+            canvas.saveLayer(bounds.fLeft, top, bounds.fRight, top + padding, &mBluePaint);
             canvas.drawColor(SkColorSetARGB(255, 255, 255, 0), SkBlendMode::kSrcOver);
             std::string stri = std::to_string(i);
             std::string offscreen = "offscreen line " + stri;

@@ -1,3 +1,12 @@
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_base_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_base_license"],
+}
+
 cc_defaults {
     name: "bootanimation_defaults",
 
@@ -28,6 +37,8 @@ cc_binary {
     name: "bootanimation",
     defaults: ["bootanimation_defaults"],
 
+    header_libs: ["jni_headers"],
+
     shared_libs: [
         "libOpenSLES",
         "libbootanimation",
@@ -40,25 +51,11 @@ cc_binary {
         "audioplay.cpp",
     ],
 
-    product_variables: {
-        product_is_iot: {
-            shared_libs: [
-                "libandroidthings",
-                "libchrome",
-            ],
-            srcs: [
-                "iot/iotbootanimation_main.cpp",
-                "iot/BootAction.cpp",
-                "iot/BootParameters.cpp",
-            ],
-            exclude_srcs: [
-                "bootanimation_main.cpp",
-                "audioplay.cpp",
-            ],
-        },
-    },
-
     init_rc: ["bootanim.rc"],
+
+    cflags: [
+        "-Wno-deprecated-declarations",
+    ],
 }
 
 // libbootanimation
@@ -72,15 +69,9 @@ cc_library_shared {
 
     shared_libs: [
         "libui",
-        "libhwui",
+        "libjnigraphics",
         "libEGL",
-        "libGLESv1_CM",
+        "libGLESv2",
         "libgui",
     ],
-
-    product_variables: {
-        product_is_iot: {
-            init_rc: ["iot/bootanim_iot.rc"],
-        },
-    },
 }

@@ -16,7 +16,11 @@
 
 package com.android.server.hdmi;
 
+import android.hardware.hdmi.HdmiControlManager;
 import android.hardware.tv.cec.V1_0.SendMessageResult;
+import android.util.Slog;
+
+import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.hdmi.HdmiControlService.SendMessageCallback;
 
 /**
@@ -29,6 +33,14 @@ final class SystemAudioAutoInitiationAction extends HdmiCecFeatureAction {
     // State that waits for <System Audio Mode Status> once send
     // <Give System Audio Mode Status> to AV Receiver.
     private static final int STATE_WAITING_FOR_SYSTEM_AUDIO_MODE_STATUS = 1;
+
+    @VisibleForTesting
+    static final int RETRIES_ON_TIMEOUT = 1;
+
+    // On some audio devices the <System Audio Mode Status> message can be delayed as the device
+    // is just waking up. Retry the <Give System Audio Mode Status> message to ensure we properly
+    // initialize system audio.
+    private int mRetriesOnTimeOut = RETRIES_ON_TIMEOUT;
 
     SystemAudioAutoInitiationAction(HdmiCecLocalDevice source, int avrAddress) {
         super(source);
@@ -79,8 +91,13 @@ final class SystemAudioAutoInitiationAction extends HdmiCecFeatureAction {
 
         // If System Audio Control feature is enabled, turn on system audio mode when new AVR is
         // detected. Otherwise, turn off system audio mode.
+        // If AVR reports SAM on and it is in standby, the action SystemAudioActionFromTv
+        // triggers a <SAM Request> that will wake-up the AVR.
         boolean targetSystemAudioMode = tv().isSystemAudioControlFeatureEnabled();
-        if (currentSystemAudioMode != targetSystemAudioMode) {
+        if (currentSystemAudioMode != targetSystemAudioMode
+                || (currentSystemAudioMode && tv().getAvrDeviceInfo() != null
+                && tv().getAvrDeviceInfo().getDevicePowerStatus()
+                == HdmiControlManager.POWER_STATUS_STANDBY)) {
             // Start System Audio Control feature actions only if necessary.
             addAndStartAction(
                     new SystemAudioActionFromTv(tv(), mAvrAddress, targetSystemAudioMode, null));
@@ -100,6 +117,13 @@ final class SystemAudioAutoInitiationAction extends HdmiCecFeatureAction {
 
         switch (mState) {
             case STATE_WAITING_FOR_SYSTEM_AUDIO_MODE_STATUS:
+                if (mRetriesOnTimeOut > 0) {
+                    mRetriesOnTimeOut--;
+                    addTimer(mState, HdmiConfig.TIMEOUT_MS);
+                    sendGiveSystemAudioModeStatus();
+                    return;
+                }
+
                 handleSystemAudioModeStatusTimeout();
                 break;
         }

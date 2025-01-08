@@ -14,34 +14,38 @@
  * limitations under the License.
  */
 
-#include "tests/common/LeakChecker.h"
-#include "tests/common/TestScene.h"
-
-#include "Properties.h"
-#include "hwui/Typeface.h"
-#include "protos/hwui.pb.h"
-
+#include <android-base/parsebool.h>
 #include <benchmark/benchmark.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <fnmatch.h>
 #include <getopt.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
+
+#include <regex>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-#include <errno.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/types.h>
+#include "HardwareBitmapUploader.h"
+#include "Properties.h"
+#include "hwui/Typeface.h"
+#include "renderthread/RenderProxy.h"
+#include "tests/common/LeakChecker.h"
+#include "tests/common/TestScene.h"
 
 using namespace android;
+using namespace android::base;
 using namespace android::uirenderer;
 using namespace android::uirenderer::test;
 
-static int gRepeatCount = 1;
 static std::vector<TestScene::Info> gRunTests;
 static TestScene::Options gOpts;
+static bool gRunLeakCheck = true;
 std::unique_ptr<benchmark::BenchmarkReporter> gBenchmarkReporter;
 
 void run(const TestScene::Info& info, const TestScene::Options& opts,
@@ -67,7 +71,12 @@ OPTIONS:
   --onscreen           Render tests on device screen. By default tests
                        are offscreen rendered
   --benchmark_format   Set output format. Possible values are tabular, json, csv
-  --renderer=TYPE      Sets the render pipeline to use. May be opengl, skiagl, or skiavk
+  --benchmark_list_tests Lists the tests that would run but does not run them
+  --benchmark_filter=<regex> Filters the test set to the given regex. If prefixed with `-` and test
+                       that doesn't match the given regex is run
+  --renderer=TYPE      Sets the render pipeline to use. May be skiagl or skiavk
+  --skip-leak-check    Skips the memory leak check
+  --report-gpu-memory[=verbose]  Dumps the GPU memory usage after each test run
 )");
 }
 
@@ -136,26 +145,45 @@ static bool setBenchmarkFormat(const char* format) {
     if (!strcmp(format, "tabular")) {
         gBenchmarkReporter.reset(new benchmark::ConsoleReporter());
     } else if (!strcmp(format, "json")) {
+        // We cannot print the leak check if outputing to JSON as that will break
+        // JSON parsers since it's not JSON-formatted
+        gRunLeakCheck = false;
         gBenchmarkReporter.reset(new benchmark::JSONReporter());
     } else {
-        fprintf(stderr, "Unknown format '%s'", format);
+        fprintf(stderr, "Unknown format '%s'\n", format);
         return false;
     }
     return true;
 }
 
 static bool setRenderer(const char* renderer) {
-    if (!strcmp(renderer, "opengl")) {
-        Properties::overrideRenderPipelineType(RenderPipelineType::OpenGL);
-    } else if (!strcmp(renderer, "skiagl")) {
+    if (!strcmp(renderer, "skiagl")) {
         Properties::overrideRenderPipelineType(RenderPipelineType::SkiaGL);
     } else if (!strcmp(renderer, "skiavk")) {
         Properties::overrideRenderPipelineType(RenderPipelineType::SkiaVulkan);
     } else {
-        fprintf(stderr, "Unknown format '%s'", renderer);
+        fprintf(stderr, "Unknown format '%s'\n", renderer);
         return false;
     }
     return true;
+}
+
+static void addTestsThatMatchFilter(std::string spec) {
+    if (spec.empty() || spec == "all") {
+        spec = ".";  // Regexp that matches all benchmarks
+    }
+    bool isNegativeFilter = false;
+    if (spec[0] == '-') {
+        spec.replace(0, 1, "");
+        isNegativeFilter = true;
+    }
+    std::regex re(spec, std::regex_constants::extended);
+    for (auto& iter : TestScene::testMap()) {
+        if ((isNegativeFilter && !std::regex_search(iter.first, re)) ||
+            (!isNegativeFilter && std::regex_search(iter.first, re))) {
+            gRunTests.push_back(iter.second);
+        }
+    }
 }
 
 // For options that only exist in long-form. Anything in the
@@ -168,31 +196,43 @@ enum {
     ReportFrametime,
     CpuSet,
     BenchmarkFormat,
+    BenchmarkListTests,
+    BenchmarkFilter,
     Onscreen,
     Offscreen,
     Renderer,
+    SkipLeakCheck,
+    ReportGpuMemory,
 };
 }
 
 static const struct option LONG_OPTIONS[] = {
-        {"frames", required_argument, nullptr, 'f'},
-        {"repeat", required_argument, nullptr, 'r'},
+        {"count", required_argument, nullptr, 'c'},
+        {"runs", required_argument, nullptr, 'r'},
         {"help", no_argument, nullptr, 'h'},
         {"list", no_argument, nullptr, LongOpts::List},
         {"wait-for-gpu", no_argument, nullptr, LongOpts::WaitForGpu},
         {"report-frametime", optional_argument, nullptr, LongOpts::ReportFrametime},
         {"cpuset", required_argument, nullptr, LongOpts::CpuSet},
         {"benchmark_format", required_argument, nullptr, LongOpts::BenchmarkFormat},
+        {"benchmark_list_tests", optional_argument, nullptr, LongOpts::BenchmarkListTests},
+        {"benchmark_filter", required_argument, nullptr, LongOpts::BenchmarkFilter},
         {"onscreen", no_argument, nullptr, LongOpts::Onscreen},
         {"offscreen", no_argument, nullptr, LongOpts::Offscreen},
         {"renderer", required_argument, nullptr, LongOpts::Renderer},
+        {"skip-leak-check", no_argument, nullptr, LongOpts::SkipLeakCheck},
+        {"report-gpu-memory", optional_argument, nullptr, LongOpts::ReportGpuMemory},
         {0, 0, 0, 0}};
 
 static const char* SHORT_OPTIONS = "c:r:h";
 
 void parseOptions(int argc, char* argv[]) {
+    benchmark::BenchmarkReporter::Context::executable_name = (argc > 0) ? argv[0] : "unknown";
+
     int c;
     bool error = false;
+    bool listTestsOnly = false;
+    bool testsAreFiltered = false;
     opterr = 0;
 
     while (true) {
@@ -215,20 +255,20 @@ void parseOptions(int argc, char* argv[]) {
                 break;
 
             case 'c':
-                gOpts.count = atoi(optarg);
-                if (!gOpts.count) {
+                gOpts.frameCount = atoi(optarg);
+                if (!gOpts.frameCount) {
                     fprintf(stderr, "Invalid frames argument '%s'\n", optarg);
                     error = true;
                 }
                 break;
 
             case 'r':
-                gRepeatCount = atoi(optarg);
-                if (!gRepeatCount) {
+                gOpts.repeatCount = atoi(optarg);
+                if (!gOpts.repeatCount) {
                     fprintf(stderr, "Invalid repeat argument '%s'\n", optarg);
                     error = true;
                 } else {
-                    gRepeatCount = (gRepeatCount > 0 ? gRepeatCount : INT_MAX);
+                    gOpts.repeatCount = (gOpts.repeatCount > 0 ? gOpts.repeatCount : INT_MAX);
                 }
                 break;
 
@@ -266,6 +306,21 @@ void parseOptions(int argc, char* argv[]) {
                 }
                 break;
 
+            case LongOpts::BenchmarkListTests:
+                if (!optarg || ParseBool(optarg) == ParseBoolResult::kTrue) {
+                    listTestsOnly = true;
+                }
+                break;
+
+            case LongOpts::BenchmarkFilter:
+                if (!optarg) {
+                    error = true;
+                    break;
+                }
+                addTestsThatMatchFilter(optarg);
+                testsAreFiltered = true;
+                break;
+
             case LongOpts::Renderer:
                 if (!optarg) {
                     error = true;
@@ -284,6 +339,22 @@ void parseOptions(int argc, char* argv[]) {
                 gOpts.renderOffscreen = true;
                 break;
 
+            case LongOpts::SkipLeakCheck:
+                gRunLeakCheck = false;
+                break;
+
+            case LongOpts::ReportGpuMemory:
+                gOpts.reportGpuMemoryUsage = true;
+                if (optarg) {
+                    if (!strcmp("verbose", optarg)) {
+                        gOpts.reportGpuMemoryUsageVerbose = true;
+                    } else {
+                        fprintf(stderr, "Invalid report gpu memory option '%s'\n", optarg);
+                        error = true;
+                    }
+                }
+                break;
+
             case 'h':
                 printHelp();
                 exit(EXIT_SUCCESS);
@@ -299,7 +370,7 @@ void parseOptions(int argc, char* argv[]) {
     }
 
     if (error) {
-        fprintf(stderr, "Try 'hwuitest --help' for more information.\n");
+        fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
@@ -307,25 +378,38 @@ void parseOptions(int argc, char* argv[]) {
     if (optind < argc) {
         do {
             const char* test = argv[optind++];
-            auto pos = TestScene::testMap().find(test);
-            if (pos == TestScene::testMap().end()) {
-                fprintf(stderr, "Unknown test '%s'\n", test);
-                exit(EXIT_FAILURE);
+            if (strchr(test, '*')) {
+                // Glob match
+                for (auto& iter : TestScene::testMap()) {
+                    if (!fnmatch(test, iter.first.c_str(), 0)) {
+                        gRunTests.push_back(iter.second);
+                    }
+                }
             } else {
-                gRunTests.push_back(pos->second);
+                auto pos = TestScene::testMap().find(test);
+                if (pos == TestScene::testMap().end()) {
+                    fprintf(stderr, "Unknown test '%s'\n", test);
+                    exit(EXIT_FAILURE);
+                } else {
+                    gRunTests.push_back(pos->second);
+                }
             }
         } while (optind < argc);
-    } else {
+    } else if (gRunTests.empty() && !testsAreFiltered) {
         for (auto& iter : TestScene::testMap()) {
             gRunTests.push_back(iter.second);
         }
     }
+
+    if (listTestsOnly) {
+        for (auto& iter : gRunTests) {
+            std::cout << iter.name << std::endl;
+        }
+        exit(EXIT_SUCCESS);
+    }
 }
 
 int main(int argc, char* argv[]) {
-    // set defaults
-    gOpts.count = 150;
-
     Typeface::setRobotoTypefaceForTest();
 
     parseOptions(argc, argv);
@@ -346,16 +430,19 @@ int main(int argc, char* argv[]) {
         gBenchmarkReporter->ReportContext(context);
     }
 
-    for (int i = 0; i < gRepeatCount; i++) {
-        for (auto&& test : gRunTests) {
-            run(test, gOpts, gBenchmarkReporter.get());
-        }
+    for (auto&& test : gRunTests) {
+        run(test, gOpts, gBenchmarkReporter.get());
     }
 
     if (gBenchmarkReporter) {
         gBenchmarkReporter->Finalize();
     }
 
-    LeakChecker::checkForLeaks();
+    renderthread::RenderProxy::trimMemory(100);
+    HardwareBitmapUploader::terminate();
+
+    if (gRunLeakCheck) {
+        LeakChecker::checkForLeaks();
+    }
     return 0;
 }

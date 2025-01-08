@@ -20,7 +20,8 @@ import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
 
@@ -155,10 +156,10 @@ public final class ImsSsInfo implements Parcelable {
 
     // 0: disabled, 1: enabled
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public int mStatus;
     /** @hide */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public String mIcbNum;
     /** @hide */
     public int mProvisionStatus = SERVICE_PROVISIONING_UNKNOWN;
@@ -166,7 +167,7 @@ public final class ImsSsInfo implements Parcelable {
     private int mClirOutgoingState = CLIR_OUTGOING_DEFAULT;
 
     /**@hide*/
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public ImsSsInfo() {
     }
 
@@ -254,6 +255,7 @@ public final class ImsSsInfo implements Parcelable {
         out.writeInt(mClirOutgoingState);
     }
 
+    @NonNull
     @Override
     public String toString() {
         return super.toString() + ", Status: " + ((mStatus == 0) ? "disabled" : "enabled")
@@ -279,7 +281,7 @@ public final class ImsSsInfo implements Parcelable {
         mClirOutgoingState = in.readInt();
     }
 
-    public static final Creator<ImsSsInfo> CREATOR =
+    public static final @android.annotation.NonNull Creator<ImsSsInfo> CREATOR =
             new Creator<ImsSsInfo>() {
         @Override
         public ImsSsInfo createFromParcel(Parcel in) {
@@ -334,5 +336,32 @@ public final class ImsSsInfo implements Parcelable {
      */
     public @ClirInterrogationStatus int getClirInterrogationStatus() {
         return mClirInterrogationStatus;
+    }
+
+    /**
+     * Parts of telephony still use the old {m,n} 3GPP definition, so convert to that format.
+     * @hide
+     */
+    public int[] getCompatArray(@ImsSsData.ServiceType int type) {
+        int[] result = new int[2];
+        // Convert ImsSsInfo into a form that telephony can read (as per 3GPP 27.007)
+        // CLIR (section 7.7)
+        if (type == ImsSsData.SS_CLIR) {
+            // Assume there will only be one ImsSsInfo.
+            // contains {"n","m"} parameters
+            result[0] = getClirOutgoingState();
+            result[1] = getClirInterrogationStatus();
+            return result;
+        }
+        // COLR 7.31
+        if (type == ImsSsData.SS_COLR) {
+            result[0] = getProvisionStatus();
+        }
+        // Facility Lock CLCK 7.4 (for call barring), CLIP 7.6, COLP 7.8, as well as any
+        // other result, just return the status for the "n" parameter and provisioning status for
+        // "m" as the default.
+        result[0] = getStatus();
+        result[1] = getProvisionStatus();
+        return result;
     }
 }

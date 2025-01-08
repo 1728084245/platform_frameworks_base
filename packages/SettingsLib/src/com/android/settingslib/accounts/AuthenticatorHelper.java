@@ -32,6 +32,8 @@ import android.os.AsyncTask;
 import android.os.UserHandle;
 import android.util.Log;
 
+import com.android.settingslib.Utils;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
@@ -104,8 +106,7 @@ final public class AuthenticatorHelper extends BroadcastReceiver {
                 AuthenticatorDescription desc = mTypeToAuthDescription.get(accountType);
                 Context authContext = context.createPackageContextAsUser(desc.packageName, 0,
                         mUserHandle);
-                icon = mContext.getPackageManager().getUserBadgedIcon(
-                        authContext.getDrawable(desc.iconId), mUserHandle);
+                icon = authContext.getDrawable(desc.iconId);
                 synchronized (mAccTypeIconCache) {
                     mAccTypeIconCache.put(accountType, icon);
                 }
@@ -116,7 +117,7 @@ final public class AuthenticatorHelper extends BroadcastReceiver {
         if (icon == null) {
             icon = context.getPackageManager().getDefaultActivityIcon();
         }
-        return icon;
+        return Utils.getBadgedIcon(mContext, icon, mUserHandle);
     }
 
     /**

@@ -16,15 +16,19 @@
 
 package com.android.settingslib;
 
+import static com.android.settingslib.RestrictedLockUtils.EnforcedAdmin;
+
 import android.content.Context;
+import android.os.Process;
 import android.os.UserHandle;
+import android.util.AttributeSet;
+
+import androidx.annotation.NonNull;
 import androidx.core.content.res.TypedArrayUtils;
 import androidx.preference.PreferenceManager;
 import androidx.preference.PreferenceViewHolder;
-import android.util.AttributeSet;
-import android.view.View;
 
-import static com.android.settingslib.RestrictedLockUtils.EnforcedAdmin;
+import com.android.settingslib.widget.TwoTargetPreference;
 
 /**
  * Preference class that supports being disabled by a user restriction
@@ -34,9 +38,14 @@ public class RestrictedPreference extends TwoTargetPreference {
     RestrictedPreferenceHelper mHelper;
 
     public RestrictedPreference(Context context, AttributeSet attrs,
-            int defStyleAttr, int defStyleRes) {
+            int defStyleAttr, int defStyleRes, String packageName, int uid) {
         super(context, attrs, defStyleAttr, defStyleRes);
-        mHelper = new RestrictedPreferenceHelper(context, this, attrs);
+        mHelper = new RestrictedPreferenceHelper(context, this, attrs, packageName, uid);
+    }
+
+    public RestrictedPreference(Context context, AttributeSet attrs,
+            int defStyleAttr, int defStyleRes) {
+        this(context, attrs, defStyleAttr, defStyleRes, null, Process.INVALID_UID);
     }
 
     public RestrictedPreference(Context context, AttributeSet attrs, int defStyleAttr) {
@@ -52,24 +61,15 @@ public class RestrictedPreference extends TwoTargetPreference {
         this(context, null);
     }
 
-    @Override
-    protected int getSecondTargetResId() {
-        return R.layout.restricted_icon;
-    }
-
-    @Override
-    protected boolean shouldHideSecondTarget() {
-        return !isDisabledByAdmin();
+    public RestrictedPreference(Context context, String packageName, int uid) {
+        this(context, null, TypedArrayUtils.getAttr(context, R.attr.preferenceStyle,
+                android.R.attr.preferenceStyle), 0, packageName, uid);
     }
 
     @Override
     public void onBindViewHolder(PreferenceViewHolder holder) {
         super.onBindViewHolder(holder);
         mHelper.onBindViewHolder(holder);
-        final View restrictedIcon = holder.findViewById(R.id.restricted_icon);
-        if (restrictedIcon != null) {
-            restrictedIcon.setVisibility(isDisabledByAdmin() ? View.VISIBLE : View.GONE);
-        }
     }
 
     @Override
@@ -97,12 +97,29 @@ public class RestrictedPreference extends TwoTargetPreference {
         mHelper.checkRestrictionAndSetDisabled(userRestriction, userId);
     }
 
+    /**
+     * Checks if the given setting is subject to Enhanced Confirmation Mode restrictions for this
+     * package. Marks the preference as disabled if so.
+     * @param settingIdentifier The key identifying the setting
+     * @param packageName the package to check the settingIdentifier for
+     */
+    public void checkEcmRestrictionAndSetDisabled(@NonNull String settingIdentifier,
+            @NonNull String packageName) {
+        mHelper.checkEcmRestrictionAndSetDisabled(settingIdentifier, packageName);
+    }
+
     @Override
     public void setEnabled(boolean enabled) {
         if (enabled && isDisabledByAdmin()) {
             mHelper.setDisabledByAdmin(null);
             return;
         }
+
+        if (enabled && isDisabledByEcm()) {
+            mHelper.setDisabledByEcm(null);
+            return;
+        }
+
         super.setEnabled(enabled);
     }
 
@@ -114,5 +131,29 @@ public class RestrictedPreference extends TwoTargetPreference {
 
     public boolean isDisabledByAdmin() {
         return mHelper.isDisabledByAdmin();
+    }
+
+    public boolean isDisabledByEcm() {
+        return mHelper.isDisabledByEcm();
+    }
+
+    public int getUid() {
+        return mHelper != null ? mHelper.uid : Process.INVALID_UID;
+    }
+
+    public String getPackageName() {
+        return mHelper != null ? mHelper.packageName : null;
+    }
+
+    /**
+     * @deprecated TODO(b/308921175): This will be deleted with the
+     * {@link android.security.Flags#extendEcmToAllSettings} feature flag. Do not use for any new
+     * code.
+     */
+    @Deprecated
+    public void setDisabledByAppOps(boolean disabled) {
+        if (mHelper.setDisabledByAppOps(disabled)) {
+            notifyChanged();
+        }
     }
 }

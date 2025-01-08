@@ -20,6 +20,7 @@
 
 #include "DominatorTree.h"
 #include "ResourceTable.h"
+#include "trace/TraceBuffer.h"
 
 using android::ConfigDescription;
 
@@ -62,25 +63,25 @@ class DominatedKeyValueRemover : public DominatorTree::BottomUpVisitor {
     // Compare compatible configs for this entry and ensure the values are
     // equivalent.
     const ConfigDescription& node_configuration = node_value->config;
-    for (const auto& sibling : entry_->values) {
-      if (!sibling->value) {
+    for (const auto& sibling : parent->children()) {
+      ResourceConfigValue* sibling_value = sibling->value();
+      if (!sibling_value->value) {
         // Sibling was already removed.
         continue;
       }
-      if (node_configuration.IsCompatibleWith(sibling->config) &&
-          !node_value->value->Equals(sibling->value.get())) {
+      if (node_configuration.IsCompatibleWith(sibling_value->config) &&
+          !node_value->value->Equals(sibling_value->value.get())) {
         // The configurations are compatible, but the value is
         // different, so we can't remove this value.
         return;
       }
     }
     if (context_->IsVerbose()) {
-      context_->GetDiagnostics()->Note(
-          DiagMessage(node_value->value->GetSource())
-          << "removing dominated duplicate resource with name \""
-          << entry_->name << "\"");
-      context_->GetDiagnostics()->Note(
-          DiagMessage(parent_value->value->GetSource()) << "dominated here");
+      context_->GetDiagnostics()->Note(android::DiagMessage(node_value->value->GetSource())
+                                       << "removing dominated duplicate resource with name \""
+                                       << entry_->name << "\"");
+      context_->GetDiagnostics()->Note(android::DiagMessage(parent_value->value->GetSource())
+                                       << "dominated here");
     }
     node_value->value = {};
   }
@@ -110,6 +111,7 @@ static void DedupeEntry(IAaptContext* context, ResourceEntry* entry) {
 }  // namespace
 
 bool ResourceDeduper::Consume(IAaptContext* context, ResourceTable* table) {
+  TRACE_CALL();
   for (auto& package : table->packages) {
     for (auto& type : package->types) {
       for (auto& entry : type->entries) {

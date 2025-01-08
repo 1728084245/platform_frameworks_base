@@ -16,22 +16,32 @@
 
 package com.android.systemui.statusbar;
 
-import static org.mockito.ArgumentMatchers.any;
+import static com.google.common.truth.Truth.assertThat;
+
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 import android.app.Notification;
-import android.os.Handler;
-import android.os.Looper;
+import android.app.NotificationManager;
 import android.os.UserHandle;
-import android.service.notification.NotificationListenerService;
+import android.service.notification.NotificationListenerService.Ranking;
+import android.service.notification.NotificationListenerService.RankingMap;
 import android.service.notification.StatusBarNotification;
-import android.testing.AndroidTestingRunner;
-import android.testing.TestableLooper;
 
+import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.filters.SmallTest;
 
 import com.android.systemui.SysuiTestCase;
+import com.android.systemui.plugins.PluginManager;
+import com.android.systemui.statusbar.NotificationListener.NotificationHandler;
+import com.android.systemui.statusbar.data.repository.NotificationListenerSettingsRepository;
+import com.android.systemui.statusbar.domain.interactor.SilentNotificationStatusIconsVisibilityInteractor;
+import com.android.systemui.util.concurrency.FakeExecutor;
+import com.android.systemui.util.time.FakeSystemClock;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -40,74 +50,101 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 @SmallTest
-@RunWith(AndroidTestingRunner.class)
-@TestableLooper.RunWithLooper
+@RunWith(AndroidJUnit4.class)
 public class NotificationListenerTest extends SysuiTestCase {
     private static final String TEST_PACKAGE_NAME = "test";
     private static final int TEST_UID = 0;
 
-    @Mock private NotificationPresenter mPresenter;
-    @Mock private NotificationListenerService.RankingMap mRanking;
-    @Mock private NotificationData mNotificationData;
+    @Mock private NotificationHandler mNotificationHandler;
+    @Mock private NotificationManager mNotificationManager;
+    @Mock private PluginManager mPluginManager;
 
-    // Dependency mocks:
-    @Mock private NotificationEntryManager mEntryManager;
-    @Mock private NotificationRemoteInputManager mRemoteInputManager;
-
+    private final FakeSystemClock mFakeSystemClock = new FakeSystemClock();
+    private final FakeExecutor mFakeExecutor = new FakeExecutor(mFakeSystemClock);
     private NotificationListener mListener;
     private StatusBarNotification mSbn;
+    private RankingMap mRanking = new RankingMap(new Ranking[0]);
 
     @Before
     public void setUp() {
         MockitoAnnotations.initMocks(this);
-        mDependency.injectTestDependency(NotificationEntryManager.class, mEntryManager);
-        mDependency.injectTestDependency(NotificationRemoteInputManager.class,
-                mRemoteInputManager);
-
-        when(mPresenter.getHandler()).thenReturn(Handler.createAsync(Looper.myLooper()));
-        when(mEntryManager.getNotificationData()).thenReturn(mNotificationData);
-
-        mListener = new NotificationListener(mContext);
+        mListener = new NotificationListener(
+                mContext,
+                mNotificationManager,
+                new SilentNotificationStatusIconsVisibilityInteractor(
+                        new NotificationListenerSettingsRepository()),
+                mFakeSystemClock,
+                mFakeExecutor,
+                mPluginManager);
         mSbn = new StatusBarNotification(TEST_PACKAGE_NAME, TEST_PACKAGE_NAME, 0, null, TEST_UID, 0,
                 new Notification(), UserHandle.CURRENT, null, 0);
 
-        mListener.setUpWithPresenter(mPresenter, mEntryManager);
+        mListener.addNotificationHandler(mNotificationHandler);
     }
 
     @Test
     public void testNotificationAddCallsAddNotification() {
         mListener.onNotificationPosted(mSbn, mRanking);
-        TestableLooper.get(this).processAllMessages();
-        verify(mEntryManager).addNotification(mSbn, mRanking);
-    }
-
-    @Test
-    public void testPostNotificationRemovesKeyKeptForRemoteInput() {
-        mListener.onNotificationPosted(mSbn, mRanking);
-        TestableLooper.get(this).processAllMessages();
-        verify(mEntryManager).removeKeyKeptForRemoteInput(mSbn.getKey());
-    }
-
-    @Test
-    public void testNotificationUpdateCallsUpdateNotification() {
-        when(mNotificationData.get(mSbn.getKey())).thenReturn(new NotificationData.Entry(mSbn));
-        mListener.onNotificationPosted(mSbn, mRanking);
-        TestableLooper.get(this).processAllMessages();
-        verify(mEntryManager).updateNotification(mSbn, mRanking);
+        mFakeExecutor.runAllReady();
+        verify(mNotificationHandler).onNotificationPosted(mSbn, mRanking);
     }
 
     @Test
     public void testNotificationRemovalCallsRemoveNotification() {
         mListener.onNotificationRemoved(mSbn, mRanking);
-        TestableLooper.get(this).processAllMessages();
-        verify(mEntryManager).removeNotification(mSbn.getKey(), mRanking);
+        mFakeExecutor.runAllReady();
+        verify(mNotificationHandler).onNotificationRemoved(eq(mSbn), eq(mRanking), anyInt());
     }
 
     @Test
     public void testRankingUpdateCallsNotificationRankingUpdate() {
         mListener.onNotificationRankingUpdate(mRanking);
-        TestableLooper.get(this).processAllMessages();
-        // RankingMap may be modified by plugins.
-        verify(mEntryManager).updateNotificationRanking(any());
+        assertThat(mFakeExecutor.runAllReady()).isEqualTo(1);
+        verify(mNotificationHandler).onNotificationRankingUpdate(eq(mRanking));
+    }
+
+    @Test
+    public void testRankingUpdateMultipleTimesCallsNotificationRankingUpdateOnce() {
+        // GIVEN multiple notification ranking updates
+        RankingMap ranking1 = mock(RankingMap.class);
+        RankingMap ranking2 = mock(RankingMap.class);
+        RankingMap ranking3 = mock(RankingMap.class);
+        mListener.onNotificationRankingUpdate(ranking1);
+        mListener.onNotificationRankingUpdate(ranking2);
+        mListener.onNotificationRankingUpdate(ranking3);
+
+        // WHEN executor runs with multiple updates in the queue
+        assertThat(mFakeExecutor.numPending()).isEqualTo(3);
+        assertThat(mFakeExecutor.runAllReady()).isEqualTo(3);
+
+        // VERIFY that only the last ranking actually gets handled
+        verify(mNotificationHandler, never()).onNotificationRankingUpdate(eq(ranking1));
+        verify(mNotificationHandler, never()).onNotificationRankingUpdate(eq(ranking2));
+        verify(mNotificationHandler).onNotificationRankingUpdate(eq(ranking3));
+        verifyNoMoreInteractions(mNotificationHandler);
+    }
+
+    @Test
+    public void testRankingUpdateWillCallAgainIfQueueIsSlow() {
+        // GIVEN multiple notification ranking updates
+        RankingMap ranking1 = mock(RankingMap.class);
+        RankingMap ranking2 = mock(RankingMap.class);
+        RankingMap ranking3 = mock(RankingMap.class);
+        mListener.onNotificationRankingUpdate(ranking1);
+        mListener.onNotificationRankingUpdate(ranking2);
+        mListener.onNotificationRankingUpdate(ranking3);
+
+        // WHEN executor runs with a 1-second gap between handling events 1 and 2
+        assertThat(mFakeExecutor.numPending()).isEqualTo(3);
+        assertThat(mFakeExecutor.runNextReady()).isTrue();
+        // delay a second, which empties the executor
+        mFakeSystemClock.advanceTime(1000);
+        assertThat(mFakeExecutor.numPending()).isEqualTo(0);
+
+        // VERIFY that both event 2 and event 3 are called
+        verify(mNotificationHandler, never()).onNotificationRankingUpdate(eq(ranking1));
+        verify(mNotificationHandler).onNotificationRankingUpdate(eq(ranking2));
+        verify(mNotificationHandler).onNotificationRankingUpdate(eq(ranking3));
+        verifyNoMoreInteractions(mNotificationHandler);
     }
 }

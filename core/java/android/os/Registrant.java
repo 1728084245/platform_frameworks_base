@@ -16,9 +16,7 @@
 
 package android.os;
 
-import android.annotation.UnsupportedAppUsage;
-import android.os.Handler;
-import android.os.Message;
+import android.compat.annotation.UnsupportedAppUsage;
 
 import java.lang.ref.WeakReference;
 
@@ -48,7 +46,7 @@ public class Registrant
     {
         internalNotifyRegistrant (null, null);
     }
-    
+
     @UnsupportedAppUsage
     public void
     notifyResult(Object result)
@@ -83,9 +81,7 @@ public class Registrant
             Message msg = Message.obtain();
 
             msg.what = what;
-            
             msg.obj = new AsyncResult(userObj, result, exception);
-            
             h.sendMessage(msg);
         }
     }
@@ -114,6 +110,7 @@ public class Registrant
         }
     }
 
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
     public Handler
     getHandler()
     {
@@ -127,4 +124,3 @@ public class Registrant
     int             what;
     Object          userObj;
 }
-

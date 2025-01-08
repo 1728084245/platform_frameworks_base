@@ -16,7 +16,7 @@ package android.graphics.drawable;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.pm.ActivityInfo.Config;
 import android.content.res.ColorStateList;
 import android.content.res.ComplexColor;
@@ -24,14 +24,17 @@ import android.content.res.GradientColor;
 import android.content.res.Resources;
 import android.content.res.Resources.Theme;
 import android.content.res.TypedArray;
+import android.graphics.BlendMode;
+import android.graphics.BlendModeColorFilter;
 import android.graphics.Canvas;
 import android.graphics.ColorFilter;
 import android.graphics.Insets;
 import android.graphics.PixelFormat;
-import android.graphics.PorterDuff.Mode;
+import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
 import android.graphics.Rect;
 import android.graphics.Shader;
+import android.os.Build;
 import android.os.Trace;
 import android.util.ArrayMap;
 import android.util.AttributeSet;
@@ -47,6 +50,9 @@ import android.util.Xml;
 import com.android.internal.R;
 import com.android.internal.util.VirtualRefBasePtr;
 
+import dalvik.annotation.optimization.FastNative;
+import dalvik.system.VMRuntime;
+
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -54,11 +60,8 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Map;
 import java.util.Stack;
-
-import dalvik.annotation.optimization.FastNative;
-import dalvik.system.VMRuntime;
 
 /**
  * This lets you create a drawable based on an XML vector graphic.
@@ -81,10 +84,10 @@ import dalvik.system.VMRuntime;
  * <dd>Defines the name of this vector drawable.</dd>
  * <dt><code>android:width</code></dt>
  * <dd>Used to define the intrinsic width of the drawable.
- * This support all the dimension units, normally specified with dp.</dd>
+ * This supports all the dimension units, normally specified with dp.</dd>
  * <dt><code>android:height</code></dt>
- * <dd>Used to define the intrinsic height the drawable.
- * This support all the dimension units, normally specified with dp.</dd>
+ * <dd>Used to define the intrinsic height of the drawable.
+ * This supports all the dimension units, normally specified with dp.</dd>
  * <dt><code>android:viewportWidth</code></dt>
  * <dd>Used to define the width of the viewport space. Viewport is basically
  * the virtual canvas where the paths are drawn on.</dd>
@@ -322,8 +325,10 @@ public class VectorDrawable extends Drawable {
 
     private VectorDrawableState mVectorState;
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private PorterDuffColorFilter mTintFilter;
+
+    private BlendModeColorFilter mBlendModeColorFilter;
     private ColorFilter mColorFilter;
 
     private boolean mMutated;
@@ -344,15 +349,19 @@ public class VectorDrawable extends Drawable {
     private final Rect mTmpBounds = new Rect();
 
     public VectorDrawable() {
-        this(new VectorDrawableState(null), null);
+        this(null, null);
     }
 
     /**
      * The one constructor to rule them all. This is called by all public
      * constructors to set the state and initialize local properties.
      */
-    private VectorDrawable(@NonNull VectorDrawableState state, @Nullable Resources res) {
-        mVectorState = state;
+    private VectorDrawable(@Nullable VectorDrawableState state, @Nullable Resources res) {
+        // As the mutable, not-thread-safe native instance is stored in VectorDrawableState, we
+        // need to always do a defensive copy even if mutate() isn't called. Otherwise
+        // draw() being called on 2 different VectorDrawable instances could still hit the same
+        // underlying native object.
+        mVectorState = new VectorDrawableState(state);
         updateLocalState(res);
     }
 
@@ -371,7 +380,7 @@ public class VectorDrawable extends Drawable {
             mDpiScaledDirty = true;
         }
 
-        mTintFilter = updateTintFilter(mTintFilter, mVectorState.mTint, mVectorState.mTintMode);
+        updateColorFilters(mVectorState.mBlendMode, mVectorState.mTint);
     }
 
     @Override
@@ -413,7 +422,8 @@ public class VectorDrawable extends Drawable {
         }
 
         // Color filters always override tint filters.
-        final ColorFilter colorFilter = (mColorFilter == null ? mTintFilter : mColorFilter);
+        final ColorFilter colorFilter = (mColorFilter == null ? mBlendModeColorFilter :
+                mColorFilter);
         final long colorFilterNativeInstance = colorFilter == null ? 0 :
                 colorFilter.getNativeInstance();
         boolean canReuseCache = mVectorState.canReuseCache();
@@ -475,17 +485,19 @@ public class VectorDrawable extends Drawable {
         final VectorDrawableState state = mVectorState;
         if (state.mTint != tint) {
             state.mTint = tint;
-            mTintFilter = updateTintFilter(mTintFilter, tint, state.mTintMode);
+
+            updateColorFilters(mVectorState.mBlendMode, tint);
             invalidateSelf();
         }
     }
 
     @Override
-    public void setTintMode(Mode tintMode) {
+    public void setTintBlendMode(@NonNull BlendMode blendMode) {
         final VectorDrawableState state = mVectorState;
-        if (state.mTintMode != tintMode) {
-            state.mTintMode = tintMode;
-            mTintFilter = updateTintFilter(mTintFilter, state.mTint, tintMode);
+        if (state.mBlendMode != blendMode) {
+            state.mBlendMode = blendMode;
+
+            updateColorFilters(state.mBlendMode, state.mTint);
             invalidateSelf();
         }
     }
@@ -495,7 +507,6 @@ public class VectorDrawable extends Drawable {
         return super.isStateful() || (mVectorState != null && mVectorState.isStateful());
     }
 
-    /** @hide */
     @Override
     public boolean hasFocusStateSpecified() {
         return mVectorState != null && mVectorState.hasFocusStateSpecified();
@@ -515,12 +526,20 @@ public class VectorDrawable extends Drawable {
             changed = true;
             state.mCacheDirty = true;
         }
-        if (state.mTint != null && state.mTintMode != null) {
-            mTintFilter = updateTintFilter(mTintFilter, state.mTint, state.mTintMode);
+        if (state.mTint != null && state.mBlendMode != null) {
+            BlendMode blendMode = state.mBlendMode;
+            ColorStateList tint = state.mTint;
+            updateColorFilters(blendMode, tint);
             changed = true;
         }
 
         return changed;
+    }
+
+    private void updateColorFilters(@Nullable BlendMode blendMode, ColorStateList tint) {
+        PorterDuff.Mode mode = BlendMode.blendModeToPorterDuffMode(blendMode);
+        mTintFilter = updateTintFilter(mTintFilter, tint, mode);
+        mBlendModeColorFilter = updateBlendModeFilter(mBlendModeColorFilter, tint, blendMode);
     }
 
     @Override
@@ -546,7 +565,6 @@ public class VectorDrawable extends Drawable {
         return mDpiScaledHeight;
     }
 
-    /** @hide */
     @Override
     public Insets getOpticalInsets() {
         if (mDpiScaledDirty) {
@@ -738,7 +756,7 @@ public class VectorDrawable extends Drawable {
 
         final int tintMode = a.getInt(R.styleable.VectorDrawable_tintMode, -1);
         if (tintMode != -1) {
-            state.mTintMode = Drawable.parseTintMode(tintMode, Mode.SRC_IN);
+            state.mBlendMode = Drawable.parseBlendMode(tintMode, BlendMode.SRC_IN);
         }
 
         final ColorStateList tint = a.getColorStateList(R.styleable.VectorDrawable_tint);
@@ -912,7 +930,7 @@ public class VectorDrawable extends Drawable {
         int[] mThemeAttrs;
         @Config int mChangingConfigurations;
         ColorStateList mTint = null;
-        Mode mTintMode = DEFAULT_TINT_MODE;
+        BlendMode mBlendMode = DEFAULT_BLEND_MODE;
         boolean mAutoMirrored;
 
         int mBaseWidth = 0;
@@ -930,7 +948,7 @@ public class VectorDrawable extends Drawable {
         // Fields for cache
         int[] mCachedThemeAttrs;
         ColorStateList mCachedTint;
-        Mode mCachedTintMode;
+        BlendMode mCachedBlendMode;
         boolean mCachedAutoMirrored;
         boolean mCacheDirty;
 
@@ -971,7 +989,7 @@ public class VectorDrawable extends Drawable {
                 mThemeAttrs = copy.mThemeAttrs;
                 mChangingConfigurations = copy.mChangingConfigurations;
                 mTint = copy.mTint;
-                mTintMode = copy.mTintMode;
+                mBlendMode = copy.mBlendMode;
                 mAutoMirrored = copy.mAutoMirrored;
                 mRootGroup = new VGroup(copy.mRootGroup, mVGTargetsMap);
                 createNativeTreeFromCopy(copy, mRootGroup);
@@ -1027,7 +1045,7 @@ public class VectorDrawable extends Drawable {
             if (!mCacheDirty
                     && mCachedThemeAttrs == mThemeAttrs
                     && mCachedTint == mTint
-                    && mCachedTintMode == mTintMode
+                    && mCachedBlendMode == mBlendMode
                     && mCachedAutoMirrored == mAutoMirrored) {
                 return true;
             }
@@ -1040,7 +1058,7 @@ public class VectorDrawable extends Drawable {
             // likely hit cache miss more, but practically not much difference.
             mCachedThemeAttrs = mThemeAttrs;
             mCachedTint = mTint;
-            mCachedTintMode = mTintMode;
+            mCachedBlendMode = mBlendMode;
             mCachedAutoMirrored = mAutoMirrored;
             mCacheDirty = false;
         }
@@ -1153,18 +1171,14 @@ public class VectorDrawable extends Drawable {
 
         private static final int NATIVE_ALLOCATION_SIZE = 100;
 
-        private static final HashMap<String, Integer> sPropertyIndexMap =
-                new HashMap<String, Integer>() {
-                    {
-                        put("translateX", TRANSLATE_X_INDEX);
-                        put("translateY", TRANSLATE_Y_INDEX);
-                        put("scaleX", SCALE_X_INDEX);
-                        put("scaleY", SCALE_Y_INDEX);
-                        put("pivotX", PIVOT_X_INDEX);
-                        put("pivotY", PIVOT_Y_INDEX);
-                        put("rotation", ROTATION_INDEX);
-                    }
-                };
+        private static final Map<String, Integer> sPropertyIndexMap = Map.of(
+                "translateX", TRANSLATE_X_INDEX,
+                "translateY", TRANSLATE_Y_INDEX,
+                "scaleX", SCALE_X_INDEX,
+                "scaleY", SCALE_Y_INDEX,
+                "pivotX", PIVOT_X_INDEX,
+                "pivotY", PIVOT_Y_INDEX,
+                "rotation", ROTATION_INDEX);
 
         static int getPropertyIndex(String propertyName) {
             if (sPropertyIndexMap.containsKey(propertyName)) {
@@ -1267,18 +1281,15 @@ public class VectorDrawable extends Drawable {
                     }
                 };
 
-        private static final HashMap<String, Property> sPropertyMap =
-                new HashMap<String, Property>() {
-                    {
-                        put("translateX", TRANSLATE_X);
-                        put("translateY", TRANSLATE_Y);
-                        put("scaleX", SCALE_X);
-                        put("scaleY", SCALE_Y);
-                        put("pivotX", PIVOT_X);
-                        put("pivotY", PIVOT_Y);
-                        put("rotation", ROTATION);
-                    }
-                };
+        private static final Map<String, Property> sPropertyMap = Map.of(
+                "translateX", TRANSLATE_X,
+                "translateY", TRANSLATE_Y,
+                "scaleX", SCALE_X,
+                "scaleY", SCALE_Y,
+                "pivotX", PIVOT_X,
+                "pivotY", PIVOT_Y,
+                "rotation", ROTATION);
+
         // Temp array to store transform values obtained from native.
         private float[] mTransform;
         /////////////////////////////////////////////////////
@@ -1744,19 +1755,15 @@ public class VectorDrawable extends Drawable {
 
         private static final int NATIVE_ALLOCATION_SIZE = 264;
         // Property map for animatable attributes.
-        private final static HashMap<String, Integer> sPropertyIndexMap
-                = new HashMap<String, Integer> () {
-            {
-                put("strokeWidth", STROKE_WIDTH_INDEX);
-                put("strokeColor", STROKE_COLOR_INDEX);
-                put("strokeAlpha", STROKE_ALPHA_INDEX);
-                put("fillColor", FILL_COLOR_INDEX);
-                put("fillAlpha", FILL_ALPHA_INDEX);
-                put("trimPathStart", TRIM_PATH_START_INDEX);
-                put("trimPathEnd", TRIM_PATH_END_INDEX);
-                put("trimPathOffset", TRIM_PATH_OFFSET_INDEX);
-            }
-        };
+        private static final Map<String, Integer> sPropertyIndexMap = Map.of(
+                "strokeWidth", STROKE_WIDTH_INDEX,
+                "strokeColor", STROKE_COLOR_INDEX,
+                "strokeAlpha", STROKE_ALPHA_INDEX,
+                "fillColor", FILL_COLOR_INDEX,
+                "fillAlpha", FILL_ALPHA_INDEX,
+                "trimPathStart", TRIM_PATH_START_INDEX,
+                "trimPathEnd", TRIM_PATH_END_INDEX,
+                "trimPathOffset", TRIM_PATH_OFFSET_INDEX);
 
         // Below are the Properties that wrap the setters to avoid reflection overhead in animations
         private static final Property<VFullPath, Float> STROKE_WIDTH =
@@ -1863,19 +1870,15 @@ public class VectorDrawable extends Drawable {
                     }
                 };
 
-        private final static HashMap<String, Property> sPropertyMap
-                = new HashMap<String, Property> () {
-            {
-                put("strokeWidth", STROKE_WIDTH);
-                put("strokeColor", STROKE_COLOR);
-                put("strokeAlpha", STROKE_ALPHA);
-                put("fillColor", FILL_COLOR);
-                put("fillAlpha", FILL_ALPHA);
-                put("trimPathStart", TRIM_PATH_START);
-                put("trimPathEnd", TRIM_PATH_END);
-                put("trimPathOffset", TRIM_PATH_OFFSET);
-            }
-        };
+        private static final Map<String, Property> sPropertyMap = Map.of(
+                "strokeWidth", STROKE_WIDTH,
+                "strokeColor", STROKE_COLOR,
+                "strokeAlpha", STROKE_ALPHA,
+                "fillColor", FILL_COLOR,
+                "fillAlpha", FILL_ALPHA,
+                "trimPathStart", TRIM_PATH_START,
+                "trimPathEnd", TRIM_PATH_END,
+                "trimPathOffset", TRIM_PATH_OFFSET);
 
         // Temp array to store property data obtained from native getter.
         private byte[] mPropertyData;
@@ -2034,7 +2037,7 @@ public class VectorDrawable extends Drawable {
                 if (fillColors instanceof  GradientColor) {
                     mFillColors = fillColors;
                     fillGradient = ((GradientColor) fillColors).getShader();
-                } else if (fillColors.isStateful()) {
+                } else if (fillColors.isStateful() || fillColors.canApplyTheme()) {
                     mFillColors = fillColors;
                 } else {
                     mFillColors = null;
@@ -2050,7 +2053,7 @@ public class VectorDrawable extends Drawable {
                 if (strokeColors instanceof GradientColor) {
                     mStrokeColors = strokeColors;
                     strokeGradient = ((GradientColor) strokeColors).getShader();
-                } else if (strokeColors.isStateful()) {
+                } else if (strokeColors.isStateful() || strokeColors.canApplyTheme()) {
                     mStrokeColors = strokeColors;
                 } else {
                     mStrokeColors = null;

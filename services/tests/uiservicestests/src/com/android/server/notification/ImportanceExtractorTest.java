@@ -16,9 +16,6 @@
 package com.android.server.notification;
 
 import static org.junit.Assert.assertEquals;
-import static org.mockito.Matchers.anyInt;
-import static org.mockito.Matchers.anyString;
-import static org.mockito.Mockito.when;
 
 import android.app.ActivityManager;
 import android.app.Notification;
@@ -27,8 +24,8 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.os.UserHandle;
 import android.service.notification.StatusBarNotification;
-import android.test.suitebuilder.annotation.SmallTest;
 
+import androidx.test.filters.SmallTest;
 import androidx.test.runner.AndroidJUnit4;
 
 import com.android.server.UiServiceTestCase;
@@ -78,12 +75,10 @@ public class ImportanceExtractorTest extends UiServiceTestCase {
     //
 
     @Test
-    public void testAppPreferenceChannelNone() throws Exception {
+    public void testAppPreferenceChannelNone() {
         ImportanceExtractor extractor = new ImportanceExtractor();
         extractor.setConfig(mConfig);
 
-        when(mConfig.getImportance(anyString(), anyInt())).thenReturn(
-          NotificationManager.IMPORTANCE_MIN);
         NotificationChannel channel =
                 new NotificationChannel("a", "a", NotificationManager.IMPORTANCE_UNSPECIFIED);
 
@@ -92,17 +87,15 @@ public class ImportanceExtractorTest extends UiServiceTestCase {
 
         extractor.process(r);
 
-        assertEquals(NotificationManager.IMPORTANCE_UNSPECIFIED, r.getUserImportance());
+        assertEquals(NotificationManager.IMPORTANCE_UNSPECIFIED, r.getImportance());
         assertEquals(notificationImportance, r.getImportance());
     }
 
     @Test
-    public void testAppPreferenceChannelPreference() throws Exception {
+    public void testAppPreferenceChannelPreference() {
         ImportanceExtractor extractor = new ImportanceExtractor();
         extractor.setConfig(mConfig);
 
-        when(mConfig.getImportance(anyString(), anyInt())).thenReturn(
-          NotificationManager.IMPORTANCE_MIN);
         NotificationChannel channel =
                 new NotificationChannel("a", "a", NotificationManager.IMPORTANCE_HIGH);
 
@@ -110,6 +103,6 @@ public class ImportanceExtractorTest extends UiServiceTestCase {
 
         extractor.process(r);
 
-        assertEquals(r.getUserImportance(), NotificationManager.IMPORTANCE_HIGH);
+        assertEquals(r.getImportance(), NotificationManager.IMPORTANCE_HIGH);
     }
 }

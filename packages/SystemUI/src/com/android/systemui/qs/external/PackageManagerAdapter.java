@@ -26,6 +26,10 @@ import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.os.RemoteException;
 
+import androidx.annotation.Nullable;
+
+import javax.inject.Inject;
+
 // Adapter that wraps calls to PackageManager or IPackageManager for {@link TileLifecycleManager}.
 // TODO: This is very much an intermediate step to allow for PackageManager mocking and should be
 // abstracted into something more useful for other tests in systemui.
@@ -37,11 +41,13 @@ public class PackageManagerAdapter {
 
     // Uses the PackageManager for the provided context.
     // When necessary, uses the IPackagemanger in AppGlobals.
+    @Inject
     public PackageManagerAdapter(Context context) {
         mPackageManager = context.getPackageManager();
         mIPackageManager = AppGlobals.getPackageManager();
     }
 
+    @Nullable
     public ServiceInfo getServiceInfo(ComponentName className, int flags, int userId)
             throws RemoteException {
         return mIPackageManager.getServiceInfo(className, flags, userId);

@@ -26,10 +26,11 @@
 #include "android-base/logging.h"
 
 #include "ResourceUtils.h"
+#include "trace/TraceBuffer.h"
 #include "XmlPullParser.h"
 #include "util/Util.h"
 
-using ::aapt::io::InputStream;
+using ::android::InputStream;
 using ::android::StringPiece;
 using ::android::StringPiece16;
 
@@ -168,7 +169,7 @@ static void XMLCALL CharacterDataHandler(void* user_data, const char* s, int len
   stack->last_text_node = util::make_unique<Text>();
   stack->last_text_node->line_number = XML_GetCurrentLineNumber(parser);
   stack->last_text_node->column_number = XML_GetCurrentColumnNumber(parser);
-  stack->last_text_node->text = str.to_string();
+  stack->last_text_node->text.assign(str);
 }
 
 static void XMLCALL CommentDataHandler(void* user_data, const char* comment) {
@@ -182,7 +183,8 @@ static void XMLCALL CommentDataHandler(void* user_data, const char* comment) {
   stack->pending_comment += comment;
 }
 
-std::unique_ptr<XmlResource> Inflate(InputStream* in, IDiagnostics* diag, const Source& source) {
+std::unique_ptr<XmlResource> Inflate(InputStream* in, android::IDiagnostics* diag,
+                                     const android::Source& source) {
   Stack stack;
 
   std::unique_ptr<std::remove_pointer<XML_Parser>::type, decltype(XML_ParserFree)*> parser = {
@@ -198,28 +200,29 @@ std::unique_ptr<XmlResource> Inflate(InputStream* in, IDiagnostics* diag, const 
   size_t buffer_size = 0;
   while (in->Next(reinterpret_cast<const void**>(&buffer), &buffer_size)) {
     if (XML_Parse(parser.get(), buffer, buffer_size, false) == XML_STATUS_ERROR) {
-      diag->Error(DiagMessage(source.WithLine(XML_GetCurrentLineNumber(parser.get())))
+      diag->Error(android::DiagMessage(source.WithLine(XML_GetCurrentLineNumber(parser.get())))
                   << XML_ErrorString(XML_GetErrorCode(parser.get())));
       return {};
     }
   }
 
   if (in->HadError()) {
-    diag->Error(DiagMessage(source) << in->GetError());
+    diag->Error(android::DiagMessage(source) << in->GetError());
     return {};
   } else {
     // Finish off the parsing.
     if (XML_Parse(parser.get(), nullptr, 0u, true) == XML_STATUS_ERROR) {
-      diag->Error(DiagMessage(source.WithLine(XML_GetCurrentLineNumber(parser.get())))
+      diag->Error(android::DiagMessage(source.WithLine(XML_GetCurrentLineNumber(parser.get())))
                   << XML_ErrorString(XML_GetErrorCode(parser.get())));
       return {};
     }
   }
   return util::make_unique<XmlResource>(ResourceFile{{}, {}, ResourceFile::Type::kUnknown, source},
-                                        StringPool{}, std::move(stack.root));
+                                        android::StringPool{}, std::move(stack.root));
 }
 
-static void CopyAttributes(Element* el, android::ResXMLParser* parser, StringPool* out_pool) {
+static void CopyAttributes(Element* el, android::ResXMLParser* parser,
+                           android::StringPool* out_pool) {
   const size_t attr_count = parser->getAttributeCount();
   if (attr_count > 0) {
     el->attributes.reserve(attr_count);
@@ -228,12 +231,12 @@ static void CopyAttributes(Element* el, android::ResXMLParser* parser, StringPoo
       size_t len;
       const char16_t* str16 = parser->getAttributeNamespace(i, &len);
       if (str16) {
-        attr.namespace_uri = util::Utf16ToUtf8(StringPiece16(str16, len));
+        attr.namespace_uri = android::util::Utf16ToUtf8(StringPiece16(str16, len));
       }
 
       str16 = parser->getAttributeName(i, &len);
       if (str16) {
-        attr.name = util::Utf16ToUtf8(StringPiece16(str16, len));
+        attr.name = android::util::Utf16ToUtf8(StringPiece16(str16, len));
       }
 
       uint32_t res_id = parser->getAttributeNameResID(i);
@@ -243,7 +246,7 @@ static void CopyAttributes(Element* el, android::ResXMLParser* parser, StringPoo
 
       str16 = parser->getAttributeStringValue(i, &len);
       if (str16) {
-        attr.value = util::Utf16ToUtf8(StringPiece16(str16, len));
+        attr.value = android::util::Utf16ToUtf8(StringPiece16(str16, len));
       }
 
       android::Res_value res_value;
@@ -264,6 +267,7 @@ static void CopyAttributes(Element* el, android::ResXMLParser* parser, StringPoo
 }
 
 std::unique_ptr<XmlResource> Inflate(const void* data, size_t len, std::string* out_error) {
+  TRACE_CALL();
   // We import the android namespace because on Windows NO_ERROR is a macro, not
   // an enum, which causes errors when qualifying it with android::
   using namespace android;
@@ -292,17 +296,19 @@ std::unique_ptr<XmlResource> Inflate(const void* data, size_t len, std::string* 
         size_t len;
         const char16_t* str16 = tree.getNamespacePrefix(&len);
         if (str16) {
-          decl.prefix = util::Utf16ToUtf8(StringPiece16(str16, len));
+          decl.prefix = android::util::Utf16ToUtf8(StringPiece16(str16, len));
         }
 
         str16 = tree.getNamespaceUri(&len);
         if (str16) {
-          decl.uri = util::Utf16ToUtf8(StringPiece16(str16, len));
+          decl.uri = android::util::Utf16ToUtf8(StringPiece16(str16, len));
         }
 
         if (pending_element == nullptr) {
           pending_element = util::make_unique<Element>();
         }
+        // pending_element is not nullptr
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         pending_element->namespace_decls.push_back(std::move(decl));
         break;
       }
@@ -319,12 +325,12 @@ std::unique_ptr<XmlResource> Inflate(const void* data, size_t len, std::string* 
         size_t len;
         const char16_t* str16 = tree.getElementNamespace(&len);
         if (str16) {
-          el->namespace_uri = util::Utf16ToUtf8(StringPiece16(str16, len));
+          el->namespace_uri = android::util::Utf16ToUtf8(StringPiece16(str16, len));
         }
 
         str16 = tree.getElementName(&len);
         if (str16) {
-          el->name = util::Utf16ToUtf8(StringPiece16(str16, len));
+          el->name = android::util::Utf16ToUtf8(StringPiece16(str16, len));
         }
 
         Element* this_el = el.get();
@@ -345,7 +351,7 @@ std::unique_ptr<XmlResource> Inflate(const void* data, size_t len, std::string* 
         size_t len;
         const char16_t* str16 = tree.getText(&len);
         if (str16) {
-          text->text = util::Utf16ToUtf8(StringPiece16(str16, len));
+          text->text = android::util::Utf16ToUtf8(StringPiece16(str16, len));
         }
         CHECK(!node_stack.empty());
         node_stack.top()->AppendChild(std::move(text));
@@ -370,6 +376,7 @@ std::unique_ptr<XmlResource> Inflate(const void* data, size_t len, std::string* 
 
 std::unique_ptr<XmlResource> XmlResource::Clone() const {
   std::unique_ptr<XmlResource> cloned = util::make_unique<XmlResource>(file);
+  CloningValueTransformer cloner(&cloned->string_pool);
   if (root != nullptr) {
     cloned->root = root->CloneElement([&](const xml::Element& src, xml::Element* dst) {
       dst->attributes.reserve(src.attributes.size());
@@ -380,7 +387,7 @@ std::unique_ptr<XmlResource> XmlResource::Clone() const {
         cloned_attr.value = attr.value;
         cloned_attr.compiled_attribute = attr.compiled_attribute;
         if (attr.compiled_value != nullptr) {
-          cloned_attr.compiled_value.reset(attr.compiled_value->Clone(&cloned->string_pool));
+          cloned_attr.compiled_value = attr.compiled_value->Transform(cloner);
         }
         dst->attributes.push_back(std::move(cloned_attr));
       }
@@ -410,11 +417,11 @@ void Element::InsertChild(size_t index, std::unique_ptr<Node> child) {
   children.insert(children.begin() + index, std::move(child));
 }
 
-Attribute* Element::FindAttribute(const StringPiece& ns, const StringPiece& name) {
+Attribute* Element::FindAttribute(StringPiece ns, StringPiece name) {
   return const_cast<Attribute*>(static_cast<const Element*>(this)->FindAttribute(ns, name));
 }
 
-const Attribute* Element::FindAttribute(const StringPiece& ns, const StringPiece& name) const {
+const Attribute* Element::FindAttribute(StringPiece ns, StringPiece name) const {
   for (const auto& attr : attributes) {
     if (ns == attr.namespace_uri && name == attr.name) {
       return &attr;
@@ -423,7 +430,7 @@ const Attribute* Element::FindAttribute(const StringPiece& ns, const StringPiece
   return nullptr;
 }
 
-void Element::RemoveAttribute(const StringPiece& ns, const StringPiece& name) {
+void Element::RemoveAttribute(StringPiece ns, StringPiece name) {
   auto new_attr_end = std::remove_if(attributes.begin(), attributes.end(),
     [&](const Attribute& attr) -> bool {
       return ns == attr.namespace_uri && name == attr.name;
@@ -432,34 +439,32 @@ void Element::RemoveAttribute(const StringPiece& ns, const StringPiece& name) {
   attributes.erase(new_attr_end, attributes.end());
 }
 
-Attribute* Element::FindOrCreateAttribute(const StringPiece& ns, const StringPiece& name) {
+Attribute* Element::FindOrCreateAttribute(StringPiece ns, StringPiece name) {
   Attribute* attr = FindAttribute(ns, name);
   if (attr == nullptr) {
-    attributes.push_back(Attribute{ns.to_string(), name.to_string()});
+    attributes.push_back(Attribute{std::string(ns), std::string(name)});
     attr = &attributes.back();
   }
   return attr;
 }
 
-Element* Element::FindChild(const StringPiece& ns, const StringPiece& name) {
+Element* Element::FindChild(StringPiece ns, StringPiece name) {
   return FindChildWithAttribute(ns, name, {}, {}, {});
 }
 
-const Element* Element::FindChild(const StringPiece& ns, const StringPiece& name) const {
+const Element* Element::FindChild(StringPiece ns, StringPiece name) const {
   return FindChildWithAttribute(ns, name, {}, {}, {});
 }
 
-Element* Element::FindChildWithAttribute(const StringPiece& ns, const StringPiece& name,
-                                         const StringPiece& attr_ns, const StringPiece& attr_name,
-                                         const StringPiece& attr_value) {
+Element* Element::FindChildWithAttribute(StringPiece ns, StringPiece name, StringPiece attr_ns,
+                                         StringPiece attr_name, StringPiece attr_value) {
   return const_cast<Element*>(static_cast<const Element*>(this)->FindChildWithAttribute(
       ns, name, attr_ns, attr_name, attr_value));
 }
 
-const Element* Element::FindChildWithAttribute(const StringPiece& ns, const StringPiece& name,
-                                               const StringPiece& attr_ns,
-                                               const StringPiece& attr_name,
-                                               const StringPiece& attr_value) const {
+const Element* Element::FindChildWithAttribute(StringPiece ns, StringPiece name,
+                                               StringPiece attr_ns, StringPiece attr_name,
+                                               StringPiece attr_value) const {
   for (const auto& child : children) {
     if (const Element* el = NodeCast<Element>(child.get())) {
       if (ns == el->namespace_uri && name == el->name) {
@@ -540,7 +545,7 @@ void Text::Accept(ConstVisitor* visitor) const {
 void PackageAwareVisitor::BeforeVisitElement(Element* el) {
   std::vector<PackageDecl> decls;
   for (const NamespaceDecl& decl : el->namespace_decls) {
-    if (Maybe<ExtractedPackage> maybe_package = ExtractPackageFromNamespace(decl.uri)) {
+    if (std::optional<ExtractedPackage> maybe_package = ExtractPackageFromNamespace(decl.uri)) {
       decls.push_back(PackageDecl{decl.prefix, std::move(maybe_package.value())});
     }
   }
@@ -551,7 +556,8 @@ void PackageAwareVisitor::AfterVisitElement(Element* el) {
   package_decls_.pop_back();
 }
 
-Maybe<ExtractedPackage> PackageAwareVisitor::TransformPackageAlias(const StringPiece& alias) const {
+std::optional<ExtractedPackage> PackageAwareVisitor::TransformPackageAlias(
+    StringPiece alias) const {
   if (alias.empty()) {
     return ExtractedPackage{{}, false /*private*/};
   }

@@ -20,19 +20,27 @@
 #include <SkRefCnt.h>
 #include <cutils/compiler.h>
 #include <minikin/MinikinFont.h>
+#include <string>
+#include <string_view>
 
-class SkPaint;
+class SkFont;
 class SkTypeface;
 
 namespace android {
 
 class ANDROID_API MinikinFontSkia : public minikin::MinikinFont {
 public:
-    explicit MinikinFontSkia(sk_sp<SkTypeface> typeface, const void* fontData, size_t fontSize,
-                             int ttcIndex, const std::vector<minikin::FontVariation>& axes);
+    MinikinFontSkia(sk_sp<SkTypeface> typeface, int sourceId, const void* fontData, size_t fontSize,
+                    std::string_view filePath, int ttcIndex,
+                    const std::vector<minikin::FontVariation>& axes);
 
     float GetHorizontalAdvance(uint32_t glyph_id, const minikin::MinikinPaint& paint,
                                const minikin::FontFakery& fakery) const override;
+
+    void GetHorizontalAdvances(uint16_t* glyph_ids, uint32_t count,
+                               const minikin::MinikinPaint& paint,
+                               const minikin::FontFakery& fakery,
+                               float* outAdvances) const override;
 
     void GetBounds(minikin::MinikinRect* bounds, uint32_t glyph_id,
                    const minikin::MinikinPaint& paint,
@@ -41,6 +49,8 @@ public:
     void GetFontExtent(minikin::MinikinExtent* extent, const minikin::MinikinPaint& paint,
                        const minikin::FontFakery& fakery) const override;
 
+    const std::string& GetFontPath() const override { return mFilePath; }
+
     SkTypeface* GetSkTypeface() const;
     sk_sp<SkTypeface> RefSkTypeface() const;
 
@@ -48,26 +58,30 @@ public:
     const void* GetFontData() const;
     size_t GetFontSize() const;
     int GetFontIndex() const;
+    const std::string& getFilePath() const { return mFilePath; }
     const std::vector<minikin::FontVariation>& GetAxes() const;
     std::shared_ptr<minikin::MinikinFont> createFontWithVariation(
             const std::vector<minikin::FontVariation>&) const;
+    int GetSourceId() const override { return mSourceId; }
 
-    static uint32_t packPaintFlags(const SkPaint* paint);
-    static void unpackPaintFlags(SkPaint* paint, uint32_t paintFlags);
+    static uint32_t packFontFlags(const SkFont&);
+    static void unpackFontFlags(SkFont*, uint32_t fontFlags);
 
     // set typeface and fake bold/italic parameters
-    static void populateSkPaint(SkPaint* paint, const minikin::MinikinFont* font,
-                                minikin::FontFakery fakery);
+    static void populateSkFont(SkFont*, const minikin::MinikinFont* font,
+                               minikin::FontFakery fakery);
 
 private:
     sk_sp<SkTypeface> mTypeface;
 
+    int mSourceId;
     // A raw pointer to the font data - it should be owned by some other object with
     // lifetime at least as long as this object.
     const void* mFontData;
     size_t mFontSize;
     int mTtcIndex;
     std::vector<minikin::FontVariation> mAxes;
+    std::string mFilePath;
 };
 
 }  // namespace android

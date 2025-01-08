@@ -15,11 +15,15 @@
 -->
 
 <resources xmlns:android="http://schemas.android.com/apk/res/android">
-    <style name="BrightnessDialogContainer" parent="@style/BaseBrightnessDialogContainer">
-        <item name="android:layout_width">@dimen/standard_notification_panel_width</item>
-    </style>
 
     <style name="UserDetailView">
         <item name="numColumns">4</item>
     </style>
+
+    <style name="TextAppearance.QS.UserSwitcher">
+        <item name="android:textSize">@dimen/kg_user_switcher_text_size</item>
+        <item name="android:textColor">?android:attr/textColorSecondary</item>
+        <item name="android:fontFamily">@*android:string/config_headlineFontFamily</item>
+    </style>
+
 </resources>

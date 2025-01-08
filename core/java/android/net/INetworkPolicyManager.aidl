@@ -17,9 +17,8 @@
 package android.net;
 
 import android.net.INetworkPolicyListener;
+import android.net.Network;
 import android.net.NetworkPolicy;
-import android.net.NetworkQuotaInfo;
-import android.net.NetworkState;
 import android.net.NetworkTemplate;
 import android.telephony.SubscriptionPlan;
 
@@ -31,54 +30,68 @@ import android.telephony.SubscriptionPlan;
 interface INetworkPolicyManager {
 
     /** Control UID policies. */
+    @EnforcePermission("MANAGE_NETWORK_POLICY")
     @UnsupportedAppUsage
     void setUidPolicy(int uid, int policy);
+    @EnforcePermission("MANAGE_NETWORK_POLICY")
     void addUidPolicy(int uid, int policy);
+    @EnforcePermission("MANAGE_NETWORK_POLICY")
     void removeUidPolicy(int uid, int policy);
+    @EnforcePermission("MANAGE_NETWORK_POLICY")
     @UnsupportedAppUsage
     int getUidPolicy(int uid);
+    @EnforcePermission("MANAGE_NETWORK_POLICY")
     int[] getUidsWithPolicy(int policy);
 
     void registerListener(INetworkPolicyListener listener);
     void unregisterListener(INetworkPolicyListener listener);
 
     /** Control network policies atomically. */
+    @EnforcePermission("MANAGE_NETWORK_POLICY")
     @UnsupportedAppUsage
     void setNetworkPolicies(in NetworkPolicy[] policies);
+    @EnforcePermission("MANAGE_NETWORK_POLICY")
     NetworkPolicy[] getNetworkPolicies(String callingPackage);
 
     /** Snooze limit on policy matching given template. */
+    @EnforcePermission("MANAGE_NETWORK_POLICY")
     @UnsupportedAppUsage
     void snoozeLimit(in NetworkTemplate template);
 
     /** Control if background data is restricted system-wide. */
     @UnsupportedAppUsage
     void setRestrictBackground(boolean restrictBackground);
+    @EnforcePermission("MANAGE_NETWORK_POLICY")
     @UnsupportedAppUsage
     boolean getRestrictBackground();
-
-    /** Callback used to change internal state on tethering */
-    void onTetheringChanged(String iface, boolean tethering);
 
     /** Gets the restrict background status based on the caller's UID:
         1 - disabled
         2 - whitelisted
         3 - enabled
     */
+    @EnforcePermission("ACCESS_NETWORK_STATE")
     int getRestrictBackgroundByCaller();
+    int getRestrictBackgroundStatus(int uid);
 
+    @EnforcePermission("MANAGE_NETWORK_POLICY")
     void setDeviceIdleMode(boolean enabled);
+    @EnforcePermission("MANAGE_NETWORK_POLICY")
     void setWifiMeteredOverride(String networkId, int meteredOverride);
 
-    @UnsupportedAppUsage
-    NetworkQuotaInfo getNetworkQuotaInfo(in NetworkState state);
+    int getMultipathPreference(in Network network);
 
+    SubscriptionPlan getSubscriptionPlan(in NetworkTemplate template);
+    void notifyStatsProviderWarningOrLimitReached();
     SubscriptionPlan[] getSubscriptionPlans(int subId, String callingPackage);
-    void setSubscriptionPlans(int subId, in SubscriptionPlan[] plans, String callingPackage);
+    void setSubscriptionPlans(int subId, in SubscriptionPlan[] plans, long expirationDurationMillis, String callingPackage);
     String getSubscriptionPlansOwner(int subId);
-    void setSubscriptionOverride(int subId, int overrideMask, int overrideValue, long timeoutMillis, String callingPackage);
+    void setSubscriptionOverride(int subId, int overrideMask, int overrideValue, in int[] networkTypes, long expirationDurationMillis, String callingPackage);
 
+    @EnforcePermission("NETWORK_SETTINGS")
     void factoryReset(String subscriber);
 
     boolean isUidNetworkingBlocked(int uid, boolean meteredNetwork);
+    @EnforcePermission("OBSERVE_NETWORK_POLICY")
+    boolean isUidRestrictedOnMeteredNetworks(int uid);
 }

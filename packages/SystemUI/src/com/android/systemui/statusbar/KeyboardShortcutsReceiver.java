@@ -15,20 +15,49 @@
  */
 package com.android.systemui.statusbar;
 
+import static com.android.systemui.Flags.keyboardShortcutHelperRewrite;
+
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 
-/**
- * Receiver for the Keyboard Shortcuts Helper.
- */
+import com.android.systemui.flags.FeatureFlags;
+import com.android.systemui.flags.Flags;
+import com.android.systemui.shared.recents.utilities.Utilities;
+
+import javax.inject.Inject;
+
+/** Receiver for the Keyboard Shortcuts Helper. */
 public class KeyboardShortcutsReceiver extends BroadcastReceiver {
+
+    private final FeatureFlags mFeatureFlags;
+
+    @Inject
+    public KeyboardShortcutsReceiver(FeatureFlags featureFlags) {
+        mFeatureFlags = featureFlags;
+    }
+
     @Override
     public void onReceive(Context context, Intent intent) {
-        if (Intent.ACTION_SHOW_KEYBOARD_SHORTCUTS.equals(intent.getAction())) {
-            KeyboardShortcuts.show(context, -1 /* deviceId unknown */);
-        } else if (Intent.ACTION_DISMISS_KEYBOARD_SHORTCUTS.equals(intent.getAction())) {
-            KeyboardShortcuts.dismiss();
+        if (keyboardShortcutHelperRewrite()) {
+            return;
         }
+        if (isTabletLayoutFlagEnabled() && Utilities.isLargeScreen(context)) {
+            if (Intent.ACTION_SHOW_KEYBOARD_SHORTCUTS.equals(intent.getAction())) {
+                KeyboardShortcutListSearch.show(context, -1 /* deviceId unknown */);
+            } else if (Intent.ACTION_DISMISS_KEYBOARD_SHORTCUTS.equals(intent.getAction())) {
+                KeyboardShortcutListSearch.dismiss();
+            }
+        } else {
+            if (Intent.ACTION_SHOW_KEYBOARD_SHORTCUTS.equals(intent.getAction())) {
+                KeyboardShortcuts.show(context, -1 /* deviceId unknown */);
+            } else if (Intent.ACTION_DISMISS_KEYBOARD_SHORTCUTS.equals(intent.getAction())) {
+                KeyboardShortcuts.dismiss();
+            }
+        }
+    }
+
+    private boolean isTabletLayoutFlagEnabled() {
+        return mFeatureFlags.isEnabled(Flags.SHORTCUT_LIST_SEARCH_LAYOUT);
     }
 }

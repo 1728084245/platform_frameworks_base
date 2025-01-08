@@ -16,7 +16,8 @@
 
 package android.hardware.display;
 
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.Nullable;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Parcel;
 import android.os.Parcelable;
 
@@ -40,7 +41,7 @@ public final class WifiDisplay implements Parcelable {
 
     public static final WifiDisplay[] EMPTY_ARRAY = new WifiDisplay[0];
 
-    public static final Creator<WifiDisplay> CREATOR = new Creator<WifiDisplay>() {
+    public static final @android.annotation.NonNull Creator<WifiDisplay> CREATOR = new Creator<WifiDisplay>() {
         public WifiDisplay createFromParcel(Parcel in) {
             String deviceAddress = in.readString();
             String deviceName = in.readString();
@@ -135,7 +136,7 @@ public final class WifiDisplay implements Parcelable {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         return o instanceof WifiDisplay && equals((WifiDisplay)o);
     }
 

@@ -15,25 +15,24 @@
  */
 package com.android.test.uibench;
 
-import android.os.Bundle;
-import android.support.design.widget.NavigationView;
-import android.support.v4.app.FragmentManager;
-import android.support.v4.app.ListFragment;
-import android.support.v4.view.GravityCompat;
-import android.support.v4.widget.DrawerLayout;
-import android.support.v7.app.ActionBarDrawerToggle;
-import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
 import android.view.MenuItem;
 import android.widget.ArrayAdapter;
 import android.widget.ListAdapter;
 
-public class ClippedListActivity extends AppCompatActivity
+import androidx.appcompat.app.ActionBarDrawerToggle;
+import androidx.appcompat.widget.Toolbar;
+import androidx.core.view.GravityCompat;
+import androidx.drawerlayout.widget.DrawerLayout;
+
+import com.android.test.uibench.listview.CompatListActivity;
+
+import com.google.android.material.navigation.NavigationView;
+
+public class ClippedListActivity extends CompatListActivity
         implements NavigationView.OnNavigationItemSelectedListener {
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
+    protected void initializeActivity() {
         setContentView(R.layout.activity_navigation_drawer);
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
@@ -46,15 +45,17 @@ public class ClippedListActivity extends AppCompatActivity
 
         NavigationView navigationView = findViewById(R.id.nav_view);
         navigationView.setNavigationItemSelectedListener(this);
+    }
 
-        FragmentManager fm = getSupportFragmentManager();
-        if (fm.findFragmentById(android.R.id.content) == null) {
-            ListFragment listFragment = new ListFragment();
-            ListAdapter adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1,
-                    TextUtils.buildSimpleStringList(40));
-            listFragment.setListAdapter(adapter);
-            fm.beginTransaction().add(R.id.app_bar_layout, listFragment).commit();
-        }
+    @Override
+    protected ListAdapter createListAdapter() {
+        return new ArrayAdapter<>(this, android.R.layout.simple_list_item_1,
+                TextUtils.buildSimpleStringList(40));
+    }
+
+    @Override
+    protected int getListFragmentContainerViewId() {
+        return R.id.app_bar_layout;
     }
 
     @Override

@@ -16,7 +16,7 @@
 
 package android.renderscript;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 
 
 /**
@@ -29,6 +29,7 @@ import android.annotation.UnsupportedAppUsage;
  * blended with results of up to two texture lookups.</p
  *
  **/
+@Deprecated
 public class ProgramFragmentFixedFunction extends ProgramFragment {
     ProgramFragmentFixedFunction(long id, RenderScript rs) {
         super(id, rs);

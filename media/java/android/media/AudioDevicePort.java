@@ -16,8 +16,14 @@
 
 package android.media;
 
-import android.annotation.UnsupportedAppUsage;
-import android.media.AudioSystem;
+import android.annotation.NonNull;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
+
+import com.android.aconfig.annotations.VisibleForTesting;
+
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * The AudioDevicePort is a specialized type of AudioPort
@@ -27,26 +33,64 @@ import android.media.AudioSystem;
  * device at the boundary of the audio system.
  * In addition to base audio port attributes, the device descriptor contains:
  * - the device type (e.g AudioManager.DEVICE_OUT_SPEAKER)
- * - the device address (e.g MAC adddress for AD2P sink).
+ * - the device address (e.g MAC address for AD2P sink).
  * @see AudioPort
  * @hide
  */
 
 public class AudioDevicePort extends AudioPort {
 
+    /** @hide */
+    // TODO: b/316864909 - Remove this method once there's a way to fake audio device ports further
+    // down the stack.
+    @VisibleForTesting
+    public static AudioDevicePort createForTesting(
+            int type, @NonNull String name, @NonNull String address) {
+        return new AudioDevicePort(
+                new AudioHandle(/* id= */ 0),
+                name,
+                /* samplingRates= */ null,
+                /* channelMasks= */ null,
+                /* channelIndexMasks= */ null,
+                /* formats= */ null,
+                /* gains= */ null,
+                type,
+                address,
+                /* encapsulationModes= */ null,
+                /* encapsulationMetadataTypes= */ null);
+    }
+
     private final int mType;
     private final String mAddress;
+    private final int[] mEncapsulationModes;
+    private final int[] mEncapsulationMetadataTypes;
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     AudioDevicePort(AudioHandle handle, String deviceName,
             int[] samplingRates, int[] channelMasks, int[] channelIndexMasks,
-            int[] formats, AudioGain[] gains, int type, String address) {
+            int[] formats, AudioGain[] gains, int type, String address, int[] encapsulationModes,
+            @AudioTrack.EncapsulationMetadataType int[] encapsulationMetadataTypes) {
         super(handle,
              (AudioManager.isInputDevice(type) == true)  ?
                         AudioPort.ROLE_SOURCE : AudioPort.ROLE_SINK,
              deviceName, samplingRates, channelMasks, channelIndexMasks, formats, gains);
         mType = type;
         mAddress = address;
+        mEncapsulationModes = encapsulationModes;
+        mEncapsulationMetadataTypes = encapsulationMetadataTypes;
+    }
+
+    AudioDevicePort(AudioHandle handle, String deviceName, List<AudioProfile> profiles,
+            AudioGain[] gains, int type, String address, int[] encapsulationModes,
+            @AudioTrack.EncapsulationMetadataType int[] encapsulationMetadataTypes,
+            List<AudioDescriptor> descriptors) {
+        super(handle,
+                AudioManager.isInputDevice(type) ? AudioPort.ROLE_SOURCE : AudioPort.ROLE_SINK,
+                deviceName, profiles, gains, descriptors);
+        mType = type;
+        mAddress = address;
+        mEncapsulationModes = encapsulationModes;
+        mEncapsulationMetadataTypes = encapsulationMetadataTypes;
     }
 
     /**
@@ -63,13 +107,41 @@ public class AudioDevicePort extends AudioPort {
      * {@link AudioManager#DEVICE_IN_USB_DEVICE}) use an address composed of the ALSA card number
      * and device number: "card=2;device=1"
      * - Bluetooth devices ({@link AudioManager#DEVICE_OUT_BLUETOOTH_SCO},
-     * {@link AudioManager#DEVICE_OUT_BLUETOOTH_SCO}, {@link AudioManager#DEVICE_OUT_BLUETOOTH_A2DP})
+     * {@link AudioManager#DEVICE_OUT_BLUETOOTH_SCO},
+     * {@link AudioManager#DEVICE_OUT_BLUETOOTH_A2DP}),
+     * {@link AudioManager#DEVICE_OUT_BLE_HEADSET}, {@link AudioManager#DEVICE_OUT_BLE_SPEAKER})
      * use the MAC address of the bluetooth device in the form "00:11:22:AA:BB:CC" as reported by
      * {@link BluetoothDevice#getAddress()}.
-     * - Deivces that do not have an address will indicate an empty string "".
+     * - Bluetooth LE broadcast group ({@link AudioManager#DEVICE_OUT_BLE_BROADCAST} use the group number.
+     * - Devices that do not have an address will indicate an empty string "".
      */
     public String address() {
         return mAddress;
+    }
+
+    /**
+     * Get supported encapsulation modes.
+     */
+    public @NonNull @AudioTrack.EncapsulationMode int[] encapsulationModes() {
+        if (mEncapsulationModes == null) {
+            return new int[0];
+        }
+        return Arrays.stream(mEncapsulationModes).boxed()
+                .filter(mode -> mode != AudioTrack.ENCAPSULATION_MODE_HANDLE)
+                .mapToInt(Integer::intValue).toArray();
+    }
+
+    /**
+     * Get supported encapsulation metadata types.
+     */
+    public @NonNull @AudioTrack.EncapsulationMetadataType int[] encapsulationMetadataTypes() {
+        if (mEncapsulationMetadataTypes == null) {
+            return new int[0];
+        }
+        int[] encapsulationMetadataTypes = new int[mEncapsulationMetadataTypes.length];
+        System.arraycopy(mEncapsulationMetadataTypes, 0,
+                         encapsulationMetadataTypes, 0, mEncapsulationMetadataTypes.length);
+        return encapsulationMetadataTypes;
     }
 
     /**
@@ -106,7 +178,7 @@ public class AudioDevicePort extends AudioPort {
                             AudioSystem.getOutputDeviceName(mType));
         return "{" + super.toString()
                 + ", mType: " + type
-                + ", mAddress: " + mAddress
+                + ", mAddress: " + Utils.anonymizeBluetoothAddress(mType, mAddress)
                 + "}";
     }
 }

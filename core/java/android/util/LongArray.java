@@ -17,12 +17,11 @@
 package android.util;
 
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 
 import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.Preconditions;
-
-import libcore.util.EmptyArray;
 
 import java.util.Arrays;
 
@@ -31,6 +30,7 @@ import java.util.Arrays;
  *
  * @hide
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public class LongArray implements Cloneable {
     private static final int MIN_CAPACITY_INCREMENT = 12;
 
@@ -45,9 +45,9 @@ public class LongArray implements Cloneable {
     /**
      * Creates an empty LongArray with the default initial capacity.
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public LongArray() {
-        this(10);
+        this(0);
     }
 
     /**
@@ -104,7 +104,7 @@ public class LongArray implements Cloneable {
      *
      * @throws IndexOutOfBoundsException when index &lt; 0 || index &gt; size()
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void add(int index, long value) {
         ensureCapacity(1);
         int rightSegment = mSize - index;
@@ -208,7 +208,7 @@ public class LongArray implements Cloneable {
     /**
      * Returns the number of values in this array.
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public int size() {
         return mSize;
     }

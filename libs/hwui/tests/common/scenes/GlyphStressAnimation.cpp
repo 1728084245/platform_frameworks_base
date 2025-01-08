@@ -20,6 +20,8 @@
 #include <hwui/Paint.h>
 #include <minikin/Layout.h>
 
+#include <SkBlendMode.h>
+
 #include <cstdio>
 
 class GlyphStressAnimation;
@@ -51,10 +53,10 @@ public:
         paint.setAntiAlias(true);
         paint.setColor(Color::Black);
         for (int i = 0; i < 5; i++) {
-            paint.setTextSize(10 + (frameNr % 20) + i * 20);
+            paint.getSkFont().setSize(10 + (frameNr % 20) + i * 20);
             TestUtils::drawUtf8ToCanvas(canvas.get(), text, paint, 0, 100 * (i + 2));
         }
 
-        container->setStagingDisplayList(canvas->finishRecording());
+        canvas->finishRecording(container.get());
     }
 };

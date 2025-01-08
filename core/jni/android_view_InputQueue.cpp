@@ -39,6 +39,7 @@ namespace android {
 
 static struct {
     jmethodID finishInputEvent;
+    jmethodID getNativePtr;
 } gInputQueueClassInfo;
 
 enum {
@@ -113,7 +114,7 @@ status_t InputQueue::getEvent(InputEvent** outEvent) {
 }
 
 bool InputQueue::preDispatchEvent(InputEvent* e) {
-    if (e->getType() == AINPUT_EVENT_TYPE_KEY) {
+    if (e->getType() == InputEventType::KEY) {
         KeyEvent* keyEvent = static_cast<KeyEvent*>(e);
         if (keyEvent->getFlags() & AKEY_EVENT_FLAG_PREDISPATCH) {
             finishEvent(e, false);
@@ -135,7 +136,7 @@ void InputQueue::handleMessage(const Message& message) {
     switch(message.what) {
     case MSG_FINISH_INPUT:
         JNIEnv* env = AndroidRuntime::getJNIEnv();
-        ScopedLocalRef<jobject> inputQueueObj(env, jniGetReferent(env, mInputQueueWeakGlobal));
+        ScopedLocalRef<jobject> inputQueueObj(env, GetReferent(env, mInputQueueWeakGlobal));
         if (!inputQueueObj.get()) {
             ALOGW("InputQueue was finalized without being disposed");
             return;
@@ -176,8 +177,8 @@ void InputQueue::enqueueEvent(InputEvent* event) {
     Mutex::Autolock _l(mLock);
     mPendingEvents.push(event);
     if (mPendingEvents.size() == 1) {
-        char dummy = 0;
-        int res = TEMP_FAILURE_RETRY(write(mDispatchWriteFd, &dummy, sizeof(dummy)));
+        char payload = '\0';
+        int res = TEMP_FAILURE_RETRY(write(mDispatchWriteFd, &payload, sizeof(payload)));
         if (res < 0 && errno != EAGAIN) {
             ALOGW("Failed writing to dispatch fd: %s", strerror(errno));
         }
@@ -220,12 +221,7 @@ static jlong nativeSendKeyEvent(JNIEnv* env, jobject clazz, jlong ptr, jobject e
         jboolean predispatch) {
     InputQueue* queue = reinterpret_cast<InputQueue*>(ptr);
     KeyEvent* event = queue->createKeyEvent();
-    status_t status = android_view_KeyEvent_toNative(env, eventObj, event);
-    if (status) {
-        queue->recycleInputEvent(event);
-        jniThrowRuntimeException(env, "Could not read contents of KeyEvent object.");
-        return -1;
-    }
+    *event = android_view_KeyEvent_obtainAsCopy(env, eventObj);
 
     if (predispatch) {
         event->setFlags(event->getFlags() | AKEY_EVENT_FLAG_PREDISPATCH);
@@ -243,7 +239,7 @@ static jlong nativeSendMotionEvent(JNIEnv* env, jobject clazz, jlong ptr, jobjec
         return -1;
     }
     MotionEvent* event = queue->createMotionEvent();
-    event->copyFrom(originalEvent, true /* keepHistory */);
+    event->copyFrom(originalEvent, /*keepHistory=*/true);
     queue->enqueueEvent(event);
     return reinterpret_cast<jlong>(event);
 }
@@ -263,8 +259,14 @@ int register_android_view_InputQueue(JNIEnv* env)
     jclass clazz = FindClassOrDie(env, kInputQueuePathName);
     gInputQueueClassInfo.finishInputEvent = GetMethodIDOrDie(env, clazz, "finishInputEvent",
                                                              "(JZ)V");
+    gInputQueueClassInfo.getNativePtr = GetMethodIDOrDie(env, clazz, "getNativePtr", "()J");
 
     return RegisterMethodsOrDie(env, kInputQueuePathName, g_methods, NELEM(g_methods));
+}
+
+AInputQueue* android_view_InputQueue_getNativePtr(JNIEnv* env, jobject inputQueue) {
+    jlong ptr = env->CallLongMethod(inputQueue, gInputQueueClassInfo.getNativePtr);
+    return reinterpret_cast<AInputQueue*>(ptr);
 }
 
 } // namespace android

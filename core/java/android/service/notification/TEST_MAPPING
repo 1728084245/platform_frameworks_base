@@ -1,0 +1,15 @@
+{
+  "presubmit": [
+    {
+      "name": "CtsNotificationTestCases_notification"
+    },
+    {
+      "name": "FrameworksUiServicesTests_notification"
+    }
+  ],
+  "postsubmit": [
+    {
+      "name": "CtsNotificationTestCases"
+    }
+  ]
+}

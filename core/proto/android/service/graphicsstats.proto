@@ -20,7 +20,7 @@ package android.service;
 option java_multiple_files = true;
 option java_outer_classname = "GraphicsStatsServiceProto";
 
-import "frameworks/base/libs/incident/proto/android/privacy.proto";
+import "frameworks/base/core/proto/android/privacy.proto";
 
 // This file is based on frameworks/base/libs/hwui/protos/graphicsstats.proto.
 // Please try to keep the two files in sync.
@@ -32,6 +32,11 @@ message GraphicsStatsServiceDumpProto {
 }
 
 message GraphicsStatsProto {
+    enum PipelineType {
+        UNKNOWN = 0;
+        GL = 1;
+        VULKAN = 2;
+    }
     option (android.msg_privacy).dest = DEST_AUTOMATIC;
 
     // The package name of the app
@@ -46,11 +51,20 @@ message GraphicsStatsProto {
     optional int64 stats_start = 3;
     optional int64 stats_end = 4;
 
-    // The aggregated statistics for the package
+    // The aggregated statistics for the package.
     optional GraphicsStatsJankSummaryProto summary = 5;
 
-    // The frame time histogram for the package
+    // The frame time histogram for the package.
     repeated GraphicsStatsHistogramBucketProto histogram = 6;
+
+    // The gpu frame time histogram for the package
+    repeated GraphicsStatsHistogramBucketProto gpu_histogram = 7;
+
+    // HWUI renders pipeline type: GL or Vulkan
+    optional PipelineType pipeline = 8;
+
+    // The UID of the app
+    optional int32 uid = 9;
 }
 
 message GraphicsStatsJankSummaryProto {

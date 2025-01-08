@@ -16,6 +16,7 @@
 
 package android.ddm;
 
+import android.os.DdmSyncState;
 import android.os.Debug;
 import android.os.UserHandle;
 import android.util.Log;
@@ -31,20 +32,15 @@ import java.nio.ByteBuffer;
 /**
  * Handle "hello" messages and feature discovery.
  */
-public class DdmHandleHello extends ChunkHandler {
+public class DdmHandleHello extends DdmHandle {
 
-    public static final int CHUNK_HELO = type("HELO");
-    public static final int CHUNK_WAIT = type("WAIT");
-    public static final int CHUNK_FEAT = type("FEAT");
+    public static final int CHUNK_HELO = ChunkHandler.type("HELO");
+    public static final int CHUNK_WAIT = ChunkHandler.type("WAIT");
+    public static final int CHUNK_FEAT = ChunkHandler.type("FEAT");
 
     private static final int CLIENT_PROTOCOL_VERSION = 1;
 
     private static DdmHandleHello mInstance = new DdmHandleHello();
-
-    private static final String[] FRAMEWORK_FEATURES = new String[] {
-        "opengl-tracing",
-        "view-hierarchy",
-    };
 
     /* singleton, do not instantiate */
     private DdmHandleHello() {}
@@ -61,15 +57,14 @@ public class DdmHandleHello extends ChunkHandler {
      * Called when the DDM server connects.  The handler is allowed to
      * send messages to the server.
      */
-    public void connected() {
+    public void onConnected() {
         if (false)
             Log.v("ddm-hello", "Connected!");
 
         if (false) {
             /* test spontaneous transmission */
             byte[] data = new byte[] { 0, 1, 2, 3, 4, -4, -3, -2, -1, 127 };
-            Chunk testChunk =
-                new Chunk(ChunkHandler.type("TEST"), data, 1, data.length-2);
+            Chunk testChunk = new Chunk(ChunkHandler.type("TEST"), data, 1, data.length - 2);
             DdmServer.sendChunk(testChunk);
         }
     }
@@ -78,7 +73,7 @@ public class DdmHandleHello extends ChunkHandler {
      * Called when the DDM server disconnects.  Can be used to disable
      * periodic transmissions or clean up saved state.
      */
-    public void disconnected() {
+    public void onDisconnected() {
         if (false)
             Log.v("ddm-hello", "Disconnected!");
     }
@@ -96,8 +91,7 @@ public class DdmHandleHello extends ChunkHandler {
         } else if (type == CHUNK_FEAT) {
             return handleFEAT(request);
         } else {
-            throw new RuntimeException("Unknown packet "
-                + ChunkHandler.name(type));
+            throw new RuntimeException("Unknown packet " + name(type));
         }
     }
 
@@ -126,10 +120,9 @@ public class DdmHandleHello extends ChunkHandler {
         String vmVersion = System.getProperty("java.vm.version", "?");
         String vmIdent = vmName + " v" + vmVersion;
 
-        //String appName = android.app.ActivityThread.currentPackageName();
-        //if (appName == null)
-        //    appName = "unknown";
-        String appName = DdmHandleAppName.getAppName();
+        DdmHandleAppName.Names names = DdmHandleAppName.getNames();
+        String appName = names.getAppName();
+        String pkgName = names.getPkgName();
 
         VMRuntime vmRuntime = VMRuntime.getRuntime();
         String instructionSetDescription =
@@ -142,12 +135,15 @@ public class DdmHandleHello extends ChunkHandler {
             + (vmRuntime.isCheckJniEnabled() ? "true" : "false");
         boolean isNativeDebuggable = vmRuntime.isNativeDebuggable();
 
-        ByteBuffer out = ByteBuffer.allocate(28
+        ByteBuffer out = ByteBuffer.allocate(32
                             + vmIdent.length() * 2
                             + appName.length() * 2
                             + instructionSetDescription.length() * 2
                             + vmFlags.length() * 2
-                            + 1);
+                            + 1
+                            + pkgName.length() * 2
+                            // STAG id (int)
+                            + Integer.BYTES);
         out.order(ChunkHandler.CHUNK_ORDER);
         out.putInt(CLIENT_PROTOCOL_VERSION);
         out.putInt(android.os.Process.myPid());
@@ -161,6 +157,12 @@ public class DdmHandleHello extends ChunkHandler {
         out.putInt(vmFlags.length());
         putString(out, vmFlags);
         out.put((byte)(isNativeDebuggable ? 1 : 0));
+        out.putInt(pkgName.length());
+        putString(out, pkgName);
+
+        // Added API 34 (and advertised via FEAT ddm packet)
+        // Send the current boot stage in ActivityThread
+        out.putInt(DdmSyncState.getStage().toInt());
 
         Chunk reply = new Chunk(CHUNK_HELO, out);
 
@@ -185,22 +187,25 @@ public class DdmHandleHello extends ChunkHandler {
         if (false)
             Log.v("ddm-heap", "Got feature list request");
 
-        int size = 4 + 4 * (vmFeatures.length + FRAMEWORK_FEATURES.length);
-        for (int i = vmFeatures.length-1; i >= 0; i--)
+        String[] fmFeatures = Debug.getFeatureList();
+        int size = 4 + 4 * (vmFeatures.length + fmFeatures.length);
+        for (int i = vmFeatures.length - 1; i >= 0; i--) {
             size += vmFeatures[i].length() * 2;
-        for (int i = FRAMEWORK_FEATURES.length-1; i>= 0; i--)
-            size += FRAMEWORK_FEATURES[i].length() * 2;
+        }
+        for (int i = fmFeatures.length - 1; i >= 0; i--) {
+            size += fmFeatures[i].length() * 2;
+        }
 
         ByteBuffer out = ByteBuffer.allocate(size);
         out.order(ChunkHandler.CHUNK_ORDER);
-        out.putInt(vmFeatures.length + FRAMEWORK_FEATURES.length);
+        out.putInt(vmFeatures.length + fmFeatures.length);
         for (int i = vmFeatures.length-1; i >= 0; i--) {
             out.putInt(vmFeatures[i].length());
             putString(out, vmFeatures[i]);
         }
-        for (int i = FRAMEWORK_FEATURES.length-1; i >= 0; i--) {
-            out.putInt(FRAMEWORK_FEATURES[i].length());
-            putString(out, FRAMEWORK_FEATURES[i]);
+        for (int i = fmFeatures.length - 1; i >= 0; i--) {
+            out.putInt(fmFeatures[i].length());
+            putString(out, fmFeatures[i]);
         }
 
         return new Chunk(CHUNK_FEAT, out);

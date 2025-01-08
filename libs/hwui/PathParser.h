@@ -22,7 +22,6 @@
 
 #include <android/log.h>
 #include <cutils/compiler.h>
-#include <jni.h>
 
 #include <string>
 
@@ -31,21 +30,21 @@ namespace uirenderer {
 
 class PathParser {
 public:
-    struct ANDROID_API ParseResult {
+    struct ParseResult {
         bool failureOccurred = false;
         std::string failureMessage;
     };
     /**
      * Parse the string literal and create a Skia Path. Return true on success.
      */
-    ANDROID_API static void parseAsciiStringForSkPath(SkPath* outPath, ParseResult* result,
-                                                      const char* pathStr, size_t strLength);
-    ANDROID_API static void getPathDataFromAsciiString(PathData* outData, ParseResult* result,
-                                                       const char* pathStr, size_t strLength);
+    static void parseAsciiStringForSkPath(SkPath* outPath, ParseResult* result,
+                                          const char* pathStr, size_t strLength);
+    static void getPathDataFromAsciiString(PathData* outData, ParseResult* result,
+                                           const char* pathStr, size_t strLength);
     static void dump(const PathData& data);
     static void validateVerbAndPoints(char verb, size_t points, ParseResult* result);
 };
 
-};      // namespace uirenderer
-};      // namespace android
+}      // namespace uirenderer
+}      // namespace android
 #endif  // ANDROID_HWUI_PATHPARSER_H

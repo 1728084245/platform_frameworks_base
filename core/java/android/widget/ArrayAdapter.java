@@ -21,7 +21,7 @@ import android.annotation.IdRes;
 import android.annotation.LayoutRes;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.res.Resources;
 import android.util.Log;
@@ -49,9 +49,6 @@ import java.util.List;
  * To customize what type of view is used for the data object,
  * override {@link #getView(int, View, ViewGroup)}
  * and inflate a view resource.
- * For a code example, see
- * the <a href="https://developer.android.com/samples/CustomChoiceList/index.html">
- * CustomChoiceList</a> sample.
  * </p>
  * <p>
  * For an example of using an array adapter with a ListView, see the
@@ -64,7 +61,7 @@ import java.util.List;
  * </p>
  * <p class="note"><strong>Note:</strong>
  * If you are considering using array adapter with a ListView, consider using
- * {@link android.support.v7.widget.RecyclerView} instead.
+ * {@link androidx.recyclerview.widget.RecyclerView} instead.
  * RecyclerView offers similar features with better performance and more flexibility than
  * ListView provides.
  * See the

@@ -16,17 +16,23 @@
 
 package com.android.server.pm;
 
-import com.android.internal.util.XmlUtils;
-
-import org.xmlpull.v1.XmlPullParser;
-import org.xmlpull.v1.XmlPullParserException;
-import org.xmlpull.v1.XmlSerializer;
-
 import android.content.ComponentName;
 import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.PackageManagerInternal;
 import android.content.pm.ResolveInfo;
 import android.util.Slog;
+
+import com.android.internal.util.XmlUtils;
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
+import com.android.server.LocalServices;
+import com.android.server.pm.pkg.PackageStateInternal;
+import com.android.server.pm.pkg.PackageUserStateInternal;
+
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
 
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -43,7 +49,7 @@ public class PreferredComponent {
     public final int mMatch;
     public final ComponentName mComponent;
     // Whether this is to be the one that's always chosen. If false, it's the most recently chosen.
-    public boolean mAlways;
+    public final boolean mAlways;
 
     final String[] mSetPackages;
     final String[] mSetClasses;
@@ -54,7 +60,7 @@ public class PreferredComponent {
     private final Callbacks mCallbacks;
 
     public interface Callbacks {
-        public boolean onReadTag(String tagName, XmlPullParser parser)
+        public boolean onReadTag(String tagName, TypedXmlPullParser parser)
                 throws XmlPullParserException, IOException;
     }
 
@@ -93,7 +99,7 @@ public class PreferredComponent {
         }
     }
 
-    public PreferredComponent(Callbacks callbacks, XmlPullParser parser)
+    public PreferredComponent(Callbacks callbacks, TypedXmlPullParser parser)
             throws XmlPullParserException, IOException {
         mCallbacks = callbacks;
         mShortComponent = parser.getAttributeValue(null, ATTR_NAME);
@@ -101,12 +107,9 @@ public class PreferredComponent {
         if (mComponent == null) {
             mParseError = "Bad activity name " + mShortComponent;
         }
-        String matchStr = parser.getAttributeValue(null, ATTR_MATCH);
-        mMatch = matchStr != null ? Integer.parseInt(matchStr, 16) : 0;
-        String setCountStr = parser.getAttributeValue(null, ATTR_SET);
-        int setCount = setCountStr != null ? Integer.parseInt(setCountStr) : 0;
-        String alwaysStr = parser.getAttributeValue(null, ATTR_ALWAYS);
-        mAlways = alwaysStr != null ? Boolean.parseBoolean(alwaysStr) : true;
+        mMatch = parser.getAttributeIntHex(null, ATTR_MATCH, 0);
+        int setCount = parser.getAttributeInt(null, ATTR_SET, 0);
+        mAlways = parser.getAttributeBoolean(null, ATTR_ALWAYS, true);
 
         String[] myPackages = setCount > 0 ? new String[setCount] : null;
         String[] myClasses = setCount > 0 ? new String[setCount] : null;
@@ -176,15 +179,15 @@ public class PreferredComponent {
         return mParseError;
     }
 
-    public void writeToXml(XmlSerializer serializer, boolean full) throws IOException {
+    public void writeToXml(TypedXmlSerializer serializer, boolean full) throws IOException {
         final int NS = mSetClasses != null ? mSetClasses.length : 0;
         serializer.attribute(null, ATTR_NAME, mShortComponent);
         if (full) {
             if (mMatch != 0) {
-                serializer.attribute(null, ATTR_MATCH, Integer.toHexString(mMatch));
+                serializer.attributeIntHex(null, ATTR_MATCH, mMatch);
             }
-            serializer.attribute(null, ATTR_ALWAYS, Boolean.toString(mAlways));
-            serializer.attribute(null, ATTR_SET, Integer.toString(NS));
+            serializer.attributeBoolean(null, ATTR_ALWAYS, mAlways);
+            serializer.attributeInt(null, ATTR_SET, NS);
             for (int s=0; s<NS; s++) {
                 serializer.startTag(null, TAG_SET);
                 serializer.attribute(null, ATTR_NAME, mSetComponents[s]);
@@ -193,7 +196,7 @@ public class PreferredComponent {
         }
     }
 
-    public boolean sameSet(List<ResolveInfo> query) {
+    public boolean sameSet(List<ResolveInfo> query, boolean excludeSetupWizardPackage, int userId) {
         if (mSetPackages == null) {
             return query == null;
         }
@@ -202,12 +205,33 @@ public class PreferredComponent {
         }
         final int NQ = query.size();
         final int NS = mSetPackages.length;
-
+        final PackageManagerInternal pmi = LocalServices.getService(PackageManagerInternal.class);
+        String setupWizardPackageName = pmi.getSetupWizardPackageName();
         int numMatch = 0;
         for (int i=0; i<NQ; i++) {
             ResolveInfo ri = query.get(i);
             ActivityInfo ai = ri.activityInfo;
             boolean good = false;
+
+            // ignore SetupWizard package's launcher capability because it is only existed
+            // during SetupWizard is running
+            if (excludeSetupWizardPackage && ai.packageName.equals(setupWizardPackageName)) {
+                continue;
+            }
+
+            // Avoid showing the disambiguation dialog if the package is not installed or
+            // installed with reason INSTALL_REASON_DEVICE_SETUP.
+            final PackageStateInternal ps = pmi.getPackageStateInternal(ai.packageName);
+            if (ps == null) {
+                continue;
+            }
+            final PackageUserStateInternal pkgUserState = ps.getUserStates().get(userId);
+            if (pkgUserState == null
+                    || pkgUserState.getInstallReason()
+                    == PackageManager.INSTALL_REASON_DEVICE_SETUP) {
+                continue;
+            }
+
             for (int j=0; j<NS; j++) {
                 if (mSetPackages[j].equals(ai.packageName)
                         && mSetClasses[j].equals(ai.name)) {
@@ -242,7 +266,38 @@ public class PreferredComponent {
         return numMatch == NS;
     }
 
-    public boolean isSuperset(List<ResolveInfo> query) {
+    public boolean sameSet(PreferredComponent pc) {
+        if (mSetPackages == null || pc == null || pc.mSetPackages == null
+                || !sameComponent(pc.mComponent)) {
+            return false;
+        }
+        final int otherPackageCount = pc.mSetPackages.length;
+        final int packageCount = mSetPackages.length;
+        if (otherPackageCount != packageCount) {
+            return false;
+        }
+        for (int i = 0; i < packageCount; i++) {
+            if (!mSetPackages[i].equals(pc.mSetPackages[i])
+                    || !mSetClasses[i].equals(pc.mSetClasses[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Returns true if the preferred component represents the provided ComponentName. */
+    private boolean sameComponent(ComponentName comp) {
+        if (mComponent == null || comp == null) {
+            return false;
+        }
+        if (mComponent.getPackageName().equals(comp.getPackageName())
+                && mComponent.getClassName().equals(comp.getClassName())) {
+            return true;
+        }
+        return false;
+    }
+
+    public boolean isSuperset(List<ResolveInfo> query, boolean excludeSetupWizardPackage) {
         if (mSetPackages == null) {
             return query == null;
         }
@@ -251,13 +306,22 @@ public class PreferredComponent {
         }
         final int NQ = query.size();
         final int NS = mSetPackages.length;
-        if (NS < NQ) {
+        if (!excludeSetupWizardPackage && NS < NQ) {
             return false;
         }
+        final PackageManagerInternal pmi = LocalServices.getService(PackageManagerInternal.class);
+        String setupWizardPackageName = pmi.getSetupWizardPackageName();
         for (int i=0; i<NQ; i++) {
             ResolveInfo ri = query.get(i);
             ActivityInfo ai = ri.activityInfo;
             boolean foundMatch = false;
+
+            // ignore SetupWizard package's launcher capability because it is only existed
+            // during SetupWizard is running
+            if (excludeSetupWizardPackage && ai.packageName.equals(setupWizardPackageName)) {
+                continue;
+            }
+
             for (int j=0; j<NS; j++) {
                 if (mSetPackages[j].equals(ai.packageName) && mSetClasses[j].equals(ai.name)) {
                     foundMatch = true;

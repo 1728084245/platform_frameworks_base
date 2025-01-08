@@ -36,10 +36,12 @@ import android.provider.Settings;
 import android.test.InstrumentationTestCase;
 import android.util.Log;
 
-import libcore.io.Streams;
+import androidx.test.uiautomator.UiDevice;
 
 import com.google.mockwebserver.MockResponse;
 import com.google.mockwebserver.MockWebServer;
+
+import libcore.io.Streams;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -63,6 +65,7 @@ public class DownloadManagerBaseTest extends InstrumentationTestCase {
     private static final String TAG = "DownloadManagerBaseTest";
     protected DownloadManager mDownloadManager = null;
     private MockWebServer mServer = null;
+    private UiDevice mUiDevice = null;
     protected String mFileType = "text/plain";
     protected Context mContext = null;
     protected MultipleDownloadsCompletedReceiver mReceiver = null;
@@ -234,6 +237,7 @@ public class DownloadManagerBaseTest extends InstrumentationTestCase {
     @Override
     public void setUp() throws Exception {
         mContext = getInstrumentation().getContext();
+        mUiDevice = UiDevice.getInstance(getInstrumentation());
         mDownloadManager = (DownloadManager)mContext.getSystemService(Context.DOWNLOAD_SERVICE);
         mServer = new MockWebServer();
         mServer.play();
@@ -468,7 +472,7 @@ public class DownloadManagerBaseTest extends InstrumentationTestCase {
     protected MultipleDownloadsCompletedReceiver registerNewMultipleDownloadsReceiver() {
         MultipleDownloadsCompletedReceiver receiver = new MultipleDownloadsCompletedReceiver();
         mContext.registerReceiver(receiver, new IntentFilter(
-                DownloadManager.ACTION_DOWNLOAD_COMPLETE));
+                DownloadManager.ACTION_DOWNLOAD_COMPLETE), Context.RECEIVER_EXPORTED_UNAUDITED);
         return receiver;
     }
 
@@ -512,7 +516,7 @@ public class DownloadManagerBaseTest extends InstrumentationTestCase {
         Log.i(LOG_TAG, "Setting WiFi State to: " + enable);
         WifiManager manager = (WifiManager)mContext.getSystemService(Context.WIFI_SERVICE);
 
-        manager.setWifiEnabled(enable);
+        mUiDevice.executeShellCommand("svc wifi " + (enable ? "enable" : "disable"));
 
         String timeoutMessage = "Timed out waiting for Wifi to be "
             + (enable ? "enabled!" : "disabled!");

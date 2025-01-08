@@ -16,16 +16,16 @@
 
 package com.android.systemui.statusbar.phone;
 
-import android.annotation.Nullable;
-
-import com.android.keyguard.KeyguardHostView.OnDismissAction;
-
+import com.android.systemui.plugins.ActivityStarter.OnDismissAction;
 
 /** Executes actions that require the screen to be unlocked. */
 public interface KeyguardDismissHandler {
     /**
      * Executes an action that requres the screen to be unlocked, showing the keyguard if
      * necessary. Does not close the notification shade (in case it was open).
+     * @param requiresShadeOpen does the shade need to be forced open when hiding the keyguard?
+     * @param afterKeyguardGone run the dismiss action after keyguard is gone?
      */
-    void executeWhenUnlocked(OnDismissAction action);
+    void executeWhenUnlocked(OnDismissAction action, boolean requiresShadeOpen,
+            boolean afterKeyguardGone);
 }

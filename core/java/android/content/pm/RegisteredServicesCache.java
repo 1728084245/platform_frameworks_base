@@ -17,8 +17,7 @@
 package android.content.pm;
 
 import android.Manifest;
-import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -41,17 +40,18 @@ import android.util.Xml;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.os.BackgroundThread;
 import com.android.internal.util.ArrayUtils;
-import com.android.internal.util.FastXmlSerializer;
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
+
+import libcore.io.IoUtils;
 
 import com.google.android.collect.Lists;
 import com.google.android.collect.Maps;
 
-import libcore.io.IoUtils;
-
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
-import org.xmlpull.v1.XmlSerializer;
 
 import java.io.File;
 import java.io.FileDescriptor;
@@ -59,7 +59,6 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -158,27 +157,39 @@ public abstract class RegisteredServicesCache<V> {
 
         migrateIfNecessaryLocked();
 
+        final boolean isCore = UserHandle.isCore(android.os.Process.myUid());
+
         IntentFilter intentFilter = new IntentFilter();
         intentFilter.addAction(Intent.ACTION_PACKAGE_ADDED);
         intentFilter.addAction(Intent.ACTION_PACKAGE_CHANGED);
         intentFilter.addAction(Intent.ACTION_PACKAGE_REMOVED);
         intentFilter.addDataScheme("package");
-        mContext.registerReceiverAsUser(mPackageReceiver, UserHandle.ALL, intentFilter, null, null);
+        if (isCore) {
+            intentFilter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY);
+        }
+        Handler handler = BackgroundThread.getHandler();
+        mContext.registerReceiverAsUser(
+                mPackageReceiver, UserHandle.ALL, intentFilter, null, handler);
 
         // Register for events related to sdcard installation.
         IntentFilter sdFilter = new IntentFilter();
         sdFilter.addAction(Intent.ACTION_EXTERNAL_APPLICATIONS_AVAILABLE);
         sdFilter.addAction(Intent.ACTION_EXTERNAL_APPLICATIONS_UNAVAILABLE);
-        mContext.registerReceiver(mExternalReceiver, sdFilter);
+        if (isCore) {
+            sdFilter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY);
+        }
+        mContext.registerReceiver(mExternalReceiver, sdFilter, null, handler);
 
         // Register for user-related events
         IntentFilter userFilter = new IntentFilter();
-        sdFilter.addAction(Intent.ACTION_USER_REMOVED);
-        mContext.registerReceiver(mUserRemovedReceiver, userFilter);
+        userFilter.addAction(Intent.ACTION_USER_REMOVED);
+        if (isCore) {
+            userFilter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY);
+        }
+        mContext.registerReceiver(mUserRemovedReceiver, userFilter, null, handler);
     }
 
-    @VisibleForTesting
-    protected void handlePackageEvent(Intent intent, int userId) {
+    private void handlePackageEvent(Intent intent, int userId) {
         // Don't regenerate the services map when the package is removed or its
         // ASEC container unmounted as a step in replacement.  The subsequent
         // _ADDED / _AVAILABLE call will regenerate the map in the final state.
@@ -240,9 +251,6 @@ public abstract class RegisteredServicesCache<V> {
 
     public void invalidateCache(int userId) {
         synchronized (mServicesLock) {
-            if (DEBUG) {
-                Slog.d(TAG, "invalidating cache for " + userId + " " + mInterfaceName);
-            }
             final UserServices<V> user = findOrCreateUserLocked(userId);
             user.services = null;
             onServicesChangedLocked(userId);
@@ -271,7 +279,7 @@ public abstract class RegisteredServicesCache<V> {
 
     public void setListener(RegisteredServicesCacheListener<V> listener, Handler handler) {
         if (handler == null) {
-            handler = new Handler(mContext.getMainLooper());
+            handler = BackgroundThread.getHandler();
         }
         synchronized (this) {
             mHandler = handler;
@@ -294,9 +302,11 @@ public abstract class RegisteredServicesCache<V> {
         }
 
         final RegisteredServicesCacheListener<V> listener2 = listener;
-        handler.post(new Runnable() {
-            public void run() {
+        handler.post(() -> {
+            try {
                 listener2.onServiceChanged(type, userId, removed);
+            } catch (Throwable th) {
+                Slog.wtf(TAG, "Exception from onServiceChanged", th);
             }
         });
     }
@@ -470,46 +480,32 @@ public abstract class RegisteredServicesCache<V> {
      *                    or null to assume that everything is affected.
      * @param userId the user for whom to update the services map.
      */
-    private void generateServicesMap(@Nullable int[] changedUids, int userId) {
+    private void generateServicesMap(int[] changedUids, int userId) {
         if (DEBUG) {
             Slog.d(TAG, "generateServicesMap() for " + userId + ", changed UIDs = "
                     + Arrays.toString(changedUids));
         }
 
+        final ArrayList<ServiceInfo<V>> serviceInfos = new ArrayList<>();
+        final List<ResolveInfo> resolveInfos = queryIntentServices(userId);
+        for (ResolveInfo resolveInfo : resolveInfos) {
+            try {
+                ServiceInfo<V> info = parseServiceInfo(resolveInfo);
+                if (info == null) {
+                    Log.w(TAG, "Unable to load service info " + resolveInfo.toString());
+                    continue;
+                }
+                serviceInfos.add(info);
+            } catch (XmlPullParserException | IOException e) {
+                Log.w(TAG, "Unable to load service info " + resolveInfo.toString(), e);
+            }
+        }
+
         synchronized (mServicesLock) {
             final UserServices<V> user = findOrCreateUserLocked(userId);
-            final boolean cacheInvalid = user.services == null;
-            if (cacheInvalid) {
+            final boolean firstScan = user.services == null;
+            if (firstScan) {
                 user.services = Maps.newHashMap();
-            }
-
-            final ArrayList<ServiceInfo<V>> serviceInfos = new ArrayList<>();
-            final List<ResolveInfo> resolveInfos = queryIntentServices(userId);
-
-            for (ResolveInfo resolveInfo : resolveInfos) {
-                try {
-                    // when changedUids == null, we want to do a rescan of everything, this means
-                    // it's the initial scan, and containsUid will trivially return true
-                    // when changedUids != null, we got here because a package changed, but
-                    // invalidateCache could have been called (thus user.services == null), and we
-                    // should query from PackageManager again
-                    if (!cacheInvalid
-                            && !containsUid(
-                                    changedUids, resolveInfo.serviceInfo.applicationInfo.uid)) {
-                        if (DEBUG) {
-                            Slog.d(TAG, "Skipping parseServiceInfo for " + resolveInfo);
-                        }
-                        continue;
-                    }
-                    ServiceInfo<V> info = parseServiceInfo(resolveInfo);
-                    if (info == null) {
-                        Log.w(TAG, "Unable to load service info " + resolveInfo.toString());
-                        continue;
-                    }
-                    serviceInfos.add(info);
-                } catch (XmlPullParserException | IOException e) {
-                    Log.w(TAG, "Unable to load service info " + resolveInfo.toString(), e);
-                }
             }
 
             StringBuilder changes = new StringBuilder();
@@ -532,7 +528,7 @@ public abstract class RegisteredServicesCache<V> {
                     changed = true;
                     user.services.put(info.type, info);
                     user.persistentServices.put(info.type, info.uid);
-                    if (!(user.mPersistentServicesFileDidNotExist && cacheInvalid)) {
+                    if (!(user.mPersistentServicesFileDidNotExist && firstScan)) {
                         notifyListener(info.type, userId, false /* removed */);
                     }
                 } else if (previousUid == info.uid) {
@@ -689,8 +685,7 @@ public abstract class RegisteredServicesCache<V> {
      */
     private void readPersistentServicesLocked(InputStream is)
             throws XmlPullParserException, IOException {
-        XmlPullParser parser = Xml.newPullParser();
-        parser.setInput(is, StandardCharsets.UTF_8.name());
+        TypedXmlPullParser parser = Xml.resolvePullParser(is);
         int eventType = parser.getEventType();
         while (eventType != XmlPullParser.START_TAG
                 && eventType != XmlPullParser.END_DOCUMENT) {
@@ -707,8 +702,7 @@ public abstract class RegisteredServicesCache<V> {
                         if (service == null) {
                             break;
                         }
-                        String uidString = parser.getAttributeValue(null, "uid");
-                        final int uid = Integer.parseInt(uidString);
+                        final int uid = parser.getAttributeInt(null, "uid");
                         final int userId = UserHandle.getUserId(uid);
                         final UserServices<V> user = findOrCreateUserLocked(userId,
                                 false /*loadFromFileIfNew*/) ;
@@ -779,14 +773,13 @@ public abstract class RegisteredServicesCache<V> {
         FileOutputStream fos = null;
         try {
             fos = atomicFile.startWrite();
-            XmlSerializer out = new FastXmlSerializer();
-            out.setOutput(fos, StandardCharsets.UTF_8.name());
+            TypedXmlSerializer out = Xml.resolveSerializer(fos);
             out.startDocument(null, true);
             out.setFeature("http://xmlpull.org/v1/doc/features.html#indent-output", true);
             out.startTag(null, "services");
             for (Map.Entry<V, Integer> service : user.persistentServices.entrySet()) {
                 out.startTag(null, "service");
-                out.attribute(null, "uid", Integer.toString(service.getValue()));
+                out.attributeInt(null, "uid", service.getValue());
                 mSerializerAndParser.writeAsXml(service.getKey(), out);
                 out.endTag(null, "service");
             }
@@ -810,7 +803,7 @@ public abstract class RegisteredServicesCache<V> {
 
     @VisibleForTesting
     protected List<UserInfo> getUsers() {
-        return UserManager.get(mContext).getUsers(true);
+        return UserManager.get(mContext).getAliveUsers();
     }
 
     @VisibleForTesting
@@ -841,4 +834,11 @@ public abstract class RegisteredServicesCache<V> {
 
     public abstract V parseServiceAttributes(Resources res,
             String packageName, AttributeSet attrs);
+
+    @VisibleForTesting
+    public void unregisterReceivers() {
+        mContext.unregisterReceiver(mPackageReceiver);
+        mContext.unregisterReceiver(mExternalReceiver);
+        mContext.unregisterReceiver(mUserRemovedReceiver);
+    }
 }

@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_MEDIA_STORAGE" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.MOUNT_UNMOUNT_FILESYSTEMS" />
 
     <application android:label="@string/app_label">
@@ -17,9 +18,14 @@
             <intent-filter>
                 <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
             </intent-filter>
+            <!-- Stub that allows MediaProvider to make incoming calls -->
+            <path-permission
+                android:path="/media_internal"
+                android:permission="android.permission.WRITE_MEDIA_STORAGE" />
         </provider>
 
-        <receiver android:name=".MountReceiver">
+        <receiver android:name=".MountReceiver"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.os.storage.action.VOLUME_STATE_CHANGED" />
             </intent-filter>

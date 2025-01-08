@@ -15,31 +15,59 @@
  */
 
 #include "Properties.h"
-#include "Debug.h"
-#include "DeviceInfo.h"
+
+#include <android-base/properties.h>
+#include <cutils/compiler.h>
+#include <log/log.h>
 
 #include <algorithm>
 #include <cstdlib>
+#include <optional>
 
-#include <cutils/compiler.h>
-#include <cutils/properties.h>
-#include <log/log.h>
+#include "Debug.h"
+#include "HWUIProperties.sysprop.h"
+#include "src/core/SkTraceEventCommon.h"
+
+#ifdef __ANDROID__
+#include <com_android_graphics_hwui_flags.h>
+namespace hwui_flags = com::android::graphics::hwui::flags;
+#else
+namespace hwui_flags {
+constexpr bool clip_surfaceviews() {
+    return false;
+}
+constexpr bool hdr_10bit_plus() {
+    return false;
+}
+constexpr bool initialize_gl_always() {
+    return false;
+}
+
+constexpr bool skip_eglmanager_telemetry() {
+    return false;
+}
+
+constexpr bool resample_gainmap_regions() {
+    return false;
+}
+}  // namespace hwui_flags
+#endif
 
 namespace android {
 namespace uirenderer {
 
-bool Properties::drawDeferDisabled = false;
-bool Properties::drawReorderDisabled = false;
 bool Properties::debugLayersUpdates = false;
 bool Properties::debugOverdraw = false;
+bool Properties::debugTraceGpuResourceCategories = false;
 bool Properties::showDirtyRegions = false;
 bool Properties::skipEmptyFrames = true;
 bool Properties::useBufferAge = true;
 bool Properties::enablePartialUpdates = true;
+// Default true unless otherwise specified in RenderThread Configuration
+bool Properties::enableRenderEffectCache = true;
 
 DebugLevel Properties::debugLevel = kDebugDisabled;
 OverdrawColorSet Properties::overdrawColorSet = OverdrawColorSet::Default;
-StencilClipDebug Properties::debugStencilClip = StencilClipDebug::Hide;
 
 float Properties::overrideLightRadius = -1.0f;
 float Properties::overrideLightPosY = -1.0f;
@@ -54,7 +82,6 @@ RenderPipelineType Properties::sRenderPipelineType = RenderPipelineType::NotInit
 bool Properties::enableHighContrastText = false;
 
 bool Properties::waitForGpuCompletion = false;
-bool Properties::forceDrawFrame = false;
 
 bool Properties::filterOutTestOverhead = false;
 bool Properties::disableVsync = false;
@@ -66,84 +93,106 @@ bool Properties::debuggingEnabled = false;
 bool Properties::isolatedProcess = false;
 
 int Properties::contextPriority = 0;
+float Properties::defaultSdrWhitePoint = 200.f;
 
-static int property_get_int(const char* key, int defaultValue) {
-    char buf[PROPERTY_VALUE_MAX] = {
-            '\0',
-    };
+bool Properties::useHintManager = false;
+int Properties::targetCpuTimePercentage = 70;
 
-    if (property_get(key, buf, "") > 0) {
-        return atoi(buf);
-    }
-    return defaultValue;
-}
+bool Properties::enableWebViewOverlays = true;
+
+bool Properties::isHighEndGfx = true;
+bool Properties::isLowRam = false;
+bool Properties::isSystemOrPersistent = false;
+
+float Properties::maxHdrHeadroomOn8bit = 5.f;  // TODO: Refine this number
+
+bool Properties::clipSurfaceViews = false;
+bool Properties::hdr10bitPlus = false;
+bool Properties::skipTelemetry = false;
+bool Properties::resampleGainmapRegions = false;
+
+int Properties::timeoutMultiplier = 1;
+
+StretchEffectBehavior Properties::stretchEffectBehavior = StretchEffectBehavior::ShaderHWUI;
+
+DrawingEnabled Properties::drawingEnabled = DrawingEnabled::NotInitialized;
 
 bool Properties::load() {
-    char property[PROPERTY_VALUE_MAX];
     bool prevDebugLayersUpdates = debugLayersUpdates;
     bool prevDebugOverdraw = debugOverdraw;
-    StencilClipDebug prevDebugStencilClip = debugStencilClip;
 
     debugOverdraw = false;
-    if (property_get(PROPERTY_DEBUG_OVERDRAW, property, nullptr) > 0) {
-        INIT_LOGD("  Overdraw debug enabled: %s", property);
-        if (!strcmp(property, "show")) {
+    std::string debugOverdrawProperty = base::GetProperty(PROPERTY_DEBUG_OVERDRAW, "");
+    if (debugOverdrawProperty != "") {
+        INIT_LOGD("  Overdraw debug enabled: %s", debugOverdrawProperty.c_str());
+        if (debugOverdrawProperty == "show") {
             debugOverdraw = true;
             overdrawColorSet = OverdrawColorSet::Default;
-        } else if (!strcmp(property, "show_deuteranomaly")) {
+        } else if (debugOverdrawProperty == "show_deuteranomaly") {
             debugOverdraw = true;
             overdrawColorSet = OverdrawColorSet::Deuteranomaly;
         }
     }
 
-    // See Properties.h for valid values
-    if (property_get(PROPERTY_DEBUG_STENCIL_CLIP, property, nullptr) > 0) {
-        INIT_LOGD("  Stencil clip debug enabled: %s", property);
-        if (!strcmp(property, "hide")) {
-            debugStencilClip = StencilClipDebug::Hide;
-        } else if (!strcmp(property, "highlight")) {
-            debugStencilClip = StencilClipDebug::ShowHighlight;
-        } else if (!strcmp(property, "region")) {
-            debugStencilClip = StencilClipDebug::ShowRegion;
-        }
-    } else {
-        debugStencilClip = StencilClipDebug::Hide;
-    }
-
     sProfileType = ProfileType::None;
-    if (property_get(PROPERTY_PROFILE, property, "") > 0) {
-        if (!strcmp(property, PROPERTY_PROFILE_VISUALIZE_BARS)) {
+    std::string profileProperty = base::GetProperty(PROPERTY_PROFILE, "");
+    if (profileProperty != "") {
+        if (profileProperty == PROPERTY_PROFILE_VISUALIZE_BARS) {
             sProfileType = ProfileType::Bars;
-        } else if (!strcmp(property, "true")) {
+        } else if (profileProperty == "true") {
             sProfileType = ProfileType::Console;
         }
     }
 
-    debugLayersUpdates = property_get_bool(PROPERTY_DEBUG_LAYERS_UPDATES, false);
+    debugLayersUpdates = base::GetBoolProperty(PROPERTY_DEBUG_LAYERS_UPDATES, false);
     INIT_LOGD("  Layers updates debug enabled: %d", debugLayersUpdates);
 
-    drawDeferDisabled = property_get_bool(PROPERTY_DISABLE_DRAW_DEFER, false);
-    INIT_LOGD("  Draw defer %s", drawDeferDisabled ? "disabled" : "enabled");
+    showDirtyRegions = base::GetBoolProperty(PROPERTY_DEBUG_SHOW_DIRTY_REGIONS, false);
 
-    drawReorderDisabled = property_get_bool(PROPERTY_DISABLE_DRAW_REORDER, false);
-    INIT_LOGD("  Draw reorder %s", drawReorderDisabled ? "disabled" : "enabled");
+    debugLevel = (DebugLevel)base::GetIntProperty(PROPERTY_DEBUG, (int)kDebugDisabled);
 
-    showDirtyRegions = property_get_bool(PROPERTY_DEBUG_SHOW_DIRTY_REGIONS, false);
+    skipEmptyFrames = base::GetBoolProperty(PROPERTY_SKIP_EMPTY_DAMAGE, true);
+    useBufferAge = base::GetBoolProperty(PROPERTY_USE_BUFFER_AGE, true);
+    enablePartialUpdates = base::GetBoolProperty(PROPERTY_ENABLE_PARTIAL_UPDATES, true);
 
-    debugLevel = (DebugLevel)property_get_int(PROPERTY_DEBUG, kDebugDisabled);
+    filterOutTestOverhead = base::GetBoolProperty(PROPERTY_FILTER_TEST_OVERHEAD, false);
 
-    skipEmptyFrames = property_get_bool(PROPERTY_SKIP_EMPTY_DAMAGE, true);
-    useBufferAge = property_get_bool(PROPERTY_USE_BUFFER_AGE, true);
-    enablePartialUpdates = property_get_bool(PROPERTY_ENABLE_PARTIAL_UPDATES, true);
+    skpCaptureEnabled = debuggingEnabled && base::GetBoolProperty(PROPERTY_CAPTURE_SKP_ENABLED, false);
 
-    filterOutTestOverhead = property_get_bool(PROPERTY_FILTER_TEST_OVERHEAD, false);
+    bool skiaBroadTracing = base::GetBoolProperty(PROPERTY_SKIA_TRACING_ENABLED, false);
+    SkAndroidFrameworkTraceUtil::setEnableTracing(skiaBroadTracing);
+    SkAndroidFrameworkTraceUtil::setUsePerfettoTrackEvents(
+            base::GetBoolProperty(PROPERTY_SKIA_USE_PERFETTO_TRACK_EVENTS, false));
+    debugTraceGpuResourceCategories =
+            base::GetBoolProperty(PROPERTY_TRACE_GPU_RESOURCES, skiaBroadTracing);
 
-    skpCaptureEnabled = debuggingEnabled && property_get_bool(PROPERTY_CAPTURE_SKP_ENABLED, false);
+    runningInEmulator = base::GetBoolProperty(PROPERTY_IS_EMULATOR, false);
 
-    runningInEmulator = property_get_bool(PROPERTY_QEMU_KERNEL, false);
+    useHintManager = base::GetBoolProperty(PROPERTY_USE_HINT_MANAGER, false);
+    targetCpuTimePercentage = base::GetIntProperty(PROPERTY_TARGET_CPU_TIME_PERCENTAGE, 70);
+    if (targetCpuTimePercentage <= 0 || targetCpuTimePercentage > 100) targetCpuTimePercentage = 70;
 
-    return (prevDebugLayersUpdates != debugLayersUpdates) || (prevDebugOverdraw != debugOverdraw) ||
-           (prevDebugStencilClip != debugStencilClip);
+    enableWebViewOverlays = base::GetBoolProperty(PROPERTY_WEBVIEW_OVERLAYS_ENABLED, true);
+
+    auto hdrHeadroom = (float)atof(base::GetProperty(PROPERTY_8BIT_HDR_HEADROOM, "").c_str());
+    if (hdrHeadroom >= 1.f) {
+        maxHdrHeadroomOn8bit = std::min(hdrHeadroom, 100.f);
+    }
+
+    // call isDrawingEnabled to force loading of the property
+    isDrawingEnabled();
+
+    clipSurfaceViews =
+            base::GetBoolProperty("debug.hwui.clip_surfaceviews", hwui_flags::clip_surfaceviews());
+    hdr10bitPlus = hwui_flags::hdr_10bit_plus();
+    resampleGainmapRegions = base::GetBoolProperty("debug.hwui.resample_gainmap_regions",
+                                                   hwui_flags::resample_gainmap_regions());
+
+    timeoutMultiplier = android::base::GetIntProperty("ro.hw_timeout_multiplier", 1);
+    skipTelemetry = base::GetBoolProperty(PROPERTY_SKIP_EGLMANAGER_TELEMETRY,
+                                          hwui_flags::skip_eglmanager_telemetry());
+
+    return (prevDebugLayersUpdates != debugLayersUpdates) || (prevDebugOverdraw != debugOverdraw);
 }
 
 void Properties::overrideProperty(const char* name, const char* value) {
@@ -185,41 +234,53 @@ ProfileType Properties::getProfileType() {
     return sProfileType;
 }
 
-RenderPipelineType Properties::getRenderPipelineType() {
+RenderPipelineType Properties::peekRenderPipelineType() {
+    // If sRenderPipelineType has been locked, just return the locked type immediately.
     if (sRenderPipelineType != RenderPipelineType::NotInitialized) {
         return sRenderPipelineType;
     }
-    char prop[PROPERTY_VALUE_MAX];
-    property_get(PROPERTY_RENDERER, prop, "skiagl");
-    if (!strcmp(prop, "skiagl")) {
-        ALOGD("Skia GL Pipeline");
-        sRenderPipelineType = RenderPipelineType::SkiaGL;
-    } else if (!strcmp(prop, "skiavk")) {
-        ALOGD("Skia Vulkan Pipeline");
-        sRenderPipelineType = RenderPipelineType::SkiaVulkan;
-    } else {  //"opengl"
-        ALOGD("HWUI GL Pipeline");
-        sRenderPipelineType = RenderPipelineType::OpenGL;
+    bool useVulkan = use_vulkan().value_or(false);
+    std::string rendererProperty = base::GetProperty(PROPERTY_RENDERER, useVulkan ? "skiavk" : "skiagl");
+    if (rendererProperty == "skiavk") {
+        return RenderPipelineType::SkiaVulkan;
     }
+    return RenderPipelineType::SkiaGL;
+}
+
+RenderPipelineType Properties::getRenderPipelineType() {
+    sRenderPipelineType = peekRenderPipelineType();
     return sRenderPipelineType;
 }
 
 void Properties::overrideRenderPipelineType(RenderPipelineType type) {
-#if !defined(HWUI_GLES_WRAP_ENABLED)
     // If we're doing actual rendering then we can't change the renderer after it's been set.
     // Unit tests can freely change this as often as it wants, though, as there's no actual
     // GL rendering happening
     if (sRenderPipelineType != RenderPipelineType::NotInitialized) {
+        LOG_ALWAYS_FATAL_IF(sRenderPipelineType != type,
+                            "Trying to change pipeline but it's already set");
         return;
     }
-#endif
     sRenderPipelineType = type;
 }
 
-bool Properties::isSkiaEnabled() {
-    auto renderType = getRenderPipelineType();
-    return RenderPipelineType::SkiaGL == renderType || RenderPipelineType::SkiaVulkan == renderType;
+void Properties::setDrawingEnabled(bool newDrawingEnabled) {
+    drawingEnabled = newDrawingEnabled ? DrawingEnabled::On : DrawingEnabled::Off;
+    enableRTAnimations = newDrawingEnabled;
 }
 
-};  // namespace uirenderer
-};  // namespace android
+bool Properties::isDrawingEnabled() {
+    if (drawingEnabled == DrawingEnabled::NotInitialized) {
+        bool drawingEnabledProp = base::GetBoolProperty(PROPERTY_DRAWING_ENABLED, true);
+        drawingEnabled = drawingEnabledProp ? DrawingEnabled::On : DrawingEnabled::Off;
+        enableRTAnimations = drawingEnabledProp;
+    }
+    return drawingEnabled == DrawingEnabled::On;
+}
+
+bool Properties::initializeGlAlways() {
+    return base::GetBoolProperty(PROPERTY_INITIALIZE_GL_ALWAYS, hwui_flags::initialize_gl_always());
+}
+
+}  // namespace uirenderer
+}  // namespace android

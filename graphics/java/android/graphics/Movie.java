@@ -16,7 +16,7 @@
 
 package android.graphics;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.res.AssetManager;
 import android.os.Build;
 
@@ -26,8 +26,9 @@ import java.io.InputStream;
 /**
  * @deprecated Prefer {@link android.graphics.drawable.AnimatedImageDrawable}.
  */
+@Deprecated
 public class Movie {
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private long mNativeMovie;
 
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)

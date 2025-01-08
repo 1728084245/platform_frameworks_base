@@ -16,16 +16,8 @@
 
 package com.android.mediaframeworktest.helpers;
 
-import com.android.ex.camera2.blocking.BlockingCameraManager;
-import com.android.ex.camera2.blocking.BlockingCameraManager.BlockingOpenException;
-import com.android.ex.camera2.blocking.BlockingSessionCallback;
-import com.android.ex.camera2.blocking.BlockingStateCallback;
-import com.android.ex.camera2.exceptions.TimeoutRuntimeException;
-
-import junit.framework.Assert;
-
-import org.mockito.Mockito;
-
+import android.content.AttributionSourceState;
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
@@ -54,7 +46,6 @@ import android.media.Image.Plane;
 import android.media.ImageReader;
 import android.media.ImageWriter;
 import android.os.Build;
-import android.os.Environment;
 import android.os.Handler;
 import android.util.Log;
 import android.util.Pair;
@@ -62,6 +53,18 @@ import android.util.Size;
 import android.view.Display;
 import android.view.Surface;
 import android.view.WindowManager;
+
+import androidx.test.InstrumentationRegistry;
+
+import com.android.ex.camera2.blocking.BlockingCameraManager;
+import com.android.ex.camera2.blocking.BlockingCameraManager.BlockingOpenException;
+import com.android.ex.camera2.blocking.BlockingSessionCallback;
+import com.android.ex.camera2.blocking.BlockingStateCallback;
+import com.android.ex.camera2.exceptions.TimeoutRuntimeException;
+
+import junit.framework.Assert;
+
+import org.mockito.Mockito;
 
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -76,8 +79,8 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Executor;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -128,7 +131,8 @@ public class CameraTestUtils extends Assert {
     private static final Location sTestLocation2 = new Location(LocationManager.NETWORK_PROVIDER);
 
     protected static final String DEBUG_FILE_NAME_BASE =
-            Environment.getExternalStorageDirectory().getPath();
+            InstrumentationRegistry.getInstrumentation().getTargetContext()
+            .getExternalFilesDir(null).getPath();
 
     static {
         sTestLocation0.setTime(1199145600L);
@@ -223,7 +227,7 @@ public class CameraTestUtils extends Assert {
     }
 
     /**
-     * Dummy listener that release the image immediately once it is available.
+     * Mock listener that release the image immediately once it is available.
      *
      * <p>
      * It can be used for the case where we don't care the image data at all.
@@ -857,7 +861,7 @@ public class CameraTestUtils extends Assert {
         // JPEG doesn't have pixelstride and rowstride, treat it as 1D buffer.
         // Same goes for DEPTH_POINT_CLOUD
         if (format == ImageFormat.JPEG || format == ImageFormat.DEPTH_POINT_CLOUD ||
-                format == ImageFormat.RAW_PRIVATE) {
+                format == ImageFormat.DEPTH_JPEG || format == ImageFormat.RAW_PRIVATE) {
             buffer = planes[0].getBuffer();
             assertNotNull("Fail to get jpeg or depth ByteBuffer", buffer);
             data = new byte[buffer.remaining()];
@@ -940,6 +944,7 @@ public class CameraTestUtils extends Assert {
             case ImageFormat.RAW_PRIVATE:
             case ImageFormat.DEPTH16:
             case ImageFormat.DEPTH_POINT_CLOUD:
+            case ImageFormat.DEPTH_JPEG:
                 assertEquals("JPEG/RAW/depth Images should have one plane", 1, planes.length);
                 break;
             default:
@@ -1363,6 +1368,9 @@ public class CameraTestUtils extends Assert {
             case ImageFormat.RAW_PRIVATE:
                 validateRawPrivateData(data, width, height, image.getTimestamp(), filePath);
                 break;
+            case ImageFormat.DEPTH_JPEG:
+                validateDepthJpegData(data, width, height, format, image.getTimestamp(), filePath);
+                break;
             default:
                 throw new UnsupportedOperationException("Unsupported format for validation: "
                         + format);
@@ -1528,6 +1536,23 @@ public class CameraTestUtils extends Assert {
 
     }
 
+    private static void validateDepthJpegData(byte[] depthData, int width, int height, int format,
+            long ts, String filePath) {
+
+        if (VERBOSE) Log.v(TAG, "Validating depth jpeg data");
+
+        // Can't validate size since it is variable
+
+        if (DEBUG && filePath != null) {
+            String fileName =
+                    filePath + "/" + width + "x" + height + "_" + ts / 1e6 + ".jpg";
+            dumpFile(fileName, depthData);
+        }
+
+        return;
+
+    }
+
     public static <T> T getValueNotNull(CaptureResult result, CaptureResult.Key<T> key) {
         if (result == null) {
             throw new IllegalArgumentException("Result must not be null");
@@ -1686,7 +1711,7 @@ public class CameraTestUtils extends Assert {
      * <p>
      * Two images are strongly equal if and only if the data, formats, sizes,
      * and timestamps are same. For {@link ImageFormat#PRIVATE PRIVATE} format
-     * images, the image data is not not accessible thus the data comparison is
+     * images, the image data is not accessible thus the data comparison is
      * effectively skipped as the number of planes is zero.
      * </p>
      * <p>
@@ -1787,7 +1812,7 @@ public class CameraTestUtils extends Assert {
     /**
      * Simple validation of JPEG image size and format.
      * <p>
-     * Only validate the image object sanity. It is fast, but doesn't actually
+     * Only validate the image object consistency. It is fast, but doesn't actually
      * check the buffer data. Assert is used here as it make no sense to
      * continue the test if the jpeg image captured has some serious failures.
      * </p>
@@ -2026,7 +2051,7 @@ public class CameraTestUtils extends Assert {
                     }
                 } else {
                     // Case 2.
-                    collector.expectEquals("Exif orientaiton should match requested orientation",
+                    collector.expectEquals("Exif orientation should match requested orientation",
                             requestedOrientation, getExifOrientationInDegree(exifOrientation,
                             collector));
                 }
@@ -2203,5 +2228,27 @@ public class CameraTestUtils extends Assert {
             return bound;
         else
             return new Size(width, height);
+    }
+
+    /**
+     * Constructs an AttributionSourceState with only the uid, pid, and deviceId fields set
+     *
+     * <p>This method is a temporary stopgap in the transition to using AttributionSource. Currently
+     * AttributionSourceState is only used as a vehicle for passing deviceId, uid, and pid
+     * arguments.</p>
+     */
+    public static AttributionSourceState getClientAttribution(Context context) {
+        // TODO: Send the full contextAttribution over aidl, remove USE_CALLING_*
+        AttributionSourceState contextAttribution =
+                context.getAttributionSource().asState();
+        AttributionSourceState clientAttribution =
+                new AttributionSourceState();
+        clientAttribution.uid = -1; // USE_CALLING_UID
+        clientAttribution.pid = -1; // USE_CALLING_PID
+        clientAttribution.deviceId = contextAttribution.deviceId;
+        clientAttribution.packageName = context.getOpPackageName();
+        clientAttribution.attributionTag = context.getAttributionTag();
+        clientAttribution.next = new AttributionSourceState[0];
+        return clientAttribution;
     }
 }

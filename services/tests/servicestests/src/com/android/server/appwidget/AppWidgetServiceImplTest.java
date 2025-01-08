@@ -16,6 +16,8 @@
 
 package com.android.server.appwidget;
 
+import static com.google.common.truth.Truth.assertThat;
+
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -26,8 +28,12 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.annotation.NonNull;
+import android.annotation.Nullable;
+import android.app.AppOpsManagerInternal;
 import android.app.admin.DevicePolicyManagerInternal;
 import android.appwidget.AppWidgetManager;
+import android.appwidget.AppWidgetManagerInternal;
 import android.appwidget.AppWidgetProviderInfo;
 import android.appwidget.PendingHostUpdate;
 import android.content.BroadcastReceiver;
@@ -36,21 +42,39 @@ import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.LauncherApps;
+import android.content.pm.PackageManagerInternal;
 import android.content.pm.ShortcutServiceInternal;
 import android.os.Handler;
 import android.os.UserHandle;
 import android.test.InstrumentationTestCase;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.util.ArraySet;
+import android.util.AtomicFile;
+import android.util.SparseArray;
+import android.util.Xml;
 import android.widget.RemoteViews;
 
+import androidx.test.filters.SmallTest;
+
+import com.android.frameworks.servicestests.R;
 import com.android.internal.appwidget.IAppWidgetHost;
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
 import com.android.server.LocalServices;
 
 import org.mockito.ArgumentCaptor;
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 
 /**
@@ -73,6 +97,8 @@ public class AppWidgetServiceImplTest extends InstrumentationTestCase {
     private AppWidgetManager mManager;
 
     private ShortcutServiceInternal mMockShortcutService;
+    private PackageManagerInternal mMockPackageManager;
+    private AppOpsManagerInternal mMockAppOpsManagerInternal;
     private IAppWidgetHost mMockHost;
 
     @Override
@@ -80,6 +106,9 @@ public class AppWidgetServiceImplTest extends InstrumentationTestCase {
         super.setUp();
         LocalServices.removeServiceForTest(DevicePolicyManagerInternal.class);
         LocalServices.removeServiceForTest(ShortcutServiceInternal.class);
+        LocalServices.removeServiceForTest(AppWidgetManagerInternal.class);
+        LocalServices.removeServiceForTest(PackageManagerInternal.class);
+        LocalServices.removeServiceForTest(AppOpsManagerInternal.class);
 
         mTestContext = new TestContext();
         mPkgName = mTestContext.getOpPackageName();
@@ -87,9 +116,42 @@ public class AppWidgetServiceImplTest extends InstrumentationTestCase {
         mManager = new AppWidgetManager(mTestContext, mService);
 
         mMockShortcutService = mock(ShortcutServiceInternal.class);
+        mMockPackageManager = mock(PackageManagerInternal.class);
+        mMockAppOpsManagerInternal = mock(AppOpsManagerInternal.class);
         mMockHost = mock(IAppWidgetHost.class);
         LocalServices.addService(ShortcutServiceInternal.class, mMockShortcutService);
+        LocalServices.addService(PackageManagerInternal.class, mMockPackageManager);
+        LocalServices.addService(AppOpsManagerInternal.class, mMockAppOpsManagerInternal);
+        when(mMockPackageManager.filterAppAccess(anyString(), anyInt(), anyInt()))
+                .thenReturn(false);
         mService.onStart();
+        mService.systemServicesReady();
+    }
+
+    public void testLoadDescription() {
+        AppWidgetProviderInfo info =
+                mManager.getInstalledProvidersForPackage(mPkgName, null).get(0);
+        assertEquals(info.loadDescription(mTestContext), "widget description string");
+    }
+
+    public void testParseSizeConfiguration() {
+        AppWidgetProviderInfo info =
+                mManager.getInstalledProvidersForPackage(mPkgName, null).get(0);
+
+        assertThat(info.minWidth).isEqualTo(getDimensionResource(R.dimen.widget_min_width));
+        assertThat(info.minHeight).isEqualTo(getDimensionResource(R.dimen.widget_min_height));
+        assertThat(info.minResizeWidth)
+                .isEqualTo(getDimensionResource(R.dimen.widget_min_resize_width));
+        assertThat(info.minResizeHeight)
+                .isEqualTo(getDimensionResource(R.dimen.widget_min_resize_height));
+        assertThat(info.maxResizeWidth)
+                .isEqualTo(getDimensionResource(R.dimen.widget_max_resize_width));
+        assertThat(info.maxResizeHeight)
+                .isEqualTo(getDimensionResource(R.dimen.widget_max_resize_height));
+        assertThat(info.targetCellWidth)
+                .isEqualTo(getIntegerResource(R.integer.widget_target_cell_width));
+        assertThat(info.targetCellHeight)
+                .isEqualTo(getIntegerResource(R.integer.widget_target_cell_height));
     }
 
     public void testRequestPinAppWidget_otherProvider() {
@@ -107,7 +169,7 @@ public class AppWidgetServiceImplTest extends InstrumentationTestCase {
     }
 
     public void testRequestPinAppWidget() {
-        ComponentName provider = new ComponentName(mTestContext, DummyAppWidget.class);
+        ComponentName provider = new ComponentName(mTestContext, TestAppWidgetProvider.class);
         // Set up users.
         when(mMockShortcutService.requestPinAppWidget(anyString(),
                 any(AppWidgetProviderInfo.class), eq(null), eq(null), anyInt()))
@@ -174,7 +236,7 @@ public class AppWidgetServiceImplTest extends InstrumentationTestCase {
     }
 
     /**
-     * Sends dummy widget updates to {@link #mManager}.
+     * Sends placeholder widget updates to {@link #mManager}.
      * @param widgetId widget to update
      * @param viewIds a list of view ids for which
      *                {@link AppWidgetManager#notifyAppWidgetViewDataChanged} will be called
@@ -232,6 +294,16 @@ public class AppWidgetServiceImplTest extends InstrumentationTestCase {
         assertEquals(4, updates.size());
     }
 
+    public void testReceiveBroadcastBehavior_enableAndUpdate() {
+        TestAppWidgetProvider testAppWidgetProvider = new TestAppWidgetProvider();
+        Intent intent = new Intent(AppWidgetManager.ACTION_APPWIDGET_ENABLE_AND_UPDATE);
+
+        testAppWidgetProvider.onReceive(mTestContext, intent);
+
+        assertTrue(testAppWidgetProvider.isBehaviorSuccess());
+    }
+
+
     public void testUpdatesReceived_queueNotEmpty_multipleWidgetIdProvided() {
         int widgetId = setupHostAndWidget();
         int widgetId2 = bindNewWidget();
@@ -285,6 +357,128 @@ public class AppWidgetServiceImplTest extends InstrumentationTestCase {
         }
     }
 
+    public void testGetPreviewLayout() {
+        AppWidgetProviderInfo info =
+                mManager.getInstalledProvidersForPackage(mPkgName, null).get(0);
+
+        assertThat(info.previewLayout).isEqualTo(R.layout.widget_preview);
+    }
+
+    public void testWidgetProviderInfoPersistence() throws IOException {
+        final AppWidgetProviderInfo original = new AppWidgetProviderInfo();
+        original.minWidth = 40;
+        original.minHeight = 40;
+        original.maxResizeWidth = 250;
+        original.maxResizeHeight = 120;
+        original.targetCellWidth = 1;
+        original.targetCellHeight = 1;
+        original.updatePeriodMillis = 86400000;
+        original.previewLayout = R.layout.widget_preview;
+        original.label = "test";
+
+        final File file = new File(mTestContext.getDataDir(), "appwidget_provider_info.xml");
+        saveWidgetProviderInfoLocked(file, original);
+        final AppWidgetProviderInfo target = loadAppWidgetProviderInfoLocked(file);
+
+        assertThat(target.minWidth).isEqualTo(original.minWidth);
+        assertThat(target.minHeight).isEqualTo(original.minHeight);
+        assertThat(target.minResizeWidth).isEqualTo(original.minResizeWidth);
+        assertThat(target.minResizeHeight).isEqualTo(original.minResizeHeight);
+        assertThat(target.maxResizeWidth).isEqualTo(original.maxResizeWidth);
+        assertThat(target.maxResizeHeight).isEqualTo(original.maxResizeHeight);
+        assertThat(target.targetCellWidth).isEqualTo(original.targetCellWidth);
+        assertThat(target.targetCellHeight).isEqualTo(original.targetCellHeight);
+        assertThat(target.updatePeriodMillis).isEqualTo(original.updatePeriodMillis);
+        assertThat(target.previewLayout).isEqualTo(original.previewLayout);
+    }
+
+    public void testBackupRestoreControllerStatePersistence() throws IOException {
+        // Setup mock data
+        final Set<String> mockPrunedApps = getMockPrunedApps();
+        final SparseArray<
+                List<AppWidgetServiceImpl.BackupRestoreController.RestoreUpdateRecord>
+                > mockUpdatesByProvider = getMockUpdates();
+        final  SparseArray<
+                List<AppWidgetServiceImpl.BackupRestoreController.RestoreUpdateRecord>
+                > mockUpdatesByHost = getMockUpdates();
+        final AppWidgetServiceImpl.BackupRestoreController.State state =
+                new AppWidgetServiceImpl.BackupRestoreController.State(
+                        mockPrunedApps, mockUpdatesByProvider, mockUpdatesByHost);
+
+        final File file = new File(mTestContext.getDataDir(), "state.xml");
+        saveBackupRestoreControllerState(file, state);
+        final AppWidgetServiceImpl.BackupRestoreController.State target =
+                loadStateLocked(file);
+        assertNotNull(target);
+        final SparseArray<List<AppWidgetServiceImpl.BackupRestoreController.RestoreUpdateRecord>>
+                actualUpdatesByProvider = target.getUpdatesByProvider();
+        assertNotNull(actualUpdatesByProvider);
+        final SparseArray<List<AppWidgetServiceImpl.BackupRestoreController.RestoreUpdateRecord>>
+                actualUpdatesByHost = target.getUpdatesByHost();
+        assertNotNull(actualUpdatesByHost);
+
+        assertEquals(mockPrunedApps, target.getPrunedApps());
+        for (int i = 0; i < mockUpdatesByProvider.size(); i++) {
+            final int key = mockUpdatesByProvider.keyAt(i);
+            verifyRestoreUpdateRecord(
+                    actualUpdatesByProvider.get(key), mockUpdatesByProvider.get(key));
+        }
+        for (int i = 0; i < mockUpdatesByHost.size(); i++) {
+            final int key = mockUpdatesByHost.keyAt(i);
+            verifyRestoreUpdateRecord(
+                    actualUpdatesByHost.get(key), mockUpdatesByHost.get(key));
+        }
+    }
+
+    private void verifyRestoreUpdateRecord(
+            @NonNull final List<AppWidgetServiceImpl.BackupRestoreController.RestoreUpdateRecord>
+                    actualUpdates,
+            @NonNull final List<AppWidgetServiceImpl.BackupRestoreController.RestoreUpdateRecord>
+                    expectedUpdates) {
+        assertEquals(expectedUpdates.size(), actualUpdates.size());
+        for (int i = 0; i < expectedUpdates.size(); i++) {
+            final AppWidgetServiceImpl.BackupRestoreController.RestoreUpdateRecord expected =
+                    expectedUpdates.get(i);
+            final AppWidgetServiceImpl.BackupRestoreController.RestoreUpdateRecord actual =
+                    actualUpdates.get(i);
+            assertEquals(expected.oldId, actual.oldId);
+            assertEquals(expected.newId, actual.newId);
+            assertEquals(expected.notified, actual.notified);
+        }
+    }
+
+    @NonNull
+    private static Set<String> getMockPrunedApps() {
+        final Set<String> mockPrunedApps = new ArraySet<>(10);
+        for (int i = 0; i < 10; i++) {
+            mockPrunedApps.add("com.example.app" + i);
+        }
+        return mockPrunedApps;
+    }
+
+    @NonNull
+    private static SparseArray<
+            List<AppWidgetServiceImpl.BackupRestoreController.RestoreUpdateRecord>
+            > getMockUpdates() {
+        final SparseArray<List<
+                AppWidgetServiceImpl.BackupRestoreController.RestoreUpdateRecord>> ret =
+                new SparseArray<>(4);
+        ret.put(0, new ArrayList<>());
+        for (int i = 0; i < 5; i++) {
+            final AppWidgetServiceImpl.BackupRestoreController.RestoreUpdateRecord record =
+                    new AppWidgetServiceImpl.BackupRestoreController.RestoreUpdateRecord(
+                            5 - i, i);
+            record.notified = (i % 2 == 1);
+            final int key = (i < 3) ? 1 : 2;
+            if (!ret.contains(key)) {
+                ret.put(key, new ArrayList<>());
+            }
+            ret.get(key).add(record);
+        }
+        ret.put(3, new ArrayList<>());
+        return ret;
+    }
+
     private int setupHostAndWidget() {
         List<PendingHostUpdate> updates = mService.startListening(
                 mMockHost, mPkgName, HOST_ID, new int[0]).getList();
@@ -293,7 +487,7 @@ public class AppWidgetServiceImplTest extends InstrumentationTestCase {
     }
 
     private int bindNewWidget() {
-        ComponentName provider = new ComponentName(mTestContext, DummyAppWidget.class);
+        ComponentName provider = new ComponentName(mTestContext, TestAppWidgetProvider.class);
         int widgetId = mService.allocateAppWidgetId(mPkgName, HOST_ID);
         assertTrue(mManager.bindAppWidgetIdIfAllowed(widgetId, provider));
         assertEquals(provider, mManager.getAppWidgetInfo(widgetId).provider);
@@ -305,6 +499,86 @@ public class AppWidgetServiceImplTest extends InstrumentationTestCase {
         CountDownLatch latch = new CountDownLatch(1);
         new Handler(mTestContext.getMainLooper()).post(latch::countDown);
         latch.await();
+    }
+
+    private int getDimensionResource(int resId) {
+        return mTestContext.getResources().getDimensionPixelSize(resId);
+    }
+
+    private int getIntegerResource(int resId) {
+        return mTestContext.getResources().getInteger(resId);
+    }
+
+    private static void saveBackupRestoreControllerState(
+            @NonNull final File dst,
+            @Nullable final AppWidgetServiceImpl.BackupRestoreController.State state)
+            throws IOException {
+        Objects.requireNonNull(dst);
+        if (state == null) {
+            return;
+        }
+        final AtomicFile file = new AtomicFile(dst);
+        final FileOutputStream stream = file.startWrite();
+        final TypedXmlSerializer out = Xml.resolveSerializer(stream);
+        out.startDocument(null, true);
+        AppWidgetXmlUtil.writeBackupRestoreControllerState(out, state);
+        out.endDocument();
+        file.finishWrite(stream);
+    }
+
+    private static AppWidgetServiceImpl.BackupRestoreController.State loadStateLocked(
+            @NonNull final File dst) {
+        Objects.requireNonNull(dst);
+        final AtomicFile file = new AtomicFile(dst);
+        try (FileInputStream stream = file.openRead()) {
+            final TypedXmlPullParser parser = Xml.resolvePullParser(stream);
+            int type;
+            while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
+                    && type != XmlPullParser.START_TAG) {
+                // drain whitespace, comments, etc.
+            }
+            return AppWidgetXmlUtil.readBackupRestoreControllerState(parser);
+        } catch (IOException | XmlPullParserException e) {
+            return null;
+        }
+    }
+
+    private static void saveWidgetProviderInfoLocked(@NonNull final File dst,
+            @Nullable final AppWidgetProviderInfo info)
+            throws IOException {
+        Objects.requireNonNull(dst);
+        if (info == null) {
+            return;
+        }
+        final AtomicFile file = new AtomicFile(dst);
+        final FileOutputStream stream = file.startWrite();
+        final TypedXmlSerializer out = Xml.resolveSerializer(stream);
+        out.startDocument(null, true);
+        out.startTag(null, "p");
+        AppWidgetXmlUtil.writeAppWidgetProviderInfoLocked(out, info);
+        out.endTag(null, "p");
+        out.endDocument();
+        file.finishWrite(stream);
+    }
+
+    public static AppWidgetProviderInfo loadAppWidgetProviderInfoLocked(@NonNull final File dst) {
+        Objects.requireNonNull(dst);
+        final AtomicFile file = new AtomicFile(dst);
+        try (FileInputStream stream = file.openRead()) {
+            final TypedXmlPullParser parser = Xml.resolvePullParser(stream);
+            int type;
+            while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
+                    && type != XmlPullParser.START_TAG) {
+                // drain whitespace, comments, etc.
+            }
+            final String nodeName = parser.getName();
+            if (!"p".equals(nodeName)) {
+                return null;
+            }
+            return AppWidgetXmlUtil.readAppWidgetProviderInfoLocked(parser);
+        } catch (IOException | XmlPullParserException e) {
+            return null;
+        }
     }
 
     private class TestContext extends ContextWrapper {

@@ -16,19 +16,19 @@
 
 #include "JankTracker.h"
 
+#include <cutils/ashmem.h>
+#include <cutils/trace.h>
 #include <errno.h>
 #include <inttypes.h>
-#include <sys/mman.h>
+#include <log/log.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <limits>
-
-#include <cutils/ashmem.h>
-#include <log/log.h>
 #include <sstream>
 
+#include "DeviceInfo.h"
 #include "Properties.h"
 #include "utils/TimeUtils.h"
 #include "utils/Trace.h"
@@ -78,11 +78,13 @@ static const int64_t EXEMPT_FRAMES_FLAGS = FrameInfoFlags::SurfaceCanvas;
 // and filter it out of the frame profile data
 static FrameInfoIndex sFrameStart = FrameInfoIndex::IntendedVsync;
 
-JankTracker::JankTracker(ProfileDataContainer* globalData, const DisplayInfo& displayInfo) {
+JankTracker::JankTracker(ProfileDataContainer* globalData)
+        : mData(globalData->getDataMutex())
+        , mDataMutex(globalData->getDataMutex()) {
     mGlobalData = globalData;
-    nsecs_t frameIntervalNanos = static_cast<nsecs_t>(1_s / displayInfo.fps);
-    nsecs_t sfOffset = frameIntervalNanos - (displayInfo.presentationDeadline - 1_ms);
-    nsecs_t offsetDelta = sfOffset - displayInfo.appVsyncOffset;
+    nsecs_t frameIntervalNanos = DeviceInfo::getVsyncPeriod();
+    nsecs_t sfOffset = DeviceInfo::getCompositorOffset();
+    nsecs_t offsetDelta = sfOffset - DeviceInfo::getAppOffset();
     // There are two different offset cases. If the offsetDelta is positive
     // and small, then the intention is to give apps extra time by leveraging
     // pipelining between the UI & RT threads. If the offsetDelta is large or
@@ -92,39 +94,93 @@ JankTracker::JankTracker(ProfileDataContainer* globalData, const DisplayInfo& di
         // SF will begin composition at VSYNC-app + offsetDelta. If we are triple
         // buffered, this is the expected time at which dequeueBuffer will
         // return due to the staggering of VSYNC-app & VSYNC-sf.
-        mDequeueTimeForgiveness = offsetDelta + 4_ms;
+        mDequeueTimeForgivenessLegacy = offsetDelta + 4_ms;
     }
-    setFrameInterval(frameIntervalNanos);
+    mFrameIntervalLegacy = frameIntervalNanos;
 }
 
-void JankTracker::setFrameInterval(nsecs_t frameInterval) {
-    mFrameInterval = frameInterval;
-
-    for (auto& comparison : COMPARISONS) {
-        mThresholds[comparison.type] = comparison.computeThreadshold(frameInterval);
-    }
-}
-
-void JankTracker::finishFrame(const FrameInfo& frame) {
+void JankTracker::calculateLegacyJank(FrameInfo& frame) REQUIRES(mDataMutex) {
     // Fast-path for jank-free frames
-    int64_t totalDuration = frame.duration(sFrameStart, FrameInfoIndex::FrameCompleted);
-    if (mDequeueTimeForgiveness && frame[FrameInfoIndex::DequeueBufferDuration] > 500_us) {
-        nsecs_t expectedDequeueDuration = mDequeueTimeForgiveness + frame[FrameInfoIndex::Vsync] -
-                                          frame[FrameInfoIndex::IssueDrawCommandsStart];
+    int64_t totalDuration = frame.duration(sFrameStart, FrameInfoIndex::SwapBuffersCompleted);
+    if (mDequeueTimeForgivenessLegacy && frame[FrameInfoIndex::DequeueBufferDuration] > 500_us) {
+        nsecs_t expectedDequeueDuration = mDequeueTimeForgivenessLegacy
+                                          + frame[FrameInfoIndex::Vsync]
+                                          - frame[FrameInfoIndex::IssueDrawCommandsStart];
         if (expectedDequeueDuration > 0) {
             // Forgive only up to the expected amount, but not more than
             // the actual time spent blocked.
             nsecs_t forgiveAmount =
                     std::min(expectedDequeueDuration, frame[FrameInfoIndex::DequeueBufferDuration]);
-            LOG_ALWAYS_FATAL_IF(forgiveAmount >= totalDuration,
-                                "Impossible dequeue duration! dequeue duration reported %" PRId64
-                                ", total duration %" PRId64,
-                                forgiveAmount, totalDuration);
+            if (forgiveAmount >= totalDuration) {
+                ALOGV("Impossible dequeue duration! dequeue duration reported %" PRId64
+                      ", total duration %" PRId64,
+                      forgiveAmount, totalDuration);
+                return;
+            }
             totalDuration -= forgiveAmount;
         }
     }
 
-    LOG_ALWAYS_FATAL_IF(totalDuration <= 0, "Impossible totalDuration %" PRId64, totalDuration);
+    if (totalDuration <= 0) {
+        ALOGV("Impossible totalDuration %" PRId64 " start=%" PRIi64 " gpuComplete=%" PRIi64,
+              totalDuration, frame[FrameInfoIndex::IntendedVsync],
+              frame[FrameInfoIndex::GpuCompleted]);
+        return;
+    }
+
+    // Only things like Surface.lockHardwareCanvas() are exempt from tracking
+    if (CC_UNLIKELY(frame[FrameInfoIndex::Flags] & EXEMPT_FRAMES_FLAGS)) {
+        return;
+    }
+
+    if (totalDuration > mFrameIntervalLegacy) {
+        mData->reportJankLegacy();
+        (*mGlobalData)->reportJankLegacy();
+    }
+
+    if (mSwapDeadlineLegacy < 0) {
+        mSwapDeadlineLegacy = frame[FrameInfoIndex::IntendedVsync] + mFrameIntervalLegacy;
+    }
+    bool isTripleBuffered = (mSwapDeadlineLegacy - frame[FrameInfoIndex::IntendedVsync])
+            > (mFrameIntervalLegacy * 0.1);
+
+    mSwapDeadlineLegacy = std::max(mSwapDeadlineLegacy + mFrameIntervalLegacy,
+                             frame[FrameInfoIndex::IntendedVsync] + mFrameIntervalLegacy);
+
+    // If we hit the deadline, cool!
+    if (frame[FrameInfoIndex::FrameCompleted] < mSwapDeadlineLegacy
+            || totalDuration < mFrameIntervalLegacy) {
+        if (isTripleBuffered) {
+            mData->reportJankType(JankType::kHighInputLatency);
+            (*mGlobalData)->reportJankType(JankType::kHighInputLatency);
+        }
+        return;
+    }
+
+    mData->reportJankType(JankType::kMissedDeadlineLegacy);
+    (*mGlobalData)->reportJankType(JankType::kMissedDeadlineLegacy);
+
+    // Janked, reset the swap deadline
+    nsecs_t jitterNanos = frame[FrameInfoIndex::FrameCompleted] - frame[FrameInfoIndex::Vsync];
+    nsecs_t lastFrameOffset = jitterNanos % mFrameIntervalLegacy;
+    mSwapDeadlineLegacy = frame[FrameInfoIndex::FrameCompleted]
+            - lastFrameOffset + mFrameIntervalLegacy;
+}
+
+void JankTracker::finishFrame(FrameInfo& frame, std::unique_ptr<FrameMetricsReporter>& reporter,
+                              int64_t frameNumber, int32_t surfaceControlId) {
+    std::lock_guard lock(mDataMutex);
+
+    calculateLegacyJank(frame);
+
+    // Fast-path for jank-free frames
+    int64_t totalDuration = frame.duration(FrameInfoIndex::IntendedVsync,
+            FrameInfoIndex::FrameCompleted);
+
+    if (totalDuration <= 0) {
+        ALOGV("Impossible totalDuration %" PRId64, totalDuration);
+        return;
+    }
     mData->reportFrame(totalDuration);
     (*mGlobalData)->reportFrame(totalDuration);
 
@@ -133,57 +189,96 @@ void JankTracker::finishFrame(const FrameInfo& frame) {
         return;
     }
 
-    if (totalDuration > mFrameInterval) {
-        mData->reportJank();
-        (*mGlobalData)->reportJank();
+    int64_t frameInterval = frame[FrameInfoIndex::FrameInterval];
+
+    // If we starter earlier than the intended frame start assuming an unstuffed scenario, it means
+    // that we are in a triple buffering situation.
+    bool isTripleBuffered = (mNextFrameStartUnstuffed - frame[FrameInfoIndex::IntendedVsync])
+                    > (frameInterval * 0.1);
+
+    int64_t deadline = frame[FrameInfoIndex::FrameDeadline];
+
+    // If we are in triple buffering, we have enough buffers in queue to sustain a single frame
+    // drop without jank, so adjust the frame interval to the deadline.
+    if (isTripleBuffered) {
+        int64_t originalDeadlineDuration = deadline - frame[FrameInfoIndex::IntendedVsync];
+        deadline = mNextFrameStartUnstuffed + originalDeadlineDuration;
+        frame.set(FrameInfoIndex::FrameDeadline) = deadline;
     }
 
-    bool isTripleBuffered = (mSwapDeadline - frame[FrameInfoIndex::IntendedVsync]) > (mFrameInterval * 0.1);
-
-    mSwapDeadline = std::max(mSwapDeadline + mFrameInterval,
-                             frame[FrameInfoIndex::IntendedVsync] + mFrameInterval);
-
     // If we hit the deadline, cool!
-    if (frame[FrameInfoIndex::FrameCompleted] < mSwapDeadline || totalDuration < mFrameInterval) {
+    if (frame[FrameInfoIndex::GpuCompleted] < deadline) {
         if (isTripleBuffered) {
             mData->reportJankType(JankType::kHighInputLatency);
             (*mGlobalData)->reportJankType(JankType::kHighInputLatency);
+
+            // Buffer stuffing state gets carried over to next frame, unless there is a "pause"
+            mNextFrameStartUnstuffed += frameInterval;
         }
+    } else {
+        mData->reportJankType(JankType::kMissedDeadline);
+        (*mGlobalData)->reportJankType(JankType::kMissedDeadline);
+        mData->reportJank();
+        (*mGlobalData)->reportJank();
+
+        // Janked, store the adjust deadline to detect triple buffering in next frame correctly.
+        nsecs_t jitterNanos = frame[FrameInfoIndex::GpuCompleted]
+                - frame[FrameInfoIndex::Vsync];
+        nsecs_t lastFrameOffset = jitterNanos % frameInterval;
+
+        // Note the time when the next frame would start in an unstuffed situation. If it starts
+        // earlier, we are in a stuffed situation.
+        mNextFrameStartUnstuffed = frame[FrameInfoIndex::GpuCompleted]
+                - lastFrameOffset + frameInterval;
+
+        recomputeThresholds(frameInterval);
+        for (auto& comparison : COMPARISONS) {
+            int64_t delta = frame.duration(comparison.start, comparison.end);
+            if (delta >= mThresholds[comparison.type] && delta < IGNORE_EXCEEDING) {
+                mData->reportJankType(comparison.type);
+                (*mGlobalData)->reportJankType(comparison.type);
+            }
+        }
+
+        // Log daveys since they are weird and we don't know what they are (b/70339576)
+        if (totalDuration >= 700_ms) {
+            static int sDaveyCount = 0;
+            std::stringstream ss;
+            ss << "Davey! duration=" << ns2ms(totalDuration) << "ms; ";
+            for (size_t i = 0; i < static_cast<size_t>(FrameInfoIndex::NumIndexes); i++) {
+                ss << FrameInfoNames[i] << "=" << frame[i] << ", ";
+            }
+            ALOGI("%s", ss.str().c_str());
+            // Just so we have something that counts up, the value is largely irrelevant
+            ATRACE_INT(ss.str().c_str(), ++sDaveyCount);
+        }
+    }
+
+    int64_t totalGPUDrawTime = frame.gpuDrawTime();
+    if (totalGPUDrawTime >= 0) {
+        mData->reportGPUFrame(totalGPUDrawTime);
+        (*mGlobalData)->reportGPUFrame(totalGPUDrawTime);
+    }
+
+    if (CC_UNLIKELY(reporter.get() != nullptr)) {
+        reporter->reportFrameMetrics(frame.data(), false /* hasPresentTime */, frameNumber,
+                                     surfaceControlId);
+    }
+}
+
+void JankTracker::recomputeThresholds(int64_t frameBudget) REQUIRES(mDataMutex) {
+    if (mThresholdsFrameBudget == frameBudget) {
         return;
     }
-
-    mData->reportJankType(JankType::kMissedDeadline);
-    (*mGlobalData)->reportJankType(JankType::kMissedDeadline);
-
-    // Janked, reset the swap deadline
-    nsecs_t jitterNanos = frame[FrameInfoIndex::FrameCompleted] - frame[FrameInfoIndex::Vsync];
-    nsecs_t lastFrameOffset = jitterNanos % mFrameInterval;
-    mSwapDeadline = frame[FrameInfoIndex::FrameCompleted] - lastFrameOffset + mFrameInterval;
-
+    mThresholdsFrameBudget = frameBudget;
     for (auto& comparison : COMPARISONS) {
-        int64_t delta = frame.duration(comparison.start, comparison.end);
-        if (delta >= mThresholds[comparison.type] && delta < IGNORE_EXCEEDING) {
-            mData->reportJankType(comparison.type);
-            (*mGlobalData)->reportJankType(comparison.type);
-        }
-    }
-
-    // Log daveys since they are weird and we don't know what they are (b/70339576)
-    if (totalDuration >= 700_ms) {
-        static int sDaveyCount = 0;
-        std::stringstream ss;
-        ss << "Davey! duration=" << ns2ms(totalDuration) << "ms; ";
-        for (size_t i = 0; i < static_cast<size_t>(FrameInfoIndex::NumIndexes); i++) {
-            ss << FrameInfoNames[i] << "=" << frame[i] << ", ";
-        }
-        ALOGI("%s", ss.str().c_str());
-        // Just so we have something that counts up, the value is largely irrelevant
-        ATRACE_INT(ss.str().c_str(), ++sDaveyCount);
+        mThresholds[comparison.type] = comparison.computeThreadshold(frameBudget);
     }
 }
 
 void JankTracker::dumpData(int fd, const ProfileDataDescription* description,
                            const ProfileData* data) {
+#ifdef __ANDROID__
     if (description) {
         switch (description->type) {
             case JankTrackerType::Generic:
@@ -201,12 +296,14 @@ void JankTracker::dumpData(int fd, const ProfileDataDescription* description,
     }
     data->dump(fd);
     dprintf(fd, "\n");
+#endif
 }
 
 void JankTracker::dumpFrames(int fd) {
+#ifdef __ANDROID__
     dprintf(fd, "\n\n---PROFILEDATA---\n");
     for (size_t i = 0; i < static_cast<size_t>(FrameInfoIndex::NumIndexes); i++) {
-        dprintf(fd, "%s", FrameInfoNames[i].c_str());
+        dprintf(fd, "%s", FrameInfoNames[i]);
         dprintf(fd, ",");
     }
     for (size_t i = 0; i < mFrames.size(); i++) {
@@ -220,9 +317,10 @@ void JankTracker::dumpFrames(int fd) {
         }
     }
     dprintf(fd, "\n---PROFILEDATA---\n\n");
+#endif
 }
 
-void JankTracker::reset() {
+void JankTracker::reset() REQUIRES(mDataMutex) {
     mFrames.clear();
     mData->reset();
     (*mGlobalData)->reset();

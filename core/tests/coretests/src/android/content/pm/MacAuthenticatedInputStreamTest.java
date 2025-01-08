@@ -16,8 +16,12 @@
 
 package android.content.pm;
 
-import android.support.test.filters.LargeTest;
+import android.platform.test.annotations.Presubmit;
 import android.test.AndroidTestCase;
+
+import androidx.test.filters.LargeTest;
+
+import libcore.io.Streams;
 
 import java.io.ByteArrayInputStream;
 import java.util.Arrays;
@@ -26,8 +30,7 @@ import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 
-import libcore.io.Streams;
-
+@Presubmit
 @LargeTest
 public class MacAuthenticatedInputStreamTest extends AndroidTestCase {
 

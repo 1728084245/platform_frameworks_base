@@ -21,7 +21,8 @@ import android.content.ContentResolver;
 import android.os.Bundle;
 import android.os.PersistableBundle;
 import android.test.AndroidTestCase;
-import android.test.suitebuilder.annotation.SmallTest;
+
+import androidx.test.filters.SmallTest;
 
 /**
  * Test for SyncOperation.
@@ -124,8 +125,9 @@ public class SyncOperationTest extends AndroidTestCase {
         SyncOperation op2 = SyncOperation.maybeCreateFromJobExtras(pb);
 
         assertTrue("Account fields in extras not persisted.",
-                account1.equals(op2.extras.get("acc")));
-        assertTrue("Fields in extras not persisted", "String".equals(op2.extras.getString("str")));
+                account1.equals(op2.getClonedExtras().get("acc")));
+        assertTrue("Fields in extras not persisted", "String".equals(
+                op2.getClonedExtras().getString("str")));
     }
 
     @SmallTest
@@ -151,5 +153,26 @@ public class SyncOperationTest extends AndroidTestCase {
         assertFalse("Conversion to oneoff sync failed.", oneoff.isPeriodic);
         assertEquals("Period not restored", periodic.periodMillis, oneoff.periodMillis);
         assertEquals("Flex not restored", periodic.flexMillis, oneoff.flexMillis);
+    }
+
+    @SmallTest
+    public void testScheduleAsEjIsInExtras() {
+        Account account1 = new Account("account1", "type1");
+        Bundle b1 = new Bundle();
+        b1.putBoolean(ContentResolver.SYNC_EXTRAS_SCHEDULE_AS_EXPEDITED_JOB, true);
+
+        SyncOperation op1 = new SyncOperation(account1, 0, 1, "foo", 0,
+                SyncOperation.REASON_USER_START, "authority1", b1, false,
+                ContentResolver.SYNC_EXEMPTION_NONE);
+        assertTrue(op1.isScheduledAsExpeditedJob());
+
+        PersistableBundle pb = op1.toJobInfoExtras();
+        assertTrue("EJ extra not found in job extras",
+                ((PersistableBundle) pb.get("syncExtras"))
+                        .containsKey(ContentResolver.SYNC_EXTRAS_SCHEDULE_AS_EXPEDITED_JOB));
+
+        SyncOperation op2 = SyncOperation.maybeCreateFromJobExtras(pb);
+        assertTrue("EJ extra not found in extras", op2.getClonedExtras()
+                .getBoolean(ContentResolver.SYNC_EXTRAS_SCHEDULE_AS_EXPEDITED_JOB));
     }
 }

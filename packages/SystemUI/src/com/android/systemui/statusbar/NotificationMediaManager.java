@@ -15,22 +15,48 @@
  */
 package com.android.systemui.statusbar;
 
+import static com.android.systemui.Flags.mediaControlsUserInitiatedDeleteintent;
+import static com.android.systemui.Flags.notificationMediaManagerBackgroundExecution;
+
+import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.app.Notification;
 import android.content.Context;
+import android.graphics.drawable.Icon;
 import android.media.MediaMetadata;
 import android.media.session.MediaController;
 import android.media.session.MediaSession;
-import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
-import android.os.UserHandle;
+import android.os.Handler;
+import android.service.notification.NotificationStats;
+import android.service.notification.StatusBarNotification;
 import android.util.Log;
 
-import com.android.systemui.Dumpable;
+import androidx.annotation.VisibleForTesting;
 
-import java.io.FileDescriptor;
+import com.android.systemui.Dumpable;
+import com.android.systemui.dagger.qualifiers.Background;
+import com.android.systemui.dagger.qualifiers.Main;
+import com.android.systemui.dump.DumpManager;
+import com.android.systemui.media.controls.domain.pipeline.MediaDataManager;
+import com.android.systemui.media.controls.shared.model.MediaData;
+import com.android.systemui.media.controls.shared.model.SmartspaceMediaData;
+import com.android.systemui.statusbar.dagger.CentralSurfacesModule;
+import com.android.systemui.statusbar.notification.collection.NotifCollection;
+import com.android.systemui.statusbar.notification.collection.NotifPipeline;
+import com.android.systemui.statusbar.notification.collection.NotificationEntry;
+import com.android.systemui.statusbar.notification.collection.notifcollection.DismissedByUserStats;
+import com.android.systemui.statusbar.notification.collection.notifcollection.NotifCollectionListener;
+import com.android.systemui.statusbar.notification.collection.render.NotificationVisibilityProvider;
+
 import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.Executor;
 
 /**
  * Handles tasks and state related to media notifications. For example, there is a 'current' media
@@ -40,16 +66,36 @@ public class NotificationMediaManager implements Dumpable {
     private static final String TAG = "NotificationMediaManager";
     public static final boolean DEBUG_MEDIA = false;
 
+    private static final HashSet<Integer> PAUSED_MEDIA_STATES = new HashSet<>();
+    private static final HashSet<Integer> CONNECTING_MEDIA_STATES = new HashSet<>();
+    static {
+        PAUSED_MEDIA_STATES.add(PlaybackState.STATE_NONE);
+        PAUSED_MEDIA_STATES.add(PlaybackState.STATE_STOPPED);
+        PAUSED_MEDIA_STATES.add(PlaybackState.STATE_PAUSED);
+        PAUSED_MEDIA_STATES.add(PlaybackState.STATE_ERROR);
+        CONNECTING_MEDIA_STATES.add(PlaybackState.STATE_CONNECTING);
+        CONNECTING_MEDIA_STATES.add(PlaybackState.STATE_BUFFERING);
+    }
+
+    private final NotificationVisibilityProvider mVisibilityProvider;
+    private final MediaDataManager mMediaDataManager;
+    private final NotifPipeline mNotifPipeline;
+    private final NotifCollection mNotifCollection;
+
     private final Context mContext;
-    private final MediaSessionManager mMediaSessionManager;
+    private final ArrayList<MediaListener> mMediaListeners;
+
+    private final Executor mBackgroundExecutor;
+    private final Handler mHandler;
 
     protected NotificationPresenter mPresenter;
-    protected NotificationEntryManager mEntryManager;
-    private MediaController mMediaController;
+    @VisibleForTesting
+    MediaController mMediaController;
     private String mMediaNotificationKey;
     private MediaMetadata mMediaMetadata;
 
-    private final MediaController.Callback mMediaListener = new MediaController.Callback() {
+    @VisibleForTesting
+    final MediaController.Callback mMediaListener = new MediaController.Callback() {
         @Override
         public void onPlaybackStateChanged(PlaybackState state) {
             super.onPlaybackStateChanged(state);
@@ -59,8 +105,8 @@ public class NotificationMediaManager implements Dumpable {
             if (state != null) {
                 if (!isPlaybackActive(state.getState())) {
                     clearCurrentMediaNotification();
-                    mPresenter.updateMediaMetaData(true, true);
                 }
+                findAndUpdateMediaNotifications();
             }
         }
 
@@ -70,32 +116,153 @@ public class NotificationMediaManager implements Dumpable {
             if (DEBUG_MEDIA) {
                 Log.v(TAG, "DEBUG_MEDIA: onMetadataChanged: " + metadata);
             }
-            mMediaMetadata = metadata;
-            mPresenter.updateMediaMetaData(true, true);
+            if (notificationMediaManagerBackgroundExecution()) {
+                mBackgroundExecutor.execute(() -> setMediaMetadata(metadata));
+            } else {
+                setMediaMetadata(metadata);
+            }
+
+            dispatchUpdateMediaMetaData();
         }
     };
 
-    public NotificationMediaManager(Context context) {
-        mContext = context;
-        mMediaSessionManager
-                = (MediaSessionManager) mContext.getSystemService(Context.MEDIA_SESSION_SERVICE);
-        // TODO: use MediaSessionManager.SessionListener to hook us up to future updates
-        // in session state
+    private void setMediaMetadata(MediaMetadata metadata) {
+        mMediaMetadata = metadata;
     }
 
-    public void setUpWithPresenter(NotificationPresenter presenter,
-            NotificationEntryManager entryManager) {
+    /**
+     * Injected constructor. See {@link CentralSurfacesModule}.
+     */
+    public NotificationMediaManager(
+            Context context,
+            NotificationVisibilityProvider visibilityProvider,
+            NotifPipeline notifPipeline,
+            NotifCollection notifCollection,
+            MediaDataManager mediaDataManager,
+            DumpManager dumpManager,
+            @Background Executor backgroundExecutor,
+            @Main Handler handler
+    ) {
+        mContext = context;
+        mMediaListeners = new ArrayList<>();
+        mVisibilityProvider = visibilityProvider;
+        mMediaDataManager = mediaDataManager;
+        mNotifPipeline = notifPipeline;
+        mNotifCollection = notifCollection;
+        mBackgroundExecutor = backgroundExecutor;
+        mHandler = handler;
+
+        setupNotifPipeline();
+
+        dumpManager.registerDumpable(this);
+    }
+
+    private void setupNotifPipeline() {
+        mNotifPipeline.addCollectionListener(new NotifCollectionListener() {
+            @Override
+            public void onEntryAdded(@NonNull NotificationEntry entry) {
+                mMediaDataManager.onNotificationAdded(entry.getKey(), entry.getSbn());
+            }
+
+            @Override
+            public void onEntryUpdated(NotificationEntry entry) {
+                mMediaDataManager.onNotificationAdded(entry.getKey(), entry.getSbn());
+            }
+
+            @Override
+            public void onEntryBind(NotificationEntry entry, StatusBarNotification sbn) {
+                findAndUpdateMediaNotifications();
+            }
+
+            @Override
+            public void onEntryRemoved(@NonNull NotificationEntry entry, int reason) {
+                removeEntry(entry);
+            }
+
+            @Override
+            public void onEntryCleanUp(@NonNull NotificationEntry entry) {
+                removeEntry(entry);
+            }
+        });
+
+        mMediaDataManager.addListener(new MediaDataManager.Listener() {
+            @Override
+            public void onMediaDataLoaded(@NonNull String key,
+                    @Nullable String oldKey, @NonNull MediaData data, boolean immediately,
+                    int receivedSmartspaceCardLatency, boolean isSsReactivated) {
+            }
+
+            @Override
+            public void onSmartspaceMediaDataLoaded(@NonNull String key,
+                    @NonNull SmartspaceMediaData data, boolean shouldPrioritize) {
+            }
+
+            @Override
+            public void onMediaDataRemoved(@NonNull String key, boolean userInitiated) {
+                if (mediaControlsUserInitiatedDeleteintent() && !userInitiated) {
+                    // Dismissing the notification will send the app's deleteIntent, so ignore if
+                    // this was an automatic removal
+                    Log.d(TAG, "Not dismissing " + key + " because it was removed by the system");
+                    return;
+                }
+                mNotifPipeline.getAllNotifs()
+                        .stream()
+                        .filter(entry -> Objects.equals(entry.getKey(), key))
+                        .findAny()
+                        .ifPresent(entry -> {
+                            mNotifCollection.dismissNotification(entry,
+                                    getDismissedByUserStats(entry));
+                        });
+            }
+
+            @Override
+            public void onSmartspaceMediaDataRemoved(@NonNull String key, boolean immediately) {}
+        });
+    }
+
+    private DismissedByUserStats getDismissedByUserStats(NotificationEntry entry) {
+        return new DismissedByUserStats(
+                NotificationStats.DISMISSAL_SHADE, // Add DISMISSAL_MEDIA?
+                NotificationStats.DISMISS_SENTIMENT_NEUTRAL,
+                mVisibilityProvider.obtain(entry, /* visible= */ true));
+    }
+
+    private void removeEntry(NotificationEntry entry) {
+        onNotificationRemoved(entry.getKey());
+        mMediaDataManager.onNotificationRemoved(entry.getKey());
+    }
+
+    /**
+     * Check if a state should be considered actively playing
+     * @param state a PlaybackState
+     * @return true if playing
+     */
+    public static boolean isPlayingState(int state) {
+        return !PAUSED_MEDIA_STATES.contains(state)
+            && !CONNECTING_MEDIA_STATES.contains(state);
+    }
+
+    /**
+     * Check if a state should be considered as connecting
+     * @param state a PlaybackState
+     * @return true if connecting or buffering
+     */
+    public static boolean isConnectingState(int state) {
+        return CONNECTING_MEDIA_STATES.contains(state);
+    }
+
+    public void setUpWithPresenter(NotificationPresenter presenter) {
         mPresenter = presenter;
-        mEntryManager = entryManager;
     }
 
     public void onNotificationRemoved(String key) {
         if (key.equals(mMediaNotificationKey)) {
             clearCurrentMediaNotification();
-            mPresenter.updateMediaMetaData(true, true);
+            dispatchUpdateMediaMetaData();
         }
     }
 
+    @Nullable
     public String getMediaNotificationKey() {
         return mMediaNotificationKey;
     }
@@ -104,113 +271,182 @@ public class NotificationMediaManager implements Dumpable {
         return mMediaMetadata;
     }
 
+    public Icon getMediaIcon() {
+        if (mMediaNotificationKey == null) {
+            return null;
+        }
+        return Optional.ofNullable(mNotifPipeline.getEntry(mMediaNotificationKey))
+            .map(entry -> entry.getIcons().getShelfIcon())
+            .map(StatusBarIconView::getSourceIcon)
+            .orElse(null);
+    }
+
+    public void addCallback(MediaListener callback) {
+        mMediaListeners.add(callback);
+        if (notificationMediaManagerBackgroundExecution()) {
+            mBackgroundExecutor.execute(() -> updateMediaMetaData(callback));
+        } else {
+            updateMediaMetaData(callback);
+        }
+    }
+
+    private void updateMediaMetaData(MediaListener callback) {
+        int playbackState = getMediaControllerPlaybackState(mMediaController);
+        mHandler.post(
+                () -> callback.onPrimaryMetadataOrStateChanged(mMediaMetadata, playbackState));
+    }
+
+    public void removeCallback(MediaListener callback) {
+        mMediaListeners.remove(callback);
+    }
+
     public void findAndUpdateMediaNotifications() {
-        boolean metaDataChanged = false;
+        // TODO(b/169655907): get the semi-filtered notifications for current user
+        Collection<NotificationEntry> allNotifications = mNotifPipeline.getAllNotifs();
+        if (notificationMediaManagerBackgroundExecution()) {
+            // Create new sbn list to be accessed in background thread.
+            List<StatusBarNotification> statusBarNotifications = new ArrayList<>();
+            for (NotificationEntry entry: allNotifications) {
+                statusBarNotifications.add(entry.getSbn());
+            }
+            mBackgroundExecutor.execute(() -> findPlayingMediaNotification(statusBarNotifications));
+        } else {
+            findPlayingMediaNotification(allNotifications);
+        }
+        dispatchUpdateMediaMetaData();
+    }
 
-        synchronized (mEntryManager.getNotificationData()) {
-            ArrayList<NotificationData.Entry> activeNotifications = mEntryManager
-                    .getNotificationData().getActiveNotifications();
-            final int N = activeNotifications.size();
-
-            // Promote the media notification with a controller in 'playing' state, if any.
-            NotificationData.Entry mediaNotification = null;
-            MediaController controller = null;
-            for (int i = 0; i < N; i++) {
-                final NotificationData.Entry entry = activeNotifications.get(i);
-
-                if (isMediaNotification(entry)) {
-                    final MediaSession.Token token =
-                            entry.notification.getNotification().extras.getParcelable(
-                                    Notification.EXTRA_MEDIA_SESSION);
-                    if (token != null) {
-                        MediaController aController = new MediaController(mContext, token);
-                        if (PlaybackState.STATE_PLAYING ==
-                                getMediaControllerPlaybackState(aController)) {
-                            if (DEBUG_MEDIA) {
-                                Log.v(TAG, "DEBUG_MEDIA: found mediastyle controller matching "
-                                        + entry.notification.getKey());
-                            }
-                            mediaNotification = entry;
-                            controller = aController;
-                            break;
+    /**
+     * Find a notification and media controller associated with the playing media session, and
+     * update this manager's internal state.
+     * TODO(b/273443374) check this method
+     */
+    void findPlayingMediaNotification(@NonNull Collection<NotificationEntry> allNotifications) {
+        // Promote the media notification with a controller in 'playing' state, if any.
+        NotificationEntry mediaNotification = null;
+        MediaController controller = null;
+        for (NotificationEntry entry : allNotifications) {
+            Notification notif = entry.getSbn().getNotification();
+            if (notif.isMediaNotification()) {
+                final MediaSession.Token token =
+                        entry.getSbn().getNotification().extras.getParcelable(
+                                Notification.EXTRA_MEDIA_SESSION, MediaSession.Token.class);
+                if (token != null) {
+                    MediaController aController = new MediaController(mContext, token);
+                    if (PlaybackState.STATE_PLAYING
+                            == getMediaControllerPlaybackState(aController)) {
+                        if (DEBUG_MEDIA) {
+                            Log.v(TAG, "DEBUG_MEDIA: found mediastyle controller matching "
+                                    + entry.getSbn().getKey());
                         }
+                        mediaNotification = entry;
+                        controller = aController;
+                        break;
                     }
-                }
-            }
-            if (mediaNotification == null) {
-                // Still nothing? OK, let's just look for live media sessions and see if they match
-                // one of our notifications. This will catch apps that aren't (yet!) using media
-                // notifications.
-
-                if (mMediaSessionManager != null) {
-                    // TODO: Should this really be for all users?
-                    final List<MediaController> sessions
-                            = mMediaSessionManager.getActiveSessionsForUser(
-                            null,
-                            UserHandle.USER_ALL);
-
-                    for (MediaController aController : sessions) {
-                        if (PlaybackState.STATE_PLAYING ==
-                                getMediaControllerPlaybackState(aController)) {
-                            // now to see if we have one like this
-                            final String pkg = aController.getPackageName();
-
-                            for (int i = 0; i < N; i++) {
-                                final NotificationData.Entry entry = activeNotifications.get(i);
-                                if (entry.notification.getPackageName().equals(pkg)) {
-                                    if (DEBUG_MEDIA) {
-                                        Log.v(TAG, "DEBUG_MEDIA: found controller matching "
-                                                + entry.notification.getKey());
-                                    }
-                                    controller = aController;
-                                    mediaNotification = entry;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (controller != null && !sameSessions(mMediaController, controller)) {
-                // We have a new media session
-                clearCurrentMediaNotificationSession();
-                mMediaController = controller;
-                mMediaController.registerCallback(mMediaListener);
-                mMediaMetadata = mMediaController.getMetadata();
-                if (DEBUG_MEDIA) {
-                    Log.v(TAG, "DEBUG_MEDIA: insert listener, found new controller: "
-                            + mMediaController + ", receive metadata: " + mMediaMetadata);
-                }
-
-                metaDataChanged = true;
-            }
-
-            if (mediaNotification != null
-                    && !mediaNotification.notification.getKey().equals(mMediaNotificationKey)) {
-                mMediaNotificationKey = mediaNotification.notification.getKey();
-                if (DEBUG_MEDIA) {
-                    Log.v(TAG, "DEBUG_MEDIA: Found new media notification: key="
-                            + mMediaNotificationKey);
                 }
             }
         }
 
-        if (metaDataChanged) {
-            mEntryManager.updateNotifications();
+        StatusBarNotification statusBarNotification = null;
+        if (mediaNotification != null) {
+            statusBarNotification = mediaNotification.getSbn();
         }
-        mPresenter.updateMediaMetaData(metaDataChanged, true);
+        setUpControllerAndKey(controller, statusBarNotification);
+    }
+
+    /**
+     * Find a notification and media controller associated with the playing media session, and
+     * update this manager's internal state.
+     * This method must be called in background.
+     * TODO(b/273443374) check this method
+     */
+    void findPlayingMediaNotification(@NonNull List<StatusBarNotification> allNotifications) {
+        // Promote the media notification with a controller in 'playing' state, if any.
+        StatusBarNotification statusBarNotification = null;
+        MediaController controller = null;
+        for (StatusBarNotification sbn : allNotifications) {
+            Notification notif = sbn.getNotification();
+            if (notif.isMediaNotification()) {
+                final MediaSession.Token token =
+                        sbn.getNotification().extras.getParcelable(
+                                Notification.EXTRA_MEDIA_SESSION, MediaSession.Token.class);
+                if (token != null) {
+                    MediaController aController = new MediaController(mContext, token);
+                    if (PlaybackState.STATE_PLAYING
+                            == getMediaControllerPlaybackState(aController)) {
+                        if (DEBUG_MEDIA) {
+                            Log.v(TAG, "DEBUG_MEDIA: found mediastyle controller matching "
+                                    + sbn.getKey());
+                        }
+                        statusBarNotification = sbn;
+                        controller = aController;
+                        break;
+                    }
+                }
+            }
+        }
+
+        setUpControllerAndKey(controller, statusBarNotification);
+    }
+
+    private void setUpControllerAndKey(
+            MediaController controller,
+            StatusBarNotification mediaNotification) {
+        if (controller != null && !sameSessions(mMediaController, controller)) {
+            // We have a new media session
+            clearCurrentMediaNotificationSession();
+            mMediaController = controller;
+            mMediaController.registerCallback(mMediaListener, mHandler);
+            mMediaMetadata = mMediaController.getMetadata();
+            if (DEBUG_MEDIA) {
+                Log.v(TAG, "DEBUG_MEDIA: insert listener, found new controller: "
+                        + mMediaController + ", receive metadata: " + mMediaMetadata);
+            }
+        }
+
+        if (mediaNotification != null
+                && !mediaNotification.getKey().equals(mMediaNotificationKey)) {
+            mMediaNotificationKey = mediaNotification.getKey();
+            if (DEBUG_MEDIA) {
+                Log.v(TAG, "DEBUG_MEDIA: Found new media notification: key="
+                        + mMediaNotificationKey);
+            }
+        }
     }
 
     public void clearCurrentMediaNotification() {
+        if (notificationMediaManagerBackgroundExecution()) {
+            mBackgroundExecutor.execute(this::clearMediaNotification);
+        } else {
+            clearMediaNotification();
+        }
+    }
+
+    private void clearMediaNotification() {
         mMediaNotificationKey = null;
         clearCurrentMediaNotificationSession();
     }
 
+    private void dispatchUpdateMediaMetaData() {
+        ArrayList<MediaListener> callbacks = new ArrayList<>(mMediaListeners);
+        if (notificationMediaManagerBackgroundExecution()) {
+            mBackgroundExecutor.execute(() -> updateMediaMetaData(callbacks));
+        } else {
+            updateMediaMetaData(callbacks);
+        }
+    }
+
+    private void updateMediaMetaData(List<MediaListener> callbacks) {
+        @PlaybackState.State int state = getMediaControllerPlaybackState(mMediaController);
+        mHandler.post(() -> {
+            for (int i = 0; i < callbacks.size(); i++) {
+                callbacks.get(i).onPrimaryMetadataOrStateChanged(mMediaMetadata, state);
+            }
+        });
+    }
+
     @Override
-    public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
-        pw.print("    mMediaSessionManager=");
-        pw.println(mMediaSessionManager);
+    public void dump(@NonNull PrintWriter pw, @NonNull String[] args) {
         pw.print("    mMediaNotificationKey=");
         pw.println(mMediaNotificationKey);
         pw.print("    mMediaController=");
@@ -252,13 +488,6 @@ public class NotificationMediaManager implements Dumpable {
         return PlaybackState.STATE_NONE;
     }
 
-    private boolean isMediaNotification(NotificationData.Entry entry) {
-        // TODO: confirm that there's a valid media key
-        return entry.getExpandedContentView() != null &&
-                entry.getExpandedContentView()
-                        .findViewById(com.android.internal.R.id.media_actions) != null;
-    }
-
     private void clearCurrentMediaNotificationSession() {
         mMediaMetadata = null;
         if (mMediaController != null) {
@@ -269,5 +498,16 @@ public class NotificationMediaManager implements Dumpable {
             mMediaController.unregisterCallback(mMediaListener);
         }
         mMediaController = null;
+    }
+
+    public interface MediaListener {
+        /**
+         * Called whenever there's new metadata or playback state.
+         * @param metadata Current metadata.
+         * @param state Current playback state
+         * @see PlaybackState.State
+         */
+        default void onPrimaryMetadataOrStateChanged(MediaMetadata metadata,
+                @PlaybackState.State int state) {}
     }
 }

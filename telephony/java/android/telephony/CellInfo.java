@@ -16,10 +16,10 @@
 
 package android.telephony;
 
+import android.annotation.ElapsedRealtimeLong;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
-import android.annotation.UnsupportedAppUsage;
-import android.hardware.radio.V1_4.CellInfo.Info;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Parcel;
 import android.os.Parcelable;
 
@@ -27,6 +27,7 @@ import com.android.internal.annotations.VisibleForTesting;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.Objects;
 
 /**
  * Immutable cell information from a point in time.
@@ -148,10 +149,17 @@ public abstract class CellInfo implements Parcelable {
     private long mTimeStamp;
 
     /** @hide */
+    protected CellInfo(int cellConnectionStatus, boolean registered, long timestamp) {
+        mCellConnectionStatus = cellConnectionStatus;
+        mRegistered = registered;
+        mTimeStamp = timestamp;
+    }
+
+    /** @hide */
     protected CellInfo() {
         this.mRegistered = false;
         this.mTimeStamp = Long.MAX_VALUE;
-        mCellConnectionStatus = CONNECTION_NONE;
+        this.mCellConnectionStatus = CONNECTION_NONE;
     }
 
     /** @hide */
@@ -177,8 +185,20 @@ public abstract class CellInfo implements Parcelable {
     /**
      * Approximate time this cell information was received from the modem.
      *
-     * @return a time stamp in nanos since boot.
+     * @return a time stamp in millis since boot.
      */
+    @ElapsedRealtimeLong
+    public long getTimestampMillis() {
+        return mTimeStamp / 1000000;
+    }
+
+    /**
+     * Approximate time this cell information was received from the modem.
+     *
+     * @return a time stamp in nanos since boot.
+     * @deprecated Use {@link #getTimestampMillis} instead.
+     */
+    @Deprecated
     public long getTimeStamp() {
         return mTimeStamp;
     }
@@ -189,11 +209,15 @@ public abstract class CellInfo implements Parcelable {
         mTimeStamp = ts;
     }
 
-    /** @hide */
+    /**
+     * @return a {@link CellIdentity} instance.
+     */
     @NonNull
     public abstract CellIdentity getCellIdentity();
 
-    /** @hide */
+    /**
+     * @return a {@link CellSignalStrength} instance.
+     */
     @NonNull
     public abstract CellSignalStrength getCellSignalStrength();
 
@@ -223,27 +247,17 @@ public abstract class CellInfo implements Parcelable {
 
     @Override
     public int hashCode() {
-        int primeNum = 31;
-        return ((mRegistered ? 0 : 1) * primeNum) + ((int)(mTimeStamp / 1000) * primeNum)
-                + (mCellConnectionStatus * primeNum);
+        return Objects.hash(mCellConnectionStatus, mRegistered, mTimeStamp);
     }
 
     @Override
-    public boolean equals(Object other) {
-        if (other == null) {
-            return false;
-        }
-        if (this == other) {
-            return true;
-        }
-        try {
-            CellInfo o = (CellInfo) other;
-            return mRegistered == o.mRegistered
-                    && mTimeStamp == o.mTimeStamp
-                    && mCellConnectionStatus == o.mCellConnectionStatus;
-        } catch (ClassCastException e) {
-            return false;
-        }
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof CellInfo)) return false;
+        CellInfo cellInfo = (CellInfo) o;
+        return mCellConnectionStatus == cellInfo.mCellConnectionStatus
+                && mRegistered == cellInfo.mRegistered
+                && mTimeStamp == cellInfo.mTimeStamp;
     }
 
     @Override
@@ -293,7 +307,7 @@ public abstract class CellInfo implements Parcelable {
     }
 
     /** Implement the Parcelable interface */
-    public static final Creator<CellInfo> CREATOR = new Creator<CellInfo>() {
+    public static final @android.annotation.NonNull Creator<CellInfo> CREATOR = new Creator<CellInfo>() {
         @Override
         public CellInfo createFromParcel(Parcel in) {
                 int type = in.readInt();
@@ -313,64 +327,4 @@ public abstract class CellInfo implements Parcelable {
             return new CellInfo[size];
         }
     };
-
-    /** @hide */
-    protected CellInfo(android.hardware.radio.V1_0.CellInfo ci) {
-        this.mRegistered = ci.registered;
-        this.mTimeStamp = ci.timeStamp;
-        this.mCellConnectionStatus = CONNECTION_UNKNOWN;
-    }
-
-    /** @hide */
-    protected CellInfo(android.hardware.radio.V1_2.CellInfo ci) {
-        this.mRegistered = ci.registered;
-        this.mTimeStamp = ci.timeStamp;
-        this.mCellConnectionStatus = ci.connectionStatus;
-    }
-
-    /** @hide */
-    protected CellInfo(android.hardware.radio.V1_4.CellInfo ci, long timeStamp) {
-        this.mRegistered = ci.isRegistered;
-        this.mTimeStamp = timeStamp;
-        this.mCellConnectionStatus = ci.connectionStatus;
-    }
-
-    /** @hide */
-    public static CellInfo create(android.hardware.radio.V1_0.CellInfo ci) {
-        if (ci == null) return null;
-        switch(ci.cellInfoType) {
-            case android.hardware.radio.V1_0.CellInfoType.GSM: return new CellInfoGsm(ci);
-            case android.hardware.radio.V1_0.CellInfoType.CDMA: return new CellInfoCdma(ci);
-            case android.hardware.radio.V1_0.CellInfoType.LTE: return new CellInfoLte(ci);
-            case android.hardware.radio.V1_0.CellInfoType.WCDMA: return new CellInfoWcdma(ci);
-            case android.hardware.radio.V1_0.CellInfoType.TD_SCDMA: return new CellInfoTdscdma(ci);
-            default: return null;
-        }
-    }
-
-    /** @hide */
-    public static CellInfo create(android.hardware.radio.V1_2.CellInfo ci) {
-        if (ci == null) return null;
-        switch(ci.cellInfoType) {
-            case android.hardware.radio.V1_0.CellInfoType.GSM: return new CellInfoGsm(ci);
-            case android.hardware.radio.V1_0.CellInfoType.CDMA: return new CellInfoCdma(ci);
-            case android.hardware.radio.V1_0.CellInfoType.LTE: return new CellInfoLte(ci);
-            case android.hardware.radio.V1_0.CellInfoType.WCDMA: return new CellInfoWcdma(ci);
-            case android.hardware.radio.V1_0.CellInfoType.TD_SCDMA: return new CellInfoTdscdma(ci);
-            default: return null;
-        }
-    }
-
-    /** @hide */
-    public static CellInfo create(android.hardware.radio.V1_4.CellInfo ci, long timeStamp) {
-        if (ci == null) return null;
-        switch (ci.info.getDiscriminator()) {
-            case Info.hidl_discriminator.gsm: return new CellInfoGsm(ci, timeStamp);
-            case Info.hidl_discriminator.cdma: return new CellInfoCdma(ci, timeStamp);
-            case Info.hidl_discriminator.lte: return new CellInfoLte(ci, timeStamp);
-            case Info.hidl_discriminator.wcdma: return new CellInfoWcdma(ci, timeStamp);
-            case Info.hidl_discriminator.tdscdma: return new CellInfoTdscdma(ci, timeStamp);
-            default: return null;
-        }
-    }
 }

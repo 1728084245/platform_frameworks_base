@@ -16,7 +16,8 @@
 
 #pragma once
 
-#include "RecordingCanvas.h"
+#include "hwui/Canvas.h"
+#include "hwui/Paint.h"
 #include "RenderNode.h"
 #include "tests/common/TestContext.h"
 #include "tests/common/TestScene.h"

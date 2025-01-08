@@ -42,6 +42,9 @@ public final class SQLiteGlobal {
     /** @hide */
     public static final String SYNC_MODE_FULL = "FULL";
 
+    /** @hide */
+    static final String WIPE_CHECK_FILE_SUFFIX = "-wipecheck";
+
     private static final Object sLock = new Object();
 
     private static int sDefaultPageSize;
@@ -81,20 +84,10 @@ public final class SQLiteGlobal {
     /**
      * Gets the default journal mode when WAL is not in use.
      */
-    public static String getDefaultJournalMode() {
+    public static @SQLiteDatabase.JournalMode String getDefaultJournalMode() {
         return SystemProperties.get("debug.sqlite.journalmode",
                 Resources.getSystem().getString(
                 com.android.internal.R.string.db_default_journal_mode));
-    }
-
-    /**
-     * Returns true if compatibility WAL mode is supported. In this mode, only
-     * database journal mode is changed. Connection pool will use at most one connection.
-     */
-    public static boolean isCompatibilityWalSupported() {
-        return SystemProperties.getBoolean("debug.sqlite.compatibility_wal_supported",
-                Resources.getSystem().getBoolean(
-                        com.android.internal.R.bool.db_compatibility_wal_supported));
     }
 
     /**
@@ -109,7 +102,7 @@ public final class SQLiteGlobal {
     /**
      * Gets the default database synchronization mode when WAL is not in use.
      */
-    public static String getDefaultSyncMode() {
+    public static @SQLiteDatabase.SyncMode String getDefaultSyncMode() {
         // Use the FULL synchronous mode for system processes by default.
         String defaultMode = sDefaultSyncMode;
         if (defaultMode != null) {
@@ -123,7 +116,7 @@ public final class SQLiteGlobal {
     /**
      * Gets the database synchronization mode when in WAL mode.
      */
-    public static String getWALSyncMode() {
+    public static @SQLiteDatabase.SyncMode String getWALSyncMode() {
         // Use the FULL synchronous mode for system processes by default.
         String defaultMode = sDefaultSyncMode;
         if (defaultMode != null) {
@@ -181,4 +174,8 @@ public final class SQLiteGlobal {
                         com.android.internal.R.integer.db_wal_truncate_size));
     }
 
+    /** @hide */
+    public static boolean checkDbWipe() {
+        return false;
+    }
 }

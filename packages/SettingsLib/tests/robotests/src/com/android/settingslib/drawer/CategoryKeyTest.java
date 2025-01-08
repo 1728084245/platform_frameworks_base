@@ -59,8 +59,10 @@ public class CategoryKeyTest {
         allKeys.add(CategoryKey.CATEGORY_SYSTEM_DEVELOPMENT);
         allKeys.add(CategoryKey.CATEGORY_GESTURES);
         allKeys.add(CategoryKey.CATEGORY_NIGHT_DISPLAY);
+        allKeys.add(CategoryKey.CATEGORY_SMART_BATTERY_SETTINGS);
+        allKeys.add(CategoryKey.CATEGORY_COMMUNAL_SETTINGS);
         // DO NOT REMOVE ANYTHING ABOVE
 
-        assertThat(allKeys.size()).isEqualTo(18);
+        assertThat(allKeys.size()).isEqualTo(20);
     }
 }

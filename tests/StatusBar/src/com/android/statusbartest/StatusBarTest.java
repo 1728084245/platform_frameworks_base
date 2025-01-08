@@ -18,13 +18,13 @@ package com.android.statusbartest;
 
 import android.app.Notification;
 import android.app.NotificationManager;
-import android.view.View;
-import android.content.Intent;
 import android.app.PendingIntent;
 import android.app.StatusBarManager;
+import android.content.Intent;
 import android.os.Handler;
-import android.util.Log;
 import android.os.SystemClock;
+import android.util.Log;
+import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 
@@ -160,7 +160,7 @@ public class StatusBarTest extends TestActivity
                     StatusBarTest.this,
                     0,
                     fullScreenIntent,
-                    PendingIntent.FLAG_CANCEL_CURRENT);
+                    PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_MUTABLE_UNAUDITED);
                 Notification not = new Notification.Builder(StatusBarTest.this)
                         .setSmallIcon(R.drawable.stat_sys_phone)
                         .setWhen(System.currentTimeMillis() - (1000 * 60 * 60 * 24))

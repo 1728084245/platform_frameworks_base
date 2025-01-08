@@ -16,14 +16,20 @@
 
 package android.telephony.cdma;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Build;
 import android.os.Bundle;
 import android.telephony.CellLocation;
 
+import com.android.internal.telephony.util.TelephonyUtils;
+import com.android.telephony.Rlog;
+
 /**
  * Represents the cell location on a CDMA phone.
+ *
+ * @deprecated use {@link android.telephony.CellIdentity CellIdentity}.
  */
+@Deprecated
 public class CdmaCellLocation extends CellLocation {
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
     private int mBaseStationId = -1;
@@ -194,8 +200,8 @@ public class CdmaCellLocation extends CellLocation {
     @Override
     public String toString() {
         return "[" + this.mBaseStationId + ","
-                   + this.mBaseStationLatitude + ","
-                   + this.mBaseStationLongitude + ","
+                   + Rlog.pii(TelephonyUtils.IS_DEBUGGABLE, this.mBaseStationLatitude) + ","
+                   + Rlog.pii(TelephonyUtils.IS_DEBUGGABLE, this.mBaseStationLongitude) + ","
                    + this.mSystemId + ","
                    + this.mNetworkId + "]";
     }

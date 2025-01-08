@@ -19,7 +19,10 @@ package android.graphics;
 import android.content.res.ColorStateList;
 import android.content.res.Resources;
 import android.test.AndroidTestCase;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.util.proto.ProtoInputStream;
+import android.util.proto.ProtoOutputStream;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.frameworks.coretests.R;
 
@@ -48,8 +51,26 @@ public class ColorStateListTest extends AndroidTestCase {
     }
 
     @SmallTest
+    public void testStateIsInList_proto() throws Exception {
+        ColorStateList colorStateList = recreateFromProto(
+                mResources.getColorStateList(R.color.color1));
+        int[] focusedState = {android.R.attr.state_focused};
+        int focusColor = colorStateList.getColorForState(focusedState, R.color.failColor);
+        assertEquals(mResources.getColor(R.color.testcolor1), focusColor);
+    }
+
+    @SmallTest
     public void testEmptyState() throws Exception {
         ColorStateList colorStateList = mResources.getColorStateList(R.color.color1);
+        int[] emptyState = {};
+        int defaultColor = colorStateList.getColorForState(emptyState, mFailureColor);
+        assertEquals(mResources.getColor(R.color.testcolor2), defaultColor);
+    }
+
+    @SmallTest
+    public void testEmptyState_proto() throws Exception {
+        ColorStateList colorStateList = recreateFromProto(
+                mResources.getColorStateList(R.color.color1));
         int[] emptyState = {};
         int defaultColor = colorStateList.getColorForState(emptyState, mFailureColor);
         assertEquals(mResources.getColor(R.color.testcolor2), defaultColor);
@@ -65,5 +86,18 @@ public class ColorStateListTest extends AndroidTestCase {
     public void testGetColorWhenListHasNoDefault() throws Exception {
         int defaultColor = mResources.getColor(R.color.color_no_default);
         assertEquals(mResources.getColor(R.color.testcolor1), defaultColor);
+    }
+
+    @SmallTest
+    public void testLstar() throws Exception {
+        int defaultColor = mResources.getColor(R.color.color_with_lstar);
+        assertEquals(mResources.getColor(R.color.testcolor3), defaultColor);
+    }
+
+    private ColorStateList recreateFromProto(ColorStateList colorStateList) throws Exception {
+        ProtoOutputStream out = new ProtoOutputStream();
+        colorStateList.writeToProto(out);
+        ProtoInputStream in = new ProtoInputStream(out.getBytes());
+        return ColorStateList.createFromProto(in);
     }
 }

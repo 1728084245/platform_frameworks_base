@@ -16,6 +16,7 @@
 
 package android.media.tv;
 
+import android.content.AttributionSource;
 import android.hardware.hdmi.HdmiDeviceInfo;
 import android.media.tv.ITvInputServiceCallback;
 import android.media.tv.ITvInputSessionCallback;
@@ -26,16 +27,21 @@ import android.view.InputChannel;
  * Top-level interface to a TV input component (implemented in a Service).
  * @hide
  */
-oneway interface ITvInputService {
-    void registerCallback(in ITvInputServiceCallback callback);
-    void unregisterCallback(in ITvInputServiceCallback callback);
-    void createSession(in InputChannel channel, in ITvInputSessionCallback callback,
-            in String inputId);
-    void createRecordingSession(in ITvInputSessionCallback callback, in String inputId);
+interface ITvInputService {
+    oneway void registerCallback(in ITvInputServiceCallback callback);
+    oneway void unregisterCallback(in ITvInputServiceCallback callback);
+    oneway void createSession(in InputChannel channel, in ITvInputSessionCallback callback,
+            in String inputId, in String sessionId, in AttributionSource tvAppAttributionSource);
+    oneway void createRecordingSession(in ITvInputSessionCallback callback, in String inputId,
+            in String sessionId);
+    List<String> getAvailableExtensionInterfaceNames();
+    IBinder getExtensionInterface(in String name);
+    String getExtensionInterfacePermission(in String name);
 
     // For hardware TvInputService
-    void notifyHardwareAdded(in TvInputHardwareInfo hardwareInfo);
-    void notifyHardwareRemoved(in TvInputHardwareInfo hardwareInfo);
-    void notifyHdmiDeviceAdded(in HdmiDeviceInfo deviceInfo);
-    void notifyHdmiDeviceRemoved(in HdmiDeviceInfo deviceInfo);
+    oneway void notifyHardwareAdded(in TvInputHardwareInfo hardwareInfo);
+    oneway void notifyHardwareRemoved(in TvInputHardwareInfo hardwareInfo);
+    oneway void notifyHdmiDeviceAdded(in HdmiDeviceInfo deviceInfo);
+    oneway void notifyHdmiDeviceRemoved(in HdmiDeviceInfo deviceInfo);
+    oneway void notifyHdmiDeviceUpdated(in HdmiDeviceInfo deviceInfo);
 }

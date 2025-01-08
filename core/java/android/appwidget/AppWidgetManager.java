@@ -16,16 +16,23 @@
 
 package android.appwidget;
 
+import static android.appwidget.flags.Flags.remoteAdapterConversion;
+
 import android.annotation.BroadcastBehavior;
+import android.annotation.FlaggedApi;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.RequiresFeature;
 import android.annotation.SdkConstant;
 import android.annotation.SdkConstant.SdkConstantType;
 import android.annotation.SystemService;
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.TestApi;
+import android.annotation.UiThread;
+import android.annotation.UserIdInt;
 import android.app.IServiceConnection;
 import android.app.PendingIntent;
+import android.appwidget.flags.Flags;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -34,17 +41,29 @@ import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.ShortcutInfo;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.HandlerExecutor;
+import android.os.HandlerThread;
+import android.os.Looper;
+import android.os.Process;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.util.DisplayMetrics;
+import android.util.Log;
 import android.widget.RemoteViews;
 
 import com.android.internal.appwidget.IAppWidgetService;
+import com.android.internal.os.BackgroundThread;
+import com.android.internal.util.FunctionalUtils;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 /**
  * Updates AppWidget state; gets information about installed AppWidget providers and other
@@ -59,6 +78,7 @@ import java.util.List;
 @SystemService(Context.APPWIDGET_SERVICE)
 @RequiresFeature(PackageManager.FEATURE_APP_WIDGETS)
 public class AppWidgetManager {
+
 
     /**
      * Activity action to launch from your {@link AppWidgetHost} activity when you want to
@@ -174,7 +194,7 @@ public class AppWidgetManager {
     public static final String ACTION_APPWIDGET_CONFIGURE = "android.appwidget.action.APPWIDGET_CONFIGURE";
 
     /**
-     * An intent extra that contains one appWidgetId.
+     * An intent extra (int) that contains one appWidgetId.
      * <p>
      * The value will be an int that can be retrieved like this:
      * {@sample frameworks/base/tests/appwidgets/AppWidgetHostTest/src/com/android/tests/appwidgethost/AppWidgetHostActivity.java getExtra_EXTRA_APPWIDGET_ID}
@@ -182,24 +202,44 @@ public class AppWidgetManager {
     public static final String EXTRA_APPWIDGET_ID = "appWidgetId";
 
     /**
-     * A bundle extra that contains the lower bound on the current width, in dips, of a widget instance.
+     * A bundle extra (boolean) that contains whether or not an app has finished restoring a widget.
+     * <p> After restore, the app should set OPTION_APPWIDGET_RESTORE_COMPLETED to true on its
+     * widgets followed by calling {@link #updateAppWidget} to update the views.
+     *
+     * @see #updateAppWidgetOptions(int, Bundle)
+     */
+    public static final String OPTION_APPWIDGET_RESTORE_COMPLETED = "appWidgetRestoreCompleted";
+
+
+    /**
+     * A bundle extra (int) that contains the lower bound on the current width, in dips, of a
+     * widget instance.
      */
     public static final String OPTION_APPWIDGET_MIN_WIDTH = "appWidgetMinWidth";
 
     /**
-     * A bundle extra that contains the lower bound on the current height, in dips, of a widget instance.
+     * A bundle extra (int) that contains the lower bound on the current height, in dips, of a
+     * widget instance.
      */
     public static final String OPTION_APPWIDGET_MIN_HEIGHT = "appWidgetMinHeight";
 
     /**
-     * A bundle extra that contains the upper bound on the current width, in dips, of a widget instance.
+     * A bundle extra (int) that contains the upper bound on the current width, in dips, of a
+     * widget instance.
      */
     public static final String OPTION_APPWIDGET_MAX_WIDTH = "appWidgetMaxWidth";
 
     /**
-     * A bundle extra that contains the upper bound on the current width, in dips, of a widget instance.
+     * A bundle extra (int) that contains the upper bound on the current width, in dips, of a
+     * widget instance.
      */
     public static final String OPTION_APPWIDGET_MAX_HEIGHT = "appWidgetMaxHeight";
+
+    /**
+     * A bundle extra ({@code List<SizeF>}) that contains the list of possible sizes, in dips, a
+     * widget instance can take.
+     */
+    public static final String OPTION_APPWIDGET_SIZES = "appWidgetSizes";
 
     /**
      * A bundle extra that hints to the AppWidgetProvider the category of host that owns this
@@ -307,6 +347,17 @@ public class AppWidgetManager {
     @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
     @BroadcastBehavior(explicitOnly = true)
     public static final String ACTION_APPWIDGET_UPDATE = "android.appwidget.action.APPWIDGET_UPDATE";
+
+    /**
+     * A combination broadcast of APPWIDGET_ENABLED and APPWIDGET_UPDATE.
+     * Sent during boot time and when the host is binding the widget for the very first time
+     *
+     * @hide
+     */
+    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+    @BroadcastBehavior(explicitOnly = true)
+    public static final String ACTION_APPWIDGET_ENABLE_AND_UPDATE = "android.appwidget.action"
+            + ".APPWIDGET_ENABLE_AND_UPDATE";
 
     /**
      * Sent when the custom extras for an AppWidget change.
@@ -433,6 +484,10 @@ public class AppWidgetManager {
     public static final String ACTION_APPWIDGET_HOST_RESTORED
             = "android.appwidget.action.APPWIDGET_HOST_RESTORED";
 
+    private static final String TAG = "AppWidgetManager";
+
+    private static Executor sUpdateExecutor;
+
     /**
      * An intent extra that contains multiple appWidgetIds.  These are id values as
      * they were provided to the application during a recent restore from backup.  It is
@@ -468,6 +523,10 @@ public class AppWidgetManager {
     private final IAppWidgetService mService;
     private final DisplayMetrics mDisplayMetrics;
 
+    private int mMaxBitmapMemory = 0;
+
+    private boolean mHasPostedLegacyLists = false;
+
     /**
      * Get the AppWidgetManager instance to use for the supplied {@link android.content.Context
      * Context} object.
@@ -488,6 +547,63 @@ public class AppWidgetManager {
         mPackageName = context.getOpPackageName();
         mService = service;
         mDisplayMetrics = context.getResources().getDisplayMetrics();
+        if (mService == null) {
+            return;
+        }
+        // Allowing some buffer when estimating the maximum bitmap cache size
+        try {
+            mMaxBitmapMemory = (int) (mService.getMaxBitmapMemory() * 0.9);
+        } catch (Exception e) {
+            Log.e(TAG, "Error setting the maximum bitmap memory", e);
+        }
+        BackgroundThread.getExecutor().execute(() -> {
+            try {
+                mService.notifyProviderInheritance(getInstalledProvidersForPackage(mPackageName,
+                        null)
+                        .stream().filter(Objects::nonNull)
+                        .map(info -> info.provider).filter(p -> {
+                            try {
+                                Class clazz = Class.forName(p.getClassName());
+                                return AppWidgetProvider.class.isAssignableFrom(clazz);
+                            } catch (Exception e) {
+                                return false;
+                            }
+                        }).toArray(ComponentName[]::new));
+            } catch (Exception e) {
+                Log.e(TAG, "Notify service of inheritance info", e);
+            }
+        });
+    }
+
+    private void tryAdapterConversion(
+            FunctionalUtils.RemoteExceptionIgnoringConsumer<RemoteViews> action,
+            RemoteViews original, String failureMsg) {
+        if (remoteAdapterConversion()
+                && (mHasPostedLegacyLists = mHasPostedLegacyLists
+                        || (original != null && original.hasLegacyLists()))) {
+            final RemoteViews viewsCopy = new RemoteViews(original);
+            Runnable updateWidgetWithTask = () -> {
+                try {
+                    viewsCopy.collectAllIntents(mMaxBitmapMemory).get();
+                    action.acceptOrThrow(viewsCopy);
+                } catch (Exception e) {
+                    Log.e(TAG, failureMsg, e);
+                }
+            };
+
+            if (Looper.getMainLooper() == Looper.myLooper()) {
+                createUpdateExecutorIfNull().execute(updateWidgetWithTask);
+                return;
+            }
+
+            updateWidgetWithTask.run();
+        } else {
+            try {
+                action.acceptOrThrow(original);
+            } catch (RemoteException re) {
+                throw re.rethrowFromSystemServer();
+            }
+        }
     }
 
     /**
@@ -513,11 +629,9 @@ public class AppWidgetManager {
         if (mService == null) {
             return;
         }
-        try {
-            mService.updateAppWidgetIds(mPackageName, appWidgetIds, views);
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
+
+        tryAdapterConversion(view -> mService.updateAppWidgetIds(mPackageName, appWidgetIds,
+                view), views, "Error updating app widget views in background");
     }
 
     /**
@@ -525,6 +639,9 @@ public class AppWidgetManager {
      * <p>
      * The extras can be used to embed additional information about this widget to be accessed
      * by the associated widget's AppWidgetProvider.
+     *
+     * <p>
+     * The new options are merged into existing options using {@link Bundle#putAll} semantics.
      *
      * @see #getAppWidgetOptions(int)
      *
@@ -618,11 +735,10 @@ public class AppWidgetManager {
         if (mService == null) {
             return;
         }
-        try {
-            mService.partiallyUpdateAppWidgetIds(mPackageName, appWidgetIds, views);
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
+
+        tryAdapterConversion(view -> mService.partiallyUpdateAppWidgetIds(mPackageName,
+                appWidgetIds, view), views,
+                "Error partially updating app widget views in background");
     }
 
     /**
@@ -673,11 +789,9 @@ public class AppWidgetManager {
         if (mService == null) {
             return;
         }
-        try {
-            mService.updateAppWidgetProvider(provider, views);
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
+
+        tryAdapterConversion(view -> mService.updateAppWidgetProvider(provider, view), views,
+                "Error updating app widget view using provider in background");
     }
 
     /**
@@ -716,15 +830,59 @@ public class AppWidgetManager {
      *
      * @param appWidgetIds  The AppWidget instances to notify of view data changes.
      * @param viewId        The collection view id.
+     * @deprecated The corresponding API
+     * {@link RemoteViews#setRemoteAdapter(int, Intent)} associated with this method has been
+     * deprecated. Moving forward please use
+     * {@link RemoteViews#setRemoteAdapter(int, android.widget.RemoteViews.RemoteCollectionItems)}
+     * instead to set {@link android.widget.RemoteViews.RemoteCollectionItems} for the remote
+     * adapter and update the widget views by calling {@link #updateAppWidget(int[], RemoteViews)},
+     * {@link #updateAppWidget(int, RemoteViews)},
+     * {@link #updateAppWidget(ComponentName, RemoteViews)},
+     * {@link #partiallyUpdateAppWidget(int[], RemoteViews)},
+     * or {@link #partiallyUpdateAppWidget(int, RemoteViews)}, whichever applicable.
      */
+    @Deprecated
     public void notifyAppWidgetViewDataChanged(int[] appWidgetIds, int viewId) {
         if (mService == null) {
             return;
         }
+
+        if (remoteAdapterConversion()) {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                mHasPostedLegacyLists = true;
+                createUpdateExecutorIfNull().execute(() -> notifyCollectionWidgetChange(
+                        appWidgetIds, viewId));
+            } else {
+                notifyCollectionWidgetChange(appWidgetIds, viewId);
+            }
+        } else {
+            try {
+                mService.notifyAppWidgetViewDataChanged(mPackageName, appWidgetIds, viewId);
+            } catch (RemoteException re) {
+                throw re.rethrowFromSystemServer();
+            }
+        }
+    }
+
+    private void notifyCollectionWidgetChange(int[] appWidgetIds, int viewId) {
         try {
-            mService.notifyAppWidgetViewDataChanged(mPackageName, appWidgetIds, viewId);
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
+            List<CompletableFuture<Void>> updateFutures = new ArrayList<>();
+            for (int i = 0; i < appWidgetIds.length; i++) {
+                final int widgetId = appWidgetIds[i];
+                updateFutures.add(CompletableFuture.runAsync(() -> {
+                    try {
+                        RemoteViews views = mService.getAppWidgetViews(mPackageName, widgetId);
+                        if (views.replaceRemoteCollections(viewId)) {
+                            updateAppWidget(widgetId, views);
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error notifying changes in RemoteViews", e);
+                    }
+                }));
+            }
+            CompletableFuture.allOf(updateFutures.toArray(CompletableFuture[]::new)).join();
+        } catch (Exception e) {
+            Log.e(TAG, "Error notifying changes for all widgets", e);
         }
     }
 
@@ -734,7 +892,18 @@ public class AppWidgetManager {
      *
      * @param appWidgetId  The AppWidget instance to notify of view data changes.
      * @param viewId       The collection view id.
+     * @deprecated The corresponding API
+     * {@link RemoteViews#setRemoteAdapter(int, Intent)} associated with this method has been
+     * deprecated. Moving forward please use
+     * {@link RemoteViews#setRemoteAdapter(int, android.widget.RemoteViews.RemoteCollectionItems)}
+     * instead to set {@link android.widget.RemoteViews.RemoteCollectionItems} for the remote
+     * adapter and update the widget views by calling {@link #updateAppWidget(int[], RemoteViews)},
+     * {@link #updateAppWidget(int, RemoteViews)},
+     * {@link #updateAppWidget(ComponentName, RemoteViews)},
+     * {@link #partiallyUpdateAppWidget(int[], RemoteViews)},
+     * or {@link #partiallyUpdateAppWidget(int, RemoteViews)}, whichever applicable.
      */
+    @Deprecated
     public void notifyAppWidgetViewDataChanged(int appWidgetId, int viewId) {
         if (mService == null) {
             return;
@@ -880,6 +1049,7 @@ public class AppWidgetManager {
      */
     public AppWidgetProviderInfo getAppWidgetInfo(int appWidgetId) {
         if (mService == null) {
+            Log.e(TAG, "Service wasn't initialized, appWidgetId=" + appWidgetId);
             return null;
         }
         try {
@@ -887,6 +1057,9 @@ public class AppWidgetManager {
             if (info != null) {
                 // Converting complex to dp.
                 info.updateDimensions(mDisplayMetrics);
+            } else {
+                Log.e(TAG, "App widget provider info is null. PackageName=" + mPackageName
+                        + " appWidgetId-" + appWidgetId);
             }
             return info;
         } catch (RemoteException e) {
@@ -929,7 +1102,7 @@ public class AppWidgetManager {
      *
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void bindAppWidgetId(int appWidgetId, ComponentName provider, Bundle options) {
         if (mService == null) {
             return;
@@ -939,6 +1112,9 @@ public class AppWidgetManager {
 
     /**
      * Set the component for a given appWidgetId.
+     *
+     * If successful, the app widget provider will receive a {@link #ACTION_APPWIDGET_UPDATE}
+     * broadcast.
      *
      * <p class="note">You need the BIND_APPWIDGET permission or the user must have enabled binding
      *         widgets always for your component. Should be used by apps that host widgets; if this
@@ -959,6 +1135,9 @@ public class AppWidgetManager {
 
     /**
      * Set the component for a given appWidgetId.
+     *
+     * If successful, the app widget provider will receive a {@link #ACTION_APPWIDGET_UPDATE}
+     * broadcast.
      *
      * <p class="note">You need the BIND_APPWIDGET permission or the user must have enabled binding
      *         widgets always for your component. Should be used by apps that host widgets; if this
@@ -983,6 +1162,10 @@ public class AppWidgetManager {
 
     /**
      * Set the provider for a given appWidgetId if the caller has a permission.
+     *
+     * If successful, the app widget provider will receive a {@link #ACTION_APPWIDGET_UPDATE}
+     * broadcast.
+     *
      * <p>
      * <strong>Note:</strong> You need the {@link android.Manifest.permission#BIND_APPWIDGET}
      * permission or the user must have enabled binding widgets always for your component.
@@ -1074,7 +1257,9 @@ public class AppWidgetManager {
      *
      * @hide
      */
-    public void setBindAppWidgetPermission(String packageName, int userId, boolean permission) {
+    @TestApi
+    public void setBindAppWidgetPermission(
+            @NonNull String packageName, @UserIdInt int userId, boolean permission) {
         if (mService == null) {
             return;
         }
@@ -1095,20 +1280,23 @@ public class AppWidgetManager {
      * @param intent        The intent of the service which will be providing the data to the
      *                      RemoteViewsAdapter.
      * @param connection    The callback interface to be notified when a connection is made or lost.
-     * @param flags         Flags used for binding to the service
+     * @param flags         Flags used for binding to the service. Currently only
+     *                     {@link Context#BIND_AUTO_CREATE} and
+     *                     {@link Context#BIND_FOREGROUND_SERVICE_WHILE_AWAKE} are supported.
      *
-     * @see Context#getServiceDispatcher(ServiceConnection, Handler, int)
+     * @see Context#getServiceDispatcher(ServiceConnection, Handler, long)
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public boolean bindRemoteViewsService(Context context, int appWidgetId, Intent intent,
-            IServiceConnection connection, @Context.BindServiceFlags int flags) {
+            IServiceConnection connection, @Context.BindServiceFlagsBits int flags) {
         if (mService == null) {
             return false;
         }
         try {
             return mService.bindRemoteViewsService(context.getOpPackageName(), appWidgetId, intent,
-                    context.getIApplicationThread(), context.getActivityToken(), connection, flags);
+                    context.getIApplicationThread(), context.getActivityToken(), connection,
+                    Integer.toUnsignedLong(flags));
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1208,7 +1396,8 @@ public class AppWidgetManager {
      *
      * @return {@code TRUE} if the launcher supports this feature. Note the API will return without
      *    waiting for the user to respond, so getting {@code TRUE} from this API does *not* mean
-     *    the shortcut is pinned. {@code FALSE} if the launcher doesn't support this feature.
+     *    the shortcut is pinned. {@code FALSE} if the launcher doesn't support this feature or if
+     *    calling app belongs to a user-profile with items restricted on home screen.
      *
      * @see android.content.pm.ShortcutManager#isRequestPinShortcutSupported()
      * @see android.content.pm.ShortcutManager#requestPinShortcut(ShortcutInfo, IntentSender)
@@ -1225,5 +1414,120 @@ public class AppWidgetManager {
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
+    }
+
+    /**
+     * Note an app widget is tapped on.
+     *
+     * @param appWidgetId App widget id.
+     * @hide
+     */
+    public void noteAppWidgetTapped(int appWidgetId) {
+        try {
+            mService.noteAppWidgetTapped(mPackageName, appWidgetId);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Set a preview for this widget. This preview will be used instead of the provider's {@link
+     * AppWidgetProviderInfo#previewLayout previewLayout} or {@link
+     * AppWidgetProviderInfo#previewImage previewImage} for previewing the widget in the widget
+     * picker and pin app widget flow.
+     *
+     * @param provider The {@link ComponentName} for the {@link android.content.BroadcastReceiver
+     *    BroadcastReceiver} provider for the AppWidget you intend to provide a preview for.
+     * @param widgetCategories The categories that this preview should be used for. This can be a
+     *    single category or combination of categories. If multiple categories are specified,
+     *    then this preview will be used for each of those categories. For example, if you
+     *    set a preview for WIDGET_CATEGORY_HOME_SCREEN | WIDGET_CATEGORY_KEYGUARD, the preview will
+     *    be used when picking widgets for the home screen and keyguard.
+     *
+     *    <p>Note: You should only use the widget categories that the provider supports, as defined
+     *    in {@link AppWidgetProviderInfo#widgetCategory}.
+     * @param preview This preview will be used for previewing the provider when picking widgets for
+     *    the selected categories.
+     *
+     * @see AppWidgetProviderInfo#WIDGET_CATEGORY_HOME_SCREEN
+     * @see AppWidgetProviderInfo#WIDGET_CATEGORY_KEYGUARD
+     * @see AppWidgetProviderInfo#WIDGET_CATEGORY_SEARCHBOX
+     *
+     * @return true if the call was successful, false if it was rate-limited.
+     */
+    @FlaggedApi(Flags.FLAG_GENERATED_PREVIEWS)
+    public boolean setWidgetPreview(@NonNull ComponentName provider,
+            @AppWidgetProviderInfo.CategoryFlags int widgetCategories,
+            @NonNull RemoteViews preview) {
+        try {
+            return mService.setWidgetPreview(provider, widgetCategories, preview);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Get the RemoteViews previews for this widget.
+     *
+     * @param provider The {@link ComponentName} for the {@link android.content.BroadcastReceiver
+     *    BroadcastReceiver} provider for the AppWidget you intend to get a preview for.
+     * @param profile The profile in which the provider resides. Passing null is equivalent
+     *        to querying for only the calling user.
+     * @param widgetCategory The widget category for which you want to display previews. This should
+     *    be a single category. If a combination of categories is provided, this function will
+     *    return a preview that matches at least one of the categories.
+     *
+     * @return The widget preview for the selected category, if available.
+     * @see AppWidgetProviderInfo#generatedPreviewCategories
+     */
+    @Nullable
+    @FlaggedApi(Flags.FLAG_GENERATED_PREVIEWS)
+    public RemoteViews getWidgetPreview(@NonNull ComponentName provider,
+            @Nullable UserHandle profile, @AppWidgetProviderInfo.CategoryFlags int widgetCategory) {
+        try {
+            if (profile == null) {
+                profile = mContext.getUser();
+            }
+            return mService.getWidgetPreview(mPackageName, provider, profile.getIdentifier(),
+                    widgetCategory);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Remove this provider's preview for the specified widget categories. If the provider does not
+     * have a preview for the specified widget category, this is a no-op.
+     *
+     * @param provider The AppWidgetProvider to remove previews for.
+     * @param widgetCategories The categories of the preview to remove. For example, removing the
+     *    preview for WIDGET_CATEGORY_HOME_SCREEN | WIDGET_CATEGORY_KEYGUARD will remove the
+     *    previews for both categories.
+     */
+    @FlaggedApi(Flags.FLAG_GENERATED_PREVIEWS)
+    public void removeWidgetPreview(@NonNull ComponentName provider,
+            @AppWidgetProviderInfo.CategoryFlags int widgetCategories) {
+        try {
+            mService.removeWidgetPreview(provider, widgetCategories);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+
+    @UiThread
+    private static @NonNull Executor createUpdateExecutorIfNull() {
+        if (sUpdateExecutor == null) {
+            sUpdateExecutor = new HandlerExecutor(createAndStartNewHandler(
+                    "widget_manager_update_helper_thread", Process.THREAD_PRIORITY_FOREGROUND));
+        }
+
+        return sUpdateExecutor;
+    }
+
+    private static @NonNull Handler createAndStartNewHandler(@NonNull String name, int priority) {
+        HandlerThread thread = new HandlerThread(name, priority);
+        thread.start();
+        return thread.getThreadHandler();
     }
 }

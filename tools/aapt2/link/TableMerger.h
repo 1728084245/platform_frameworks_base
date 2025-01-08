@@ -35,6 +35,10 @@ namespace aapt {
 struct TableMergerOptions {
   // If true, resources in overlays can be added without previously having existed.
   bool auto_add_overlay = false;
+  // If true, resource overlays with conflicting visibility are not allowed.
+  bool strict_visibility = false;
+  // If true, styles specified via "aapt2 link -R" completely replace any previously-seen resources.
+  bool override_styles_instead_of_overlaying = false;
 };
 
 // TableMerger takes resource tables and merges all packages within the tables that have the same
@@ -57,17 +61,18 @@ class TableMerger {
   // References are made to this ResourceTable for efficiency reasons.
   TableMerger(IAaptContext* context, ResourceTable* out_table, const TableMergerOptions& options);
 
-  inline const std::set<std::string>& merged_packages() const {
+  inline const std::set<std::string, std::less<>>& merged_packages() const {
     return merged_packages_;
   }
 
   // Merges resources from the same or empty package. This is for local sources.
   // If overlay is true, the resources are treated as overlays.
-  bool Merge(const Source& src, ResourceTable* table, bool overlay);
+  bool Merge(const android::Source& src, ResourceTable* table, bool overlay);
 
   // Merges resources from the given package, mangling the name. This is for static libraries.
   // All FileReference values must have their io::IFile set.
-  bool MergeAndMangle(const Source& src, const android::StringPiece& package, ResourceTable* table);
+  bool MergeAndMangle(const android::Source& src, android::StringPiece package,
+                      ResourceTable* table);
 
   // Merges a compiled file that belongs to this same or empty package.
   bool MergeFile(const ResourceFile& fileDesc, bool overlay, io::IFile* file);
@@ -76,15 +81,16 @@ class TableMerger {
   DISALLOW_COPY_AND_ASSIGN(TableMerger);
 
   IAaptContext* context_;
-  ResourceTable* master_table_;
+  ResourceTable* main_table_;
   TableMergerOptions options_;
-  ResourceTablePackage* master_package_;
-  std::set<std::string> merged_packages_;
+  ResourceTablePackage* main_package_;
+  std::set<std::string, std::less<>> merged_packages_;
 
-  bool MergeImpl(const Source& src, ResourceTable* src_table, bool overlay, bool allow_new);
+  bool MergeImpl(const android::Source& src, ResourceTable* src_table, bool overlay,
+                 bool allow_new);
 
-  bool DoMerge(const Source& src, ResourceTable* src_table, ResourceTablePackage* src_package,
-               bool mangle_package, bool overlay, bool allow_new_resources);
+  bool DoMerge(const android::Source& src, ResourceTablePackage* src_package, bool mangle_package,
+               bool overlay, bool allow_new_resources);
 
   std::unique_ptr<FileReference> CloneAndMangleFile(const std::string& package,
                                                     const FileReference& value);

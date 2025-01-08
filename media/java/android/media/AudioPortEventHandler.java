@@ -16,13 +16,16 @@
 
 package android.media;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
-import android.os.Looper;
 import android.os.Message;
-import java.util.ArrayList;
+
+import com.android.internal.annotations.GuardedBy;
+
 import java.lang.ref.WeakReference;
+import java.util.ArrayList;
 
 /**
  * The AudioPortEventHandler handles AudioManager.OnAudioPortUpdateListener callbacks
@@ -33,6 +36,9 @@ import java.lang.ref.WeakReference;
 class AudioPortEventHandler {
     private Handler mHandler;
     private HandlerThread mHandlerThread;
+    private final Object mLock = new Object();
+
+    @GuardedBy("mLock")
     private final ArrayList<AudioManager.OnAudioPortUpdateListener> mListeners =
             new ArrayList<AudioManager.OnAudioPortUpdateListener>();
 
@@ -49,11 +55,11 @@ class AudioPortEventHandler {
      * Accessed by native methods: JNI Callback context.
      */
     @SuppressWarnings("unused")
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private long mJniCallback;
 
     void init() {
-        synchronized (this) {
+        synchronized (mLock) {
             if (mHandler != null) {
                 return;
             }
@@ -66,14 +72,15 @@ class AudioPortEventHandler {
                     @Override
                     public void handleMessage(Message msg) {
                         ArrayList<AudioManager.OnAudioPortUpdateListener> listeners;
-                        synchronized (this) {
+                        synchronized (mLock) {
                             if (msg.what == AUDIOPORT_EVENT_NEW_LISTENER) {
                                 listeners = new ArrayList<AudioManager.OnAudioPortUpdateListener>();
                                 if (mListeners.contains(msg.obj)) {
                                     listeners.add((AudioManager.OnAudioPortUpdateListener)msg.obj);
                                 }
                             } else {
-                                listeners = mListeners;
+                                listeners = (ArrayList<AudioManager.OnAudioPortUpdateListener>)
+                                        mListeners.clone();
                             }
                         }
                         // reset audio port cache if the event corresponds to a change coming
@@ -152,7 +159,7 @@ class AudioPortEventHandler {
     private native void native_finalize();
 
     void registerListener(AudioManager.OnAudioPortUpdateListener l) {
-        synchronized (this) {
+        synchronized (mLock) {
             mListeners.add(l);
         }
         if (mHandler != null) {
@@ -162,7 +169,7 @@ class AudioPortEventHandler {
     }
 
     void unregisterListener(AudioManager.OnAudioPortUpdateListener l) {
-        synchronized (this) {
+        synchronized (mLock) {
             mListeners.remove(l);
         }
     }
@@ -172,7 +179,7 @@ class AudioPortEventHandler {
     }
 
     @SuppressWarnings("unused")
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private static void postEventFromNative(Object module_ref,
                                             int what, int arg1, int arg2, Object obj) {
         AudioPortEventHandler eventHandler =

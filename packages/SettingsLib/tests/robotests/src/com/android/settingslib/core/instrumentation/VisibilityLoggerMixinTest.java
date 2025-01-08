@@ -16,10 +16,11 @@
 package com.android.settingslib.core.instrumentation;
 
 import static com.android.settingslib.core.instrumentation.Instrumentable.METRICS_CATEGORY_UNKNOWN;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyInt;
-import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -30,10 +31,10 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
+
 import androidx.fragment.app.FragmentActivity;
 
 import com.android.internal.logging.nano.MetricsProto;
-import com.android.settingslib.SettingsLibRobolectricTestRunner;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -41,10 +42,10 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.robolectric.Robolectric;
+import org.robolectric.RobolectricTestRunner;
 import org.robolectric.android.controller.ActivityController;
 
-
-@RunWith(SettingsLibRobolectricTestRunner.class)
+@RunWith(RobolectricTestRunner.class)
 public class VisibilityLoggerMixinTest {
 
     @Mock
@@ -64,13 +65,13 @@ public class VisibilityLoggerMixinTest {
 
         verify(mMetricsFeature, times(1))
                 .visible(nullable(Context.class), eq(MetricsProto.MetricsEvent.VIEW_UNKNOWN),
-                        eq(TestInstrumentable.TEST_METRIC));
+                        eq(TestInstrumentable.TEST_METRIC), anyInt());
     }
 
     @Test
     public void shouldLogVisibleWithSource() {
         final Intent sourceIntent = new Intent()
-                .putExtra(VisibilityLoggerMixin.EXTRA_SOURCE_METRICS_CATEGORY,
+                .putExtra(MetricsFeatureProvider.EXTRA_SOURCE_METRICS_CATEGORY,
                         MetricsProto.MetricsEvent.SETTINGS_GESTURES);
         final Activity activity = mock(Activity.class);
         when(activity.getIntent()).thenReturn(sourceIntent);
@@ -79,7 +80,7 @@ public class VisibilityLoggerMixinTest {
 
         verify(mMetricsFeature, times(1))
                 .visible(nullable(Context.class), eq(MetricsProto.MetricsEvent.SETTINGS_GESTURES),
-                        eq(TestInstrumentable.TEST_METRIC));
+                        eq(TestInstrumentable.TEST_METRIC), anyInt());
     }
 
     @Test
@@ -87,7 +88,7 @@ public class VisibilityLoggerMixinTest {
         mMixin.onPause();
 
         verify(mMetricsFeature, times(1))
-                .hidden(nullable(Context.class), eq(TestInstrumentable.TEST_METRIC));
+                .hidden(nullable(Context.class), eq(TestInstrumentable.TEST_METRIC), anyInt());
     }
 
     @Test
@@ -97,7 +98,7 @@ public class VisibilityLoggerMixinTest {
         mMixin.onPause();
 
         verify(mMetricsFeature, never())
-                .hidden(nullable(Context.class), anyInt());
+                .hidden(nullable(Context.class), anyInt(), anyInt());
     }
 
     @Test
@@ -108,7 +109,7 @@ public class VisibilityLoggerMixinTest {
         mMixin.onPause();
 
         verify(mMetricsFeature, never())
-                .hidden(nullable(Context.class), anyInt());
+                .hidden(nullable(Context.class), anyInt(), anyInt());
     }
 
     @Test
@@ -117,9 +118,10 @@ public class VisibilityLoggerMixinTest {
         TestActivity testActivity = ac.get();
         MockitoAnnotations.initMocks(testActivity);
         ac.create().start().resume();
-        verify(testActivity.mMetricsFeatureProvider, times(1)).visible(any(), anyInt(), anyInt());
+        verify(testActivity.mMetricsFeatureProvider, times(1)).visible(any(), anyInt(), anyInt(),
+                anyInt());
         ac.pause().stop().destroy();
-        verify(testActivity.mMetricsFeatureProvider, times(1)).hidden(any(), anyInt());
+        verify(testActivity.mMetricsFeatureProvider, times(1)).hidden(any(), anyInt(), anyInt());
     }
 
     public static class TestActivity extends FragmentActivity {
@@ -137,7 +139,7 @@ public class VisibilityLoggerMixinTest {
 
     private final class TestInstrumentable implements Instrumentable {
 
-        public static final int TEST_METRIC = 12345;
+        private static final int TEST_METRIC = 12345;
 
         @Override
         public int getMetricsCategory() {

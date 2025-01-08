@@ -25,19 +25,19 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import android.metrics.LogMaker;
+import android.util.IndentingPrintWriter;
 
 import androidx.test.filters.SmallTest;
 import androidx.test.runner.AndroidJUnit4;
 
 import com.android.internal.logging.MetricsLogger;
-import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.server.power.batterysaver.BatterySavingStats.BatterySaverState;
 import com.android.server.power.batterysaver.BatterySavingStats.DozeState;
 import com.android.server.power.batterysaver.BatterySavingStats.InteractiveState;
+import com.android.server.power.batterysaver.BatterySavingStats.PlugState;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.ArgumentCaptor;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintWriter;
@@ -54,7 +54,7 @@ public class BatterySavingStatsTest {
         private int mBatteryLevel = 1_000_000_000;
 
         private BatterySavingStatsTestable() {
-            super(new Object(), mMetricsLogger);
+            super(new Object());
         }
 
         @Override
@@ -74,7 +74,7 @@ public class BatterySavingStatsTest {
 
         void assertDumpable() {
             final ByteArrayOutputStream out = new ByteArrayOutputStream();
-            dump(new PrintWriter(out), ""); // Just make sure it won't crash.
+            dump(new IndentingPrintWriter(new PrintWriter(out))); // Just make sure it won't crash.
         }
 
         void advanceClock(int minutes) {
@@ -104,23 +104,13 @@ public class BatterySavingStatsTest {
 
     public MetricsLogger mMetricsLogger = mock(MetricsLogger.class);
 
-    private boolean sendTronEvents;
-
     @Test
-    public void testAll_withTron() {
-        sendTronEvents = true;
-        checkAll();
-    }
-
-    @Test
-    public void testAll_noTron() {
-        sendTronEvents = false;
+    public void testAll() {
         checkAll();
     }
 
     private void checkAll() {
         final BatterySavingStatsTestable target = new BatterySavingStatsTestable();
-        target.setSendTronLog(sendTronEvents);
 
         target.assertDumpable();
 
@@ -130,7 +120,8 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.OFF,
                 InteractiveState.INTERACTIVE,
-                DozeState.NOT_DOZING);
+                DozeState.NOT_DOZING,
+                PlugState.UNPLUGGED);
 
         target.advanceClock(4);
         target.drainBattery(100);
@@ -138,7 +129,8 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.OFF,
                 InteractiveState.NON_INTERACTIVE,
-                DozeState.NOT_DOZING);
+                DozeState.NOT_DOZING,
+                PlugState.UNPLUGGED);
 
         target.advanceClock(2);
         target.drainBattery(500);
@@ -146,7 +138,8 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.OFF,
                 InteractiveState.INTERACTIVE,
-                DozeState.NOT_DOZING);
+                DozeState.NOT_DOZING,
+                PlugState.UNPLUGGED);
 
         target.advanceClock(4);
         target.drainBattery(100);
@@ -154,7 +147,8 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.OFF,
                 InteractiveState.NON_INTERACTIVE,
-                DozeState.NOT_DOZING);
+                DozeState.NOT_DOZING,
+                PlugState.UNPLUGGED);
 
         target.advanceClock(2);
         target.drainBattery(500);
@@ -162,7 +156,8 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.OFF,
                 InteractiveState.INTERACTIVE,
-                DozeState.NOT_DOZING);
+                DozeState.NOT_DOZING,
+                PlugState.UNPLUGGED);
 
         target.advanceClock(3);
         target.drainBattery(100);
@@ -170,7 +165,8 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.OFF,
                 InteractiveState.NON_INTERACTIVE,
-                DozeState.LIGHT);
+                DozeState.LIGHT,
+                PlugState.UNPLUGGED);
 
         target.advanceClock(5);
         target.drainBattery(100);
@@ -178,7 +174,8 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.OFF,
                 InteractiveState.NON_INTERACTIVE,
-                DozeState.DEEP);
+                DozeState.DEEP,
+                PlugState.UNPLUGGED);
 
         target.advanceClock(1);
         target.drainBattery(200);
@@ -186,7 +183,8 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.ON,
                 InteractiveState.INTERACTIVE,
-                DozeState.NOT_DOZING);
+                DozeState.NOT_DOZING,
+                PlugState.UNPLUGGED);
 
         target.advanceClock(1);
         target.drainBattery(300);
@@ -194,7 +192,8 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.OFF,
                 InteractiveState.INTERACTIVE,
-                DozeState.NOT_DOZING);
+                DozeState.NOT_DOZING,
+                PlugState.UNPLUGGED);
 
         target.advanceClock(3);
         target.drainBattery(500);
@@ -202,12 +201,17 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.ON,
                 InteractiveState.INTERACTIVE,
-                DozeState.NOT_DOZING);
+                DozeState.NOT_DOZING,
+                PlugState.UNPLUGGED);
 
         target.advanceClock(3);
         target.drainBattery(500);
 
-        target.startCharging();
+        target.transitionState(
+                BatterySaverState.ON,
+                InteractiveState.INTERACTIVE,
+                DozeState.NOT_DOZING,
+                PlugState.PLUGGED);
 
         target.advanceClock(5);
         target.drainBattery(1000);
@@ -215,71 +219,44 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.ON,
                 InteractiveState.INTERACTIVE,
-                DozeState.NOT_DOZING);
+                DozeState.NOT_DOZING,
+                PlugState.UNPLUGGED);
 
         target.advanceClock(5);
         target.drainBattery(100);
 
-        target.startCharging();
+        target.transitionState(
+                BatterySaverState.ON,
+                InteractiveState.INTERACTIVE,
+                DozeState.NOT_DOZING,
+                PlugState.PLUGGED);
 
         target.assertDumpable();
 
         assertEquals(
-                "BS=0,I=0,D=0:{4m,1000,15000.00uA/H,1500.00%}\n" +
-                "BS=1,I=0,D=0:{0m,0,0.00uA/H,0.00%}\n" +
-                "BS=0,I=1,D=0:{14m,800,3428.57uA/H,342.86%}\n" +
-                "BS=1,I=1,D=0:{9m,900,6000.00uA/H,600.00%}\n" +
-                "BS=0,I=0,D=1:{5m,100,1200.00uA/H,120.00%}\n" +
-                "BS=1,I=0,D=1:{0m,0,0.00uA/H,0.00%}\n" +
-                "BS=0,I=1,D=1:{0m,0,0.00uA/H,0.00%}\n" +
-                "BS=1,I=1,D=1:{0m,0,0.00uA/H,0.00%}\n" +
-                "BS=0,I=0,D=2:{1m,200,12000.00uA/H,1200.00%}\n" +
-                "BS=1,I=0,D=2:{0m,0,0.00uA/H,0.00%}\n" +
-                "BS=0,I=1,D=2:{0m,0,0.00uA/H,0.00%}\n" +
-                "BS=1,I=1,D=2:{0m,0,0.00uA/H,0.00%}",
+                "BS=0,I=0,D=0,P=0:{4m,1000,15000.00uA/H,1500.00%}\n"
+                        + "BS=1,I=0,D=0,P=0:{0m,0,0.00uA/H,0.00%}\n"
+                        + "BS=0,I=1,D=0,P=0:{14m,800,3428.57uA/H,342.86%}\n"
+                        + "BS=1,I=1,D=0,P=0:{9m,900,6000.00uA/H,600.00%}\n"
+                        + "BS=0,I=0,D=1,P=0:{5m,100,1200.00uA/H,120.00%}\n"
+                        + "BS=1,I=0,D=1,P=0:{0m,0,0.00uA/H,0.00%}\n"
+                        + "BS=0,I=1,D=1,P=0:{0m,0,0.00uA/H,0.00%}\n"
+                        + "BS=1,I=1,D=1,P=0:{0m,0,0.00uA/H,0.00%}\n"
+                        + "BS=0,I=0,D=2,P=0:{1m,200,12000.00uA/H,1200.00%}\n"
+                        + "BS=1,I=0,D=2,P=0:{0m,0,0.00uA/H,0.00%}\n"
+                        + "BS=0,I=1,D=2,P=0:{0m,0,0.00uA/H,0.00%}\n"
+                        + "BS=1,I=1,D=2,P=0:{0m,0,0.00uA/H,0.00%}\n"
+                        + "BS=1,I=1,D=0,P=1:{5m,1000,12000.00uA/H,1200.00%}",
                 target.toDebugString());
     }
 
-    private void assertLog(boolean batterySaver, boolean interactive, long deltaTimeMs,
-            int deltaBatteryLevelUa, int deltaBatteryLevelPercent) {
-        if (sendTronEvents) {
-            ArgumentCaptor<LogMaker> ac = ArgumentCaptor.forClass(LogMaker.class);
-            verify(mMetricsLogger, times(1)).write(ac.capture());
-
-            LogMaker lm = ac.getValue();
-            assertEquals(MetricsEvent.BATTERY_SAVER, lm.getCategory());
-            assertEquals(batterySaver ? 1 : 0,
-                    lm.getTaggedData(MetricsEvent.RESERVED_FOR_LOGBUILDER_SUBTYPE));
-            assertEquals(interactive ? 1 : 0, lm.getTaggedData(MetricsEvent.FIELD_INTERACTIVE));
-            assertEquals(deltaTimeMs, lm.getTaggedData(MetricsEvent.FIELD_DURATION_MILLIS));
-
-            assertEquals(deltaBatteryLevelUa,
-                    (int) lm.getTaggedData(MetricsEvent.FIELD_START_BATTERY_UA)
-                            - (int) lm.getTaggedData(MetricsEvent.FIELD_END_BATTERY_UA));
-            assertEquals(deltaBatteryLevelPercent,
-                    (int) lm.getTaggedData(MetricsEvent.FIELD_START_BATTERY_PERCENT)
-                            - (int) lm.getTaggedData(MetricsEvent.FIELD_END_BATTERY_PERCENT));
-        } else {
-            verify(mMetricsLogger, times(0)).write(any(LogMaker.class));
-        }
-    }
-
-
-    @Test
-    public void testMetricsLogger_withTron() {
-        sendTronEvents = true;
-        checkMetricsLogger();
+    private void assertLog() {
+        verify(mMetricsLogger, times(0)).write(any(LogMaker.class));
     }
 
     @Test
-    public void testMetricsLogger_noTron() {
-        sendTronEvents = false;
-        checkMetricsLogger();
-    }
-
-    private void checkMetricsLogger() {
+    public void testMetricsLogger() {
         final BatterySavingStatsTestable target = new BatterySavingStatsTestable();
-        target.setSendTronLog(sendTronEvents);
 
         target.advanceClock(1);
         target.drainBattery(1000);
@@ -287,7 +264,8 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.OFF,
                 InteractiveState.INTERACTIVE,
-                DozeState.NOT_DOZING);
+                DozeState.NOT_DOZING,
+                PlugState.UNPLUGGED);
 
         verify(mMetricsLogger, times(0)).count(anyString(), anyInt());
 
@@ -298,9 +276,10 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.OFF,
                 InteractiveState.NON_INTERACTIVE,
-                DozeState.NOT_DOZING);
+                DozeState.NOT_DOZING,
+                PlugState.UNPLUGGED);
 
-        assertLog(false, true, 60_000, 2000, 200);
+        assertLog();
 
         target.advanceClock(1);
         target.drainBattery(2000);
@@ -309,7 +288,8 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.OFF,
                 InteractiveState.NON_INTERACTIVE,
-                DozeState.DEEP);
+                DozeState.DEEP,
+                PlugState.UNPLUGGED);
 
         target.advanceClock(1);
         target.drainBattery(2000);
@@ -319,7 +299,8 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.OFF,
                 InteractiveState.NON_INTERACTIVE,
-                DozeState.LIGHT);
+                DozeState.LIGHT,
+                PlugState.UNPLUGGED);
 
         target.advanceClock(1);
         target.drainBattery(2000);
@@ -329,17 +310,22 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.ON,
                 InteractiveState.INTERACTIVE,
-                DozeState.NOT_DOZING);
+                DozeState.NOT_DOZING,
+                PlugState.UNPLUGGED);
 
-        assertLog(false, false, 60_000 * 3, 2000 * 3, 200 * 3);
+        assertLog();
 
         target.advanceClock(10);
         target.drainBattery(10000);
 
         reset(mMetricsLogger);
-        target.startCharging();
+        target.transitionState(
+                BatterySaverState.ON,
+                InteractiveState.INTERACTIVE,
+                DozeState.NOT_DOZING,
+                PlugState.PLUGGED);
 
-        assertLog(true, true, 60_000 * 10, 10000, 1000);
+        assertLog();
 
         target.advanceClock(1);
         target.drainBattery(2000);
@@ -348,15 +334,20 @@ public class BatterySavingStatsTest {
         target.transitionState(
                 BatterySaverState.ON,
                 InteractiveState.NON_INTERACTIVE,
-                DozeState.NOT_DOZING);
+                DozeState.NOT_DOZING,
+                PlugState.UNPLUGGED);
 
         verify(mMetricsLogger, times(0)).count(anyString(), anyInt());
 
         target.advanceClock(1);
         target.drainBattery(2000);
 
-        target.startCharging();
+        target.transitionState(
+                BatterySaverState.ON,
+                InteractiveState.NON_INTERACTIVE,
+                DozeState.NOT_DOZING,
+                PlugState.PLUGGED);
 
-        assertLog(true, false, 60_000, 2000, 200);
+        assertLog();
     }
 }

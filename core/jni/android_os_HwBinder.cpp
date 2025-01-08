@@ -20,6 +20,8 @@
 
 #include "android_os_HwBinder.h"
 
+#include "android_util_Binder.h" // for binder_report_exception
+
 #include "android_os_HwParcel.h"
 #include "android_os_HwRemoteBinder.h"
 
@@ -37,7 +39,6 @@
 #include <hwbinder/ProcessState.h>
 #include <nativehelper/ScopedLocalRef.h>
 #include <nativehelper/ScopedUtfChars.h>
-#include <vintf/parse_string.h>
 #include <utils/misc.h>
 
 #include "core_jni_helpers.h"
@@ -152,7 +153,7 @@ status_t JHwBinder::onTransact(
         uint32_t flags,
         TransactCallback callback) {
     JNIEnv *env = AndroidRuntime::getJNIEnv();
-    bool isOneway = (flags & TF_ONE_WAY) != 0;
+    bool isOneway = (flags & IBinder::FLAG_ONEWAY) != 0;
     ScopedLocalRef<jobject> replyObj(env, nullptr);
     sp<JHwParcel> replyContext = nullptr;
 
@@ -183,15 +184,7 @@ status_t JHwBinder::onTransact(
         env->ExceptionDescribe();
         env->ExceptionClear();
 
-        // It is illegal to call IsInstanceOf if there is a pending exception.
-        // Attempting to do so results in a JniAbort which crashes the entire process.
-        if (env->IsInstanceOf(excep, gErrorClass)) {
-            /* It's an error */
-            LOG(ERROR) << "Forcefully exiting";
-            _exit(1);
-        } else {
-            LOG(ERROR) << "Uncaught exception!";
-        }
+        binder_report_exception(env, excep, "Uncaught error or exception in hwbinder!");
 
         env->DeleteLocalRef(excep);
     }
@@ -264,14 +257,59 @@ static void JHwBinder_native_setup(JNIEnv *env, jobject thiz) {
     JHwBinder::SetNativeContext(env, thiz, context);
 }
 
-static void JHwBinder_native_transact(
-        JNIEnv * /* env */,
-        jobject /* thiz */,
-        jint /* code */,
-        jobject /* requestObj */,
-        jobject /* replyObj */,
-        jint /* flags */) {
-    CHECK(!"Should not be here");
+static void JHwBinder_native_transact(JNIEnv *env, jobject thiz, jint code, jobject requestObj,
+                                      jobject replyObj, jint flags) {
+    if (requestObj == NULL) {
+        jniThrowException(env, "java/lang/NullPointerException", NULL);
+        return;
+    }
+    sp<hardware::IBinder> binder = JHwBinder::GetNativeBinder(env, thiz);
+    sp<android::hidl::base::V1_0::IBase> base = new android::hidl::base::V1_0::BpHwBase(binder);
+    hidl_string desc;
+    auto ret = base->interfaceDescriptor(
+            [&desc](const hidl_string &descriptor) { desc = descriptor; });
+    ret.assertOk();
+    // Only the fake hwservicemanager is allowed to be used locally like this.
+    if (desc != "android.hidl.manager@1.2::IServiceManager" &&
+        desc != "android.hidl.manager@1.1::IServiceManager" &&
+        desc != "android.hidl.manager@1.0::IServiceManager") {
+        LOG(FATAL) << "Local binders are not supported!";
+    }
+    if (replyObj == nullptr) {
+        LOG(FATAL) << "Unexpected null replyObj. code: " << code;
+        return;
+    }
+    const hardware::Parcel *request = JHwParcel::GetNativeContext(env, requestObj)->getParcel();
+    sp<JHwParcel> replyContext = JHwParcel::GetNativeContext(env, replyObj);
+    hardware::Parcel *reply = replyContext->getParcel();
+
+    request->setDataPosition(0);
+
+    bool isOneway = (flags & IBinder::FLAG_ONEWAY) != 0;
+    if (!isOneway) {
+        replyContext->setTransactCallback([](auto &replyParcel) {});
+    }
+
+    env->CallVoidMethod(thiz, gFields.onTransactID, code, requestObj, replyObj, flags);
+
+    if (env->ExceptionCheck()) {
+        jthrowable excep = env->ExceptionOccurred();
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+
+        binder_report_exception(env, excep, "Uncaught error or exception in hwbinder!");
+
+        env->DeleteLocalRef(excep);
+    }
+
+    if (!isOneway) {
+        if (!replyContext->wasSent()) {
+            // The implementation never finished the transaction.
+            LOG(ERROR) << "The reply failed to send!";
+        }
+    }
+
+    reply->setDataPosition(0);
 }
 
 static void JHwBinder_native_registerService(
@@ -339,6 +377,10 @@ static jobject JHwBinder_native_getService(
     return JHwRemoteBinder::NewObject(env, service);
 }
 
+void JHwBinder_native_setTrebleTestingOverride(JNIEnv*, jclass, jboolean testingOverride) {
+    hardware::details::setTrebleTestingOverride(testingOverride);
+}
+
 void JHwBinder_native_configureRpcThreadpool(JNIEnv *, jclass,
         jlong maxThreads, jboolean callerWillJoin) {
     CHECK(maxThreads > 0);
@@ -367,6 +409,9 @@ static JNINativeMethod gMethods[] = {
 
     { "getService", "(Ljava/lang/String;Ljava/lang/String;Z)L" PACKAGE_PATH "/IHwBinder;",
         (void *)JHwBinder_native_getService },
+
+    { "setTrebleTestingOverride", "(Z)V",
+        (void *)JHwBinder_native_setTrebleTestingOverride },
 
     { "configureRpcThreadpool", "(JZ)V",
         (void *)JHwBinder_native_configureRpcThreadpool },

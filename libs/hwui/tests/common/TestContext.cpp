@@ -16,47 +16,61 @@
 
 #include "tests/common/TestContext.h"
 
+#include <com_android_graphics_libgui_flags.h>
 #include <cutils/trace.h>
 
 namespace android {
 namespace uirenderer {
 namespace test {
 
-static const int IDENT_DISPLAYEVENT = 1;
-
-static android::DisplayInfo DUMMY_DISPLAY{
-        1080,   // w
-        1920,   // h
-        320.0,  // xdpi
-        320.0,  // ydpi
-        60.0,   // fps
-        2.0,    // density
-        0,      // orientation
-        false,  // secure?
-        0,      // appVsyncOffset
-        0,      // presentationDeadline
-};
-
-DisplayInfo getBuiltInDisplay() {
-#if !HWUI_NULL_GPU
-    DisplayInfo display;
-    sp<IBinder> dtoken(SurfaceComposerClient::getBuiltInDisplay(ISurfaceComposer::eDisplayIdMain));
-    status_t status = SurfaceComposerClient::getDisplayInfo(dtoken, &display);
-    LOG_ALWAYS_FATAL_IF(status, "Failed to get display info\n");
-    return display;
+const ui::StaticDisplayInfo& getDisplayInfo() {
+    static ui::StaticDisplayInfo info = [] {
+        ui::StaticDisplayInfo info;
+#if HWUI_NULL_GPU
+        info.density = 2.f;
 #else
-    return DUMMY_DISPLAY;
+        const std::vector<PhysicalDisplayId> ids = SurfaceComposerClient::getPhysicalDisplayIds();
+        LOG_ALWAYS_FATAL_IF(ids.empty(), "%s: No displays", __FUNCTION__);
+
+        const status_t status =
+                SurfaceComposerClient::getStaticDisplayInfo(ids.front().value, &info);
+        LOG_ALWAYS_FATAL_IF(status, "%s: Failed to get display info", __FUNCTION__);
 #endif
+        return info;
+    }();
+
+    return info;
 }
 
-// Initialize to a dummy default
-android::DisplayInfo gDisplay = DUMMY_DISPLAY;
+const ui::DisplayMode& getActiveDisplayMode() {
+    static ui::DisplayMode config = [] {
+        ui::DisplayMode config;
+#if HWUI_NULL_GPU
+        config.resolution = ui::Size(1080, 1920);
+        config.xDpi = config.yDpi = 320.f;
+        config.refreshRate = 60.f;
+#else
+        const std::vector<PhysicalDisplayId> ids = SurfaceComposerClient::getPhysicalDisplayIds();
+        LOG_ALWAYS_FATAL_IF(ids.empty(), "%s: No displays", __FUNCTION__);
+
+        const sp<IBinder> token = SurfaceComposerClient::getPhysicalDisplayToken(ids.front());
+        LOG_ALWAYS_FATAL_IF(!token, "%s: No internal display", __FUNCTION__);
+
+        const status_t status = SurfaceComposerClient::getActiveDisplayMode(token, &config);
+        LOG_ALWAYS_FATAL_IF(status, "%s: Failed to get active display config", __FUNCTION__);
+#endif
+        return config;
+    }();
+
+    return config;
+}
 
 TestContext::TestContext() {
     mLooper = new Looper(true);
     mSurfaceComposerClient = new SurfaceComposerClient();
-    mLooper->addFd(mDisplayEventReceiver.getFd(), IDENT_DISPLAYEVENT, Looper::EVENT_INPUT, nullptr,
-                   nullptr);
+
+    constexpr int EVENT_ID = 1;
+    mLooper->addFd(mDisplayEventReceiver.getFd(), EVENT_ID, Looper::EVENT_INPUT, nullptr, nullptr);
 }
 
 TestContext::~TestContext() {}
@@ -77,8 +91,10 @@ void TestContext::createSurface() {
 }
 
 void TestContext::createWindowSurface() {
-    mSurfaceControl = mSurfaceComposerClient->createSurface(String8("HwuiTest"), gDisplay.w,
-                                                            gDisplay.h, PIXEL_FORMAT_RGBX_8888);
+    const ui::Size& resolution = getActiveDisplayResolution();
+    mSurfaceControl =
+            mSurfaceComposerClient->createSurface(String8("HwuiTest"), resolution.getWidth(),
+                                                  resolution.getHeight(), PIXEL_FORMAT_RGBX_8888);
 
     SurfaceComposerClient::Transaction t;
     t.setLayer(mSurfaceControl, 0x7FFFFFF).show(mSurfaceControl).apply();
@@ -86,14 +102,24 @@ void TestContext::createWindowSurface() {
 }
 
 void TestContext::createOffscreenSurface() {
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_CONSUMER_BASE_OWNS_BQ)
+    mConsumer = new BufferItemConsumer(GRALLOC_USAGE_HW_COMPOSER, 4);
+    const ui::Size& resolution = getActiveDisplayResolution();
+    mConsumer->setDefaultBufferSize(resolution.getWidth(), resolution.getHeight());
+    mSurface = mConsumer->getSurface();
+    mSurface->setMaxDequeuedBufferCount(3);
+    mSurface->setAsyncMode(true);
+#else
     sp<IGraphicBufferProducer> producer;
     sp<IGraphicBufferConsumer> consumer;
     BufferQueue::createBufferQueue(&producer, &consumer);
     producer->setMaxDequeuedBufferCount(3);
     producer->setAsyncMode(true);
     mConsumer = new BufferItemConsumer(consumer, GRALLOC_USAGE_HW_COMPOSER, 4);
-    mConsumer->setDefaultBufferSize(gDisplay.w, gDisplay.h);
+    const ui::Size& resolution = getActiveDisplayResolution();
+    mConsumer->setDefaultBufferSize(resolution.getWidth(), resolution.getHeight());
     mSurface = new Surface(producer);
+#endif  // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_CONSUMER_BASE_OWNS_BQ)
 }
 
 void TestContext::waitForVsync() {

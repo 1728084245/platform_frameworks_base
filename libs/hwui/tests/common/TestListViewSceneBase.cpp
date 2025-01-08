@@ -19,6 +19,8 @@
 #include "TestContext.h"
 #include "TestUtils.h"
 
+#include <SkBlendMode.h>
+
 #include <utils/Color.h>
 
 namespace android {
@@ -70,7 +72,7 @@ void TestListViewSceneBase::doFrame(int frameNr) {
         // draw it to parent DisplayList
         canvas->drawRenderNode(mListItems[ci].get());
     }
-    mListView->setStagingDisplayList(canvas->finishRecording());
+    canvas->finishRecording(mListView.get());
 }
 
 }  // namespace test

@@ -16,6 +16,8 @@
 
  package com.android.internal.app;
 
+ import android.os.Bundle;
+
  oneway interface IVoiceInteractionSessionListener {
     /**
      * Called when a voice session is shown.
@@ -26,4 +28,16 @@
      * Called when a voice session is hidden.
      */
     void onVoiceSessionHidden();
+
+    /**
+     * Called when a voice session window is shown/hidden.
+     * Caution that there could be duplicated visibility change callbacks, it's up to the listener
+     * to dedup those events.
+     */
+    void onVoiceSessionWindowVisibilityChanged(boolean visible);
+
+    /**
+     * Called when UI hints were received.
+     */
+    void onSetUiHints(in Bundle args);
  }

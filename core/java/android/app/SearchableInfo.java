@@ -16,17 +16,14 @@
 
 package android.app;
 
-import org.xmlpull.v1.XmlPullParser;
-import org.xmlpull.v1.XmlPullParserException;
-
 import android.annotation.StringRes;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
-import android.content.pm.ProviderInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
+import android.content.pm.ProviderInfo;
 import android.content.res.TypedArray;
 import android.content.res.XmlResourceParser;
 import android.os.Parcel;
@@ -37,6 +34,9 @@ import android.util.AttributeSet;
 import android.util.Log;
 import android.util.Xml;
 import android.view.inputmethod.EditorInfo;
+
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -396,6 +396,17 @@ public final class SearchableInfo implements Parcelable {
         private final String mSuggestActionMsg;
         private final String mSuggestActionMsgColumn;
 
+        public static final Parcelable.Creator<ActionKeyInfo> CREATOR =
+                new Parcelable.Creator<ActionKeyInfo>() {
+                    public ActionKeyInfo createFromParcel(Parcel in) {
+                        return new ActionKeyInfo(in);
+                    }
+
+                    public ActionKeyInfo[] newArray(int size) {
+                        return new ActionKeyInfo[size];
+                    }
+                };
+
         /**
          * Create one object using attributeset as input data.
          * @param activityContext runtime context of the activity that the action key information
@@ -418,7 +429,7 @@ public final class SearchableInfo implements Parcelable {
                     com.android.internal.R.styleable.SearchableActionKey_suggestActionMsgColumn);
             a.recycle();
 
-            // sanity check.
+            // validity check.
             if (mKeyCode == 0) {
                 throw new IllegalArgumentException("No keycode.");
             } else if ((mQueryActionMsg == null) && 
@@ -524,7 +535,7 @@ public final class SearchableInfo implements Parcelable {
      */
     public static SearchableInfo getActivityMetaData(Context context, ActivityInfo activityInfo,
             int userId) {
-        Context userContext = null;
+        Context userContext;
         try {
             userContext = context.createPackageContextAsUser("system", 0,
                 new UserHandle(userId));
@@ -800,7 +811,7 @@ public final class SearchableInfo implements Parcelable {
     /**
      * Support for parcelable and aidl operations.
      */
-    public static final Parcelable.Creator<SearchableInfo> CREATOR
+    public static final @android.annotation.NonNull Parcelable.Creator<SearchableInfo> CREATOR
     = new Parcelable.Creator<SearchableInfo>() {
         public SearchableInfo createFromParcel(Parcel in) {
             return new SearchableInfo(in);

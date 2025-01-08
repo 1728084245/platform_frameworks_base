@@ -19,19 +19,18 @@ package com.android.server.notification;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.Uri;
 import android.service.notification.Condition;
-import android.service.notification.IConditionProvider;
 import android.service.notification.ZenModeConfig;
 import android.text.format.DateUtils;
 import android.util.Log;
 import android.util.Slog;
 
 import com.android.server.notification.NotificationManagerService.DumpFilter;
+import com.android.server.pm.PackageManagerService;
 
 import java.io.PrintWriter;
 
@@ -39,9 +38,6 @@ import java.io.PrintWriter;
 public class CountdownConditionProvider extends SystemConditionProviderService {
     private static final String TAG = "ConditionProviders.CCP";
     private static final boolean DEBUG = Log.isLoggable("ConditionProviders", Log.DEBUG);
-
-    public static final ComponentName COMPONENT =
-            new ComponentName("android", CountdownConditionProvider.class.getName());
 
     private static final String ACTION = CountdownConditionProvider.class.getName();
     private static final int REQUEST_CODE = 100;
@@ -59,28 +55,13 @@ public class CountdownConditionProvider extends SystemConditionProviderService {
     }
 
     @Override
-    public ComponentName getComponent() {
-        return COMPONENT;
-    }
-
-    @Override
     public boolean isValidConditionId(Uri id) {
         return ZenModeConfig.isValidCountdownConditionId(id);
     }
 
     @Override
-    public void attachBase(Context base) {
-        attachBaseContext(base);
-    }
-
-    @Override
     public void onBootComplete() {
         // noop
-    }
-
-    @Override
-    public IConditionProvider asInterface() {
-        return (IConditionProvider) onBind(null);
     }
 
     @Override
@@ -93,7 +74,8 @@ public class CountdownConditionProvider extends SystemConditionProviderService {
     @Override
     public void onConnected() {
         if (DEBUG) Slog.d(TAG, "onConnected");
-        mContext.registerReceiver(mReceiver, new IntentFilter(ACTION));
+        mContext.registerReceiver(mReceiver, new IntentFilter(ACTION),
+                Context.RECEIVER_EXPORTED_UNAUDITED);
         mConnected = true;
     }
 
@@ -114,11 +96,7 @@ public class CountdownConditionProvider extends SystemConditionProviderService {
         mIsAlarm = ZenModeConfig.isValidCountdownToAlarmConditionId(conditionId);
         final AlarmManager alarms = (AlarmManager)
                 mContext.getSystemService(Context.ALARM_SERVICE);
-        final Intent intent = new Intent(ACTION)
-                .putExtra(EXTRA_CONDITION_ID, conditionId)
-                .setFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY);
-        final PendingIntent pendingIntent = PendingIntent.getBroadcast(mContext, REQUEST_CODE,
-                intent, PendingIntent.FLAG_UPDATE_CURRENT);
+        final PendingIntent pendingIntent = getPendingIntent(conditionId);
         alarms.cancel(pendingIntent);
         if (mTime > 0) {
             final long now = System.currentTimeMillis();
@@ -138,6 +116,16 @@ public class CountdownConditionProvider extends SystemConditionProviderService {
         }
     }
 
+    PendingIntent getPendingIntent(Uri conditionId) {
+        final Intent intent = new Intent(ACTION)
+                .setPackage(PackageManagerService.PLATFORM_PACKAGE_NAME)
+                .putExtra(EXTRA_CONDITION_ID, conditionId)
+                .setFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY);
+        final PendingIntent pendingIntent = PendingIntent.getBroadcast(mContext, REQUEST_CODE,
+                intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        return pendingIntent;
+    }
+
     @Override
     public void onUnsubscribe(Uri conditionId) {
         // noop
@@ -147,7 +135,7 @@ public class CountdownConditionProvider extends SystemConditionProviderService {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (ACTION.equals(intent.getAction())) {
-                final Uri conditionId = intent.getParcelableExtra(EXTRA_CONDITION_ID);
+                final Uri conditionId = intent.getParcelableExtra(EXTRA_CONDITION_ID, android.net.Uri.class);
                 final boolean alarm = ZenModeConfig.isValidCountdownToAlarmConditionId(conditionId);
                 final long time = ZenModeConfig.tryParseCountdownConditionId(conditionId);
                 if (DEBUG) Slog.d(TAG, "Countdown condition fired: " + conditionId);

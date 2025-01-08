@@ -21,7 +21,8 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.perftests.utils.ManualBenchmarkState;
 import android.perftests.utils.PerfManualStatusReporter;
-import android.support.test.InstrumentationRegistry;
+
+import androidx.test.InstrumentationRegistry;
 
 import com.android.frameworks.perftests.am.util.TargetPackageUtils;
 import com.android.frameworks.perftests.am.util.TimeReceiver;
@@ -60,10 +61,11 @@ public class BasePerfTest {
         return intent;
     }
 
-    protected Intent createBroadcastIntent(String action) {
+    protected Intent createFgBroadcastIntent(String action) {
         final Intent intent = new Intent(action);
-        intent.addFlags(
-                Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND | Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+        intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND
+                | Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND
+                | Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
         putTimeReceiverBinderExtra(intent);
         return intent;
     }

@@ -16,7 +16,8 @@
 
 #include "TestSceneBase.h"
 #include "tests/common/TestListViewSceneBase.h"
-
+#include "hwui/Paint.h"
+#include <SkBlendMode.h>
 #include <SkGradientShader.h>
 
 class ListOfFadedTextAnimation;
@@ -32,9 +33,9 @@ class ListOfFadedTextAnimation : public TestListViewSceneBase {
                         int itemHeight) override {
         canvas.drawColor(Color::White, SkBlendMode::kSrcOver);
         int length = dp(100);
-        canvas.saveLayer(0, 0, length, itemHeight, nullptr, SaveFlags::HasAlphaLayer);
-        SkPaint textPaint;
-        textPaint.setTextSize(dp(20));
+        canvas.saveLayer(0, 0, length, itemHeight, nullptr);
+        Paint textPaint;
+        textPaint.getSkFont().setSize(dp(20));
         textPaint.setAntiAlias(true);
         TestUtils::drawUtf8ToCanvas(&canvas, "not that long long text", textPaint, dp(10), dp(30));
 
@@ -44,12 +45,12 @@ class ListOfFadedTextAnimation : public TestListViewSceneBase {
 
         SkColor colors[2] = {Color::Black, Color::Transparent};
         sk_sp<SkShader> s(
-                SkGradientShader::MakeLinear(pts, colors, NULL, 2, SkShader::kClamp_TileMode));
+                SkGradientShader::MakeLinear(pts, colors, NULL, 2, SkTileMode::kClamp));
 
         SkMatrix matrix;
         matrix.setScale(1, length);
         matrix.postRotate(-90);
-        SkPaint fadingPaint;
+        Paint fadingPaint;
         fadingPaint.setShader(s->makeWithLocalMatrix(matrix));
         fadingPaint.setBlendMode(SkBlendMode::kDstOut);
         canvas.drawRect(0, 0, length, itemHeight, fadingPaint);

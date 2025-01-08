@@ -20,8 +20,10 @@ import android.app.Activity;
 import android.app.Instrumentation;
 import android.os.Bundle;
 import android.os.Debug;
-import android.support.test.InstrumentationRegistry;
+import android.os.Trace;
 import android.util.Log;
+
+import androidx.test.InstrumentationRegistry;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -52,7 +54,8 @@ public final class BenchmarkState {
     private static final int NOT_STARTED = 0;  // The benchmark has not started yet.
     private static final int WARMUP = 1; // The benchmark is warming up.
     private static final int RUNNING = 2;  // The benchmark is running.
-    private static final int FINISHED = 3;  // The benchmark has stopped.
+    private static final int RUNNING_CUSTOMIZED = 3;  // Running for customized measurement.
+    private static final int FINISHED = 4;  // The benchmark has stopped.
 
     private int mState = NOT_STARTED;  // Current benchmark state.
 
@@ -74,6 +77,14 @@ public final class BenchmarkState {
     private int mMaxIterations = 0;
 
     private int mRepeatCount = 0;
+
+    /**
+     * Additional iteration that used to apply customized measurement. The result during these
+     * iterations won't be counted into {@link #mStats}.
+     */
+    private int mMaxCustomizedIterations;
+    private int mCustomizedIterations;
+    private CustomizedIterationListener mCustomizedIterationListener;
 
     // Statistics. These values will be filled when the benchmark has finished.
     // The computation needs double precision, but long int is fine for final reporting.
@@ -109,10 +120,24 @@ public final class BenchmarkState {
         mPaused = false;
     }
 
+    /**
+     * This is used to run the benchmark with more information by enabling some debug mechanism but
+     * we don't want to account the special runs (slower) in the stats report.
+     */
+    public void setCustomizedIterations(int iterations, CustomizedIterationListener listener) {
+        mMaxCustomizedIterations = iterations;
+        mCustomizedIterationListener = listener;
+    }
+
     private void beginWarmup() {
+        Trace.beginSection("Warmup");
         mStartTimeNs = System.nanoTime();
         mIteration = 0;
         mState = WARMUP;
+    }
+
+    private void endWarmup() {
+        Trace.endSection();
     }
 
     private void beginBenchmark(long warmupDuration, int iterations) {
@@ -121,6 +146,7 @@ public final class BenchmarkState {
             Log.d(TAG, "Tracing to: " + f.getAbsolutePath());
             Debug.startMethodTracingSampling(f.getAbsolutePath(), 16 * 1024 * 1024, 100);
         }
+        Trace.beginSection("Benchmark");
         mMaxIterations = (int) (TARGET_TEST_DURATION_NS / (warmupDuration / iterations));
         mMaxIterations = Math.min(MAX_TEST_ITERATIONS,
                 Math.max(mMaxIterations, MIN_TEST_ITERATIONS));
@@ -129,6 +155,10 @@ public final class BenchmarkState {
         mRepeatCount = 0;
         mState = RUNNING;
         mStartTimeNs = System.nanoTime();
+    }
+
+    private void endBenchmark() {
+        Trace.endSection();
     }
 
     private boolean startNextTestRun() {
@@ -140,7 +170,13 @@ public final class BenchmarkState {
                 Debug.stopMethodTracing();
             }
             mStats = new Stats(mResults);
+            if (mMaxCustomizedIterations > 0 && mCustomizedIterationListener != null) {
+                mState = RUNNING_CUSTOMIZED;
+                mCustomizedIterationListener.onStart(mCustomizedIterations);
+                return true;
+            }
             mState = FINISHED;
+            endBenchmark();
             return false;
         }
         mPausedDurationNs = 0;
@@ -165,6 +201,7 @@ public final class BenchmarkState {
                 // don't yet have a target iteration count.
                 final long duration = System.nanoTime() - mStartTimeNs;
                 if (mIteration >= WARMUP_MIN_ITERATIONS && duration >= WARMUP_DURATION_NS) {
+                    endWarmup();
                     beginBenchmark(duration, mIteration);
                 }
                 return true;
@@ -178,6 +215,16 @@ public final class BenchmarkState {
                             "Benchmark step finished with paused state. " +
                             "Resume the benchmark before finishing each step.");
                 }
+                return true;
+            case RUNNING_CUSTOMIZED:
+                mCustomizedIterationListener.onFinished(mCustomizedIterations);
+                mCustomizedIterations++;
+                if (mCustomizedIterations >= mMaxCustomizedIterations) {
+                    mState = FINISHED;
+                    endBenchmark();
+                    return false;
+                }
+                mCustomizedIterationListener.onStart(mCustomizedIterations);
                 return true;
             case FINISHED:
                 throw new IllegalStateException("The benchmark has finished.");
@@ -233,10 +280,19 @@ public final class BenchmarkState {
     public void sendFullStatusReport(Instrumentation instrumentation, String key) {
         Log.i(TAG, key + summaryLine());
         Bundle status = new Bundle();
-        status.putLong(key + "_median", median());
-        status.putLong(key + "_mean", mean());
-        status.putLong(key + "_min", min());
+        status.putLong(key + "_median (ns)", median());
+        status.putLong(key + "_mean (ns)", mean());
+        status.putLong(key + "_min (ns)", min());
         status.putLong(key + "_standardDeviation", standardDeviation());
         instrumentation.sendStatus(Activity.RESULT_OK, status);
+    }
+
+    /** The interface to receive the events of customized iteration. */
+    public interface CustomizedIterationListener {
+        /** The customized iteration starts. */
+        void onStart(int iteration);
+
+        /** The customized iteration finished. */
+        void onFinished(int iteration);
     }
 }

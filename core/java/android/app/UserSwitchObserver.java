@@ -16,7 +16,7 @@
 
 package android.app;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.IRemoteCallback;
 import android.os.RemoteException;
 
@@ -24,6 +24,14 @@ import android.os.RemoteException;
  * @hide
  */
 public class UserSwitchObserver extends IUserSwitchObserver.Stub {
+
+    @UnsupportedAppUsage
+    public UserSwitchObserver() {
+    }
+
+    @Override
+    public void onBeforeUserSwitching(int newUserId) throws RemoteException {}
+
     @Override
     public void onUserSwitching(int newUserId, IRemoteCallback reply) throws RemoteException {
         if (reply != null) {

@@ -49,7 +49,7 @@ interface ITuner {
     /**
      * @throws IllegalStateException if called out of sequence
      */
-    void scan(boolean directionDown, boolean skipSubChannel);
+    void seek(boolean directionDown, boolean skipSubChannel);
 
     /**
      * @throws IllegalArgumentException if invalid arguments are passed
@@ -80,14 +80,14 @@ interface ITuner {
     void setConfigFlag(int flag, boolean value);
 
     /**
-     * @param parameters Vendor-specific key-value pairs, must be Map<String, String>
-     * @return Vendor-specific key-value pairs, must be Map<String, String>
+     * @param parameters Vendor-specific key-value pairs
+     * @return Vendor-specific key-value pairs
      */
-    Map setParameters(in Map parameters);
+    Map<String, String> setParameters(in Map<String, String> parameters);
 
     /**
      * @param keys Parameter keys to fetch
-     * @return Vendor-specific key-value pairs, must be Map<String, String>
+     * @return Vendor-specific key-value pairs
      */
-    Map getParameters(in List<String> keys);
+    Map<String, String> getParameters(in List<String> keys);
 }

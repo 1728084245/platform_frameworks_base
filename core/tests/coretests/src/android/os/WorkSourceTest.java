@@ -16,9 +16,19 @@
 
 package android.os;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
+
 import android.os.WorkSource.WorkChain;
 
-import junit.framework.TestCase;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+
+import org.junit.Test;
+import org.junit.runner.RunWith;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -28,7 +38,9 @@ import java.util.List;
  *
  * These tests will be moved to CTS when finalized.
  */
-public class WorkSourceTest extends TestCase {
+@RunWith(AndroidJUnit4.class)
+public class WorkSourceTest {
+    @Test
     public void testWorkChain_add() {
         WorkChain wc1 = new WorkChain();
         wc1.addNode(56, null);
@@ -46,6 +58,7 @@ public class WorkSourceTest extends TestCase {
         assertEquals(2, wc1.getSize());
     }
 
+    @Test
     public void testWorkChain_equalsHashCode() {
         WorkChain wc1 = new WorkChain();
         WorkChain wc2 = new WorkChain();
@@ -78,6 +91,7 @@ public class WorkSourceTest extends TestCase {
         assertFalse(wc1.hashCode() == wc2.hashCode());
     }
 
+    @Test
     public void testWorkChain_constructor() {
         WorkChain wc1 = new WorkChain();
         wc1.addNode(1, "foo")
@@ -91,6 +105,7 @@ public class WorkSourceTest extends TestCase {
         assertFalse(wc1.equals(wc2));
     }
 
+    @Test
     public void testDiff_workChains() {
         WorkSource ws1 = new WorkSource();
         ws1.add(50);
@@ -104,6 +119,7 @@ public class WorkSourceTest extends TestCase {
         assertFalse(ws2.diff(ws1));
     }
 
+    @Test
     public void testEquals_workChains() {
         WorkSource ws1 = new WorkSource();
         ws1.add(50);
@@ -128,6 +144,7 @@ public class WorkSourceTest extends TestCase {
         assertFalse(ws3.equals(ws1));
     }
 
+    @Test
     public void testEquals_workChains_nullEmptyAreEquivalent() {
         // Construct a WorkSource that has no WorkChains, but whose workChains list
         // is non-null.
@@ -145,6 +162,7 @@ public class WorkSourceTest extends TestCase {
         assertFalse(ws1.equals(ws2));
     }
 
+    @Test
     public void testWorkSourceParcelling() {
         WorkSource ws = new WorkSource();
 
@@ -164,6 +182,7 @@ public class WorkSourceTest extends TestCase {
         assertEquals(unparcelled, ws);
     }
 
+    @Test
     public void testSet_workChains() {
         WorkSource ws1 = new WorkSource();
         ws1.add(50);
@@ -193,6 +212,7 @@ public class WorkSourceTest extends TestCase {
         assertEquals(1, ws1.getWorkChains().get(0).getSize());
     }
 
+    @Test
     public void testSet_nullWorkChain() {
         WorkSource ws = new WorkSource();
         ws.add(60);
@@ -203,6 +223,7 @@ public class WorkSourceTest extends TestCase {
         assertEquals(0, ws.getWorkChains().size());
     }
 
+    @Test
     public void testAdd_workChains() {
         WorkSource ws = new WorkSource();
         ws.createWorkChain().addNode(70, "foo");
@@ -224,19 +245,21 @@ public class WorkSourceTest extends TestCase {
         assertEquals(2, workChains.size());
     }
 
+    @Test
     public void testSet_noWorkChains() {
         WorkSource ws = new WorkSource();
         ws.set(10);
         assertEquals(1, ws.size());
-        assertEquals(10, ws.get(0));
+        assertEquals(10, ws.getUid(0));
 
         WorkSource ws2 = new WorkSource();
         ws2.set(20, "foo");
         assertEquals(1, ws2.size());
-        assertEquals(20, ws2.get(0));
-        assertEquals("foo", ws2.getName(0));
+        assertEquals(20, ws2.getUid(0));
+        assertEquals("foo", ws2.getPackageName(0));
     }
 
+    @Test
     public void testDiffChains_noChanges() {
         // WorkSources with no chains.
         assertEquals(null, WorkSource.diffChains(new WorkSource(), new WorkSource()));
@@ -254,6 +277,7 @@ public class WorkSourceTest extends TestCase {
         assertEquals(null, WorkSource.diffChains(ws2, ws1));
     }
 
+    @Test
     public void testDiffChains_noChains() {
         // Diffs against a worksource with no chains.
         WorkSource ws1 = new WorkSource();
@@ -276,6 +300,7 @@ public class WorkSourceTest extends TestCase {
         assertEquals(ws2.getWorkChains(), diffs[1]);
     }
 
+    @Test
     public void testDiffChains_onlyAdditionsOrRemovals() {
         WorkSource ws1 = new WorkSource();
         WorkSource ws2 = new WorkSource();
@@ -302,6 +327,7 @@ public class WorkSourceTest extends TestCase {
     }
 
 
+    @Test
     public void testDiffChains_generalCase() {
         WorkSource ws1 = new WorkSource();
         WorkSource ws2 = new WorkSource();
@@ -340,15 +366,44 @@ public class WorkSourceTest extends TestCase {
         assertEquals(new WorkChain().addNode(2, "tag2"), diffs[1].get(1));
     }
 
+    @Test
     public void testGetAttributionId() {
-        WorkSource ws1 = new WorkSource();
-        WorkChain wc = ws1.createWorkChain();
-        wc.addNode(100, "tag");
-        assertEquals(100, wc.getAttributionUid());
-        wc.addNode(200, "tag2");
-        assertEquals(100, wc.getAttributionUid());
+        WorkSource ws = new WorkSource();
+        WorkChain wc1 = ws.createWorkChain();
+        wc1.addNode(100, "tag");
+        assertEquals(100, wc1.getAttributionUid());
+        assertEquals(100, ws.getAttributionUid());
+        wc1.addNode(200, "tag2");
+        assertEquals(100, wc1.getAttributionUid());
+        assertEquals(100, ws.getAttributionUid());
+        WorkChain wc2 = ws.createWorkChain();
+        wc2.addNode(300, "tag3");
+        assertEquals(300, wc2.getAttributionUid());
+        assertEquals(100, ws.getAttributionUid());
     }
 
+    @Test
+    public void testGetAttributionIdWithoutWorkChain() {
+        WorkSource ws1 = new WorkSource(100);
+        ws1.add(200);
+        WorkSource ws2 = new WorkSource();
+        ws2.add(100);
+        ws2.add(200);
+        assertEquals(100, ws1.getAttributionUid());
+        assertEquals(100, ws2.getAttributionUid());
+    }
+
+    @Test
+    public void testGetAttributionWhenEmpty() {
+        WorkSource ws = new WorkSource();
+        assertEquals(-1, ws.getAttributionUid());
+        WorkChain wc = ws.createWorkChain();
+        assertEquals(-1, ws.getAttributionUid());
+        assertEquals(-1, wc.getAttributionUid());
+        assertNull(wc.getAttributionTag());
+    }
+
+    @Test
     public void testGetAttributionTag() {
         WorkSource ws1 = new WorkSource();
         WorkChain wc = ws1.createWorkChain();
@@ -358,6 +413,7 @@ public class WorkSourceTest extends TestCase {
         assertEquals("tag", wc.getAttributionTag());
     }
 
+    @Test
     public void testRemove_fromChainedWorkSource() {
         WorkSource ws1 = new WorkSource();
         ws1.createWorkChain().addNode(50, "foo");
@@ -378,6 +434,19 @@ public class WorkSourceTest extends TestCase {
         assertEquals(75, ws1.getWorkChains().get(0).getAttributionUid());
     }
 
+    @Test
+    public void testRemove_fromSameWorkSource() {
+        WorkSource ws1 = new WorkSource(50, "foo");
+        WorkSource ws2 = ws1;
+        ws2.add(ws1);
+        assertTrue(ws2.remove(ws1));
+
+        assertEquals(0, ws1.size());
+        assertEquals(50, ws1.getUid(0));
+        assertEquals("foo", ws1.getPackageName(0));
+    }
+
+    @Test
     public void testTransferWorkChains() {
         WorkSource ws1 = new WorkSource();
         WorkChain wc1 = ws1.createWorkChain().addNode(100, "tag");

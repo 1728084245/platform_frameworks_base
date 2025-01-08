@@ -16,37 +16,65 @@
 
 package com.android.systemui.util.wakelock;
 
+import android.content.Context;
 import android.os.Handler;
+
+import com.android.systemui.Flags;
+import com.android.systemui.dagger.qualifiers.Background;
+import com.android.systemui.dagger.qualifiers.Main;
+
+import dagger.Lazy;
+import dagger.assisted.Assisted;
+import dagger.assisted.AssistedFactory;
+import dagger.assisted.AssistedInject;
 
 /**
  * A wake lock that has a built in delay when releasing to give the framebuffer time to update.
  */
 public class DelayedWakeLock implements WakeLock {
 
-    private static final long RELEASE_DELAY_MS = 140;
+    private static final String TO_STRING_PREFIX = "[DelayedWakeLock] ";
+    private static final long RELEASE_DELAY_MS = 100;
 
     private final Handler mHandler;
     private final WakeLock mInner;
-    private final Runnable mRelease;
 
-    public DelayedWakeLock(Handler h, WakeLock inner) {
-        mHandler = h;
-        mInner = inner;
-        mRelease = mInner::release;
+    @AssistedInject
+    public DelayedWakeLock(@Background Lazy<Handler> bgHandler,
+                           @Main Lazy<Handler> mainHandler,
+                           Context context, WakeLockLogger logger,
+            @Assisted String tag) {
+        mInner = WakeLock.createPartial(context, logger, tag);
+        mHandler = Flags.delayedWakelockReleaseOnBackgroundThread() ? bgHandler.get()
+                : mainHandler.get();
     }
 
     @Override
-    public void acquire() {
-        mInner.acquire();
+    public void acquire(String why) {
+        mInner.acquire(why);
     }
 
     @Override
-    public void release() {
-        mHandler.postDelayed(mRelease, RELEASE_DELAY_MS);
+    public void release(String why) {
+        mHandler.postDelayed(() -> mInner.release(why), RELEASE_DELAY_MS);
     }
 
     @Override
     public Runnable wrap(Runnable r) {
         return WakeLock.wrapImpl(this, r);
+    }
+
+    @Override
+    public String toString() {
+        return TO_STRING_PREFIX + mInner;
+    }
+
+    /**
+     * Factory to create the instance of DelayedWakeLock class.
+     */
+    @AssistedFactory
+    public interface Factory {
+        /** creates the instance of DelayedWakeLock class. */
+        DelayedWakeLock create(String tag);
     }
 }

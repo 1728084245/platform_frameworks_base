@@ -16,11 +16,12 @@
 
 package com.android.internal.util;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 
 /**
  * Fast and loose math routines.
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public class FastMath {
 
     /**

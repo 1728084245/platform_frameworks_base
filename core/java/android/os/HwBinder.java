@@ -17,8 +17,8 @@
 package android.os;
 
 import android.annotation.SystemApi;
-import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.util.Log;
 
 import libcore.util.NativeAllocationRegistry;
 
@@ -26,7 +26,6 @@ import java.util.NoSuchElementException;
 
 /** @hide */
 @SystemApi
-@TestApi
 public abstract class HwBinder implements IHwBinder {
     private static final String TAG = "HwBinder";
 
@@ -80,6 +79,17 @@ public abstract class HwBinder implements IHwBinder {
             String iface,
             String serviceName)
         throws RemoteException, NoSuchElementException {
+        if (!HidlSupport.isHidlSupported()
+                && (iface.equals("android.hidl.manager@1.0::IServiceManager")
+                        || iface.equals("android.hidl.manager@1.1::IServiceManager")
+                        || iface.equals("android.hidl.manager@1.2::IServiceManager"))) {
+            Log.i(
+                    TAG,
+                    "Replacing Java hwservicemanager with a fake HwNoService"
+                            + " because HIDL is not supported on this device.");
+            return new HwNoService();
+        }
+
         return getService(iface, serviceName, false /* retry */);
     }
     /**
@@ -94,6 +104,15 @@ public abstract class HwBinder implements IHwBinder {
             String serviceName,
             boolean retry)
         throws RemoteException, NoSuchElementException;
+
+    /**
+     * This allows getService to bypass the VINTF manifest for testing only.
+     *
+     * Disabled on user builds.
+     * @hide
+     */
+    public static native final void setTrebleTestingOverride(
+            boolean testingOverride);
 
     /**
      * Configures how many threads the process-wide hwbinder threadpool
@@ -152,7 +171,7 @@ public abstract class HwBinder implements IHwBinder {
      *
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = 30, trackingBug = 170729553)
     public static void reportSyspropChanged() {
         native_report_sysprop_change();
     }

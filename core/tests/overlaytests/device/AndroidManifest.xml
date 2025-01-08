@@ -19,11 +19,13 @@
 
     <uses-sdk android:minSdkVersion="21" />
 
+    <uses-permission android:name="android.permission.CHANGE_OVERLAY_PACKAGES" />
+
     <application>
         <uses-library android:name="android.test.runner"/>
     </application>
 
-    <instrumentation android:name="android.support.test.runner.AndroidJUnitRunner"
+    <instrumentation android:name="androidx.test.runner.AndroidJUnitRunner"
         android:targetPackage="com.android.overlaytest"
         android:label="Runtime resource overlay tests" />
 </manifest>

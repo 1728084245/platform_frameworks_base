@@ -130,26 +130,44 @@ static inline void mapRect(const Matrix4* matrix, const SkRect& in, SkRect* out)
         // calculations. Just give up and expand to DIRTY_MIN/DIRTY_MAX
         temp.set(DIRTY_MIN, DIRTY_MIN, DIRTY_MAX, DIRTY_MAX);
     }
-    out->join(RECT_ARGS(temp));
+    out->join({RECT_ARGS(temp)});
 }
 
 void DamageAccumulator::applyMatrix4Transform(DirtyStack* frame) {
     mapRect(frame->matrix4, frame->pendingDirty, &mHead->pendingDirty);
 }
 
-static inline void mapRect(const RenderProperties& props, const SkRect& in, SkRect* out) {
-    if (in.isEmpty()) return;
-    const SkMatrix* transform = props.getTransformMatrix();
-    SkRect temp(in);
+static inline void applyMatrix(const SkMatrix* transform, SkRect* rect) {
     if (transform && !transform->isIdentity()) {
         if (CC_LIKELY(!transform->hasPerspective())) {
-            transform->mapRect(&temp);
+            transform->mapRect(rect);
         } else {
             // Don't attempt to calculate damage for a perspective transform
             // as the numbers this works with can break the perspective
             // calculations. Just give up and expand to DIRTY_MIN/DIRTY_MAX
-            temp.set(DIRTY_MIN, DIRTY_MIN, DIRTY_MAX, DIRTY_MAX);
+            rect->setLTRB(DIRTY_MIN, DIRTY_MIN, DIRTY_MAX, DIRTY_MAX);
         }
+    }
+}
+
+static inline void applyMatrix(const SkMatrix& transform, SkRect* rect) {
+    return applyMatrix(&transform, rect);
+}
+
+static inline void mapRect(const RenderProperties& props, const SkRect& in, SkRect* out) {
+    if (in.isEmpty()) return;
+    SkRect temp(in);
+    if (Properties::getStretchEffectBehavior() == StretchEffectBehavior::UniformScale) {
+        const StretchEffect& stretch = props.layerProperties().getStretchEffect();
+        if (!stretch.isEmpty()) {
+            applyMatrix(stretch.makeLinearStretch(props.getWidth(), props.getHeight()), &temp);
+        }
+    }
+    applyMatrix(props.getTransformMatrix(), &temp);
+    if (props.getStaticMatrix()) {
+        applyMatrix(props.getStaticMatrix(), &temp);
+    } else if (props.getAnimationMatrix()) {
+        applyMatrix(props.getAnimationMatrix(), &temp);
     }
     temp.offset(props.getLeft(), props.getTop());
     out->join(temp);
@@ -200,8 +218,8 @@ void DamageAccumulator::applyRenderNodeTransform(DirtyStack* frame) {
     }
 
     // Perform clipping
-    if (props.getClipDamageToBounds() && !frame->pendingDirty.isEmpty()) {
-        if (!frame->pendingDirty.intersect(0, 0, props.getWidth(), props.getHeight())) {
+    if (props.getClipDamageToBounds()) {
+        if (!frame->pendingDirty.intersect(SkRect::MakeIWH(props.getWidth(), props.getHeight()))) {
             frame->pendingDirty.setEmpty();
         }
     }
@@ -224,8 +242,49 @@ void DamageAccumulator::applyRenderNodeTransform(DirtyStack* frame) {
     }
 }
 
+SkRect DamageAccumulator::computeClipAndTransform(const SkRect& bounds, Matrix4* outMatrix) const {
+    const DirtyStack* frame = mHead;
+    Matrix4 transform;
+    SkRect pretransformResult = bounds;
+    while (true) {
+        SkRect currentBounds = pretransformResult;
+        pretransformResult.setEmpty();
+        switch (frame->type) {
+            case TransformRenderNode: {
+                const RenderProperties& props = frame->renderNode->properties();
+                // Perform clipping
+                if (props.getClipDamageToBounds() && !currentBounds.isEmpty()) {
+                    if (!currentBounds.intersect(
+                                SkRect::MakeIWH(props.getWidth(), props.getHeight()))) {
+                        currentBounds.setEmpty();
+                    }
+                }
+
+                // apply all transforms
+                mapRect(props, currentBounds, &pretransformResult);
+                frame->renderNode->applyViewPropertyTransforms(transform);
+            } break;
+            case TransformMatrix4:
+                mapRect(frame->matrix4, currentBounds, &pretransformResult);
+                transform.multiply(*frame->matrix4);
+                break;
+            default:
+                pretransformResult = currentBounds;
+                break;
+        }
+        if (frame->prev == frame) break;
+        frame = frame->prev;
+    }
+    SkRect result;
+    Matrix4 globalToLocal;
+    globalToLocal.loadInverse(transform);
+    mapRect(&globalToLocal, pretransformResult, &result);
+    *outMatrix = transform;
+    return result;
+}
+
 void DamageAccumulator::dirty(float left, float top, float right, float bottom) {
-    mHead->pendingDirty.join(left, top, right, bottom);
+    mHead->pendingDirty.join({left, top, right, bottom});
 }
 
 void DamageAccumulator::peekAtDirty(SkRect* dest) const {
@@ -239,6 +298,35 @@ void DamageAccumulator::finish(SkRect* totalDirty) {
     *totalDirty = mHead->pendingDirty;
     totalDirty->roundOut(totalDirty);
     mHead->pendingDirty.setEmpty();
+}
+
+DamageAccumulator::StretchResult DamageAccumulator::findNearestStretchEffect() const {
+    DirtyStack* frame = mHead;
+    while (frame->prev != frame) {
+        if (frame->type == TransformRenderNode) {
+            const auto& renderNode = frame->renderNode;
+            const auto& frameRenderNodeProperties = renderNode->properties();
+            const auto& effect =
+                    frameRenderNodeProperties.layerProperties().getStretchEffect();
+            const float width = (float) frameRenderNodeProperties.getWidth();
+            const float height = (float) frameRenderNodeProperties.getHeight();
+            if (!effect.isEmpty()) {
+                Matrix4 stretchMatrix;
+                computeTransformImpl(frame, &stretchMatrix);
+                Rect stretchRect = Rect(0.f, 0.f, width, height);
+                stretchMatrix.mapRect(stretchRect);
+
+                return StretchResult{
+                        .stretchEffect = &effect,
+                        .parentBounds = SkRect::MakeLTRB(stretchRect.left, stretchRect.top,
+                                                         stretchRect.right, stretchRect.bottom),
+                        .width = width,
+                        .height = height};
+            }
+        }
+        frame = frame->prev;
+    }
+    return StretchResult{};
 }
 
 } /* namespace uirenderer */

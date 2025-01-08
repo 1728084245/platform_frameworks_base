@@ -17,8 +17,8 @@
 package android.widget;
 
 import android.annotation.NonNull;
-import android.annotation.UnsupportedAppUsage;
 import android.annotation.Widget;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Rect;
@@ -57,7 +57,7 @@ import com.android.internal.R;
  * @attr ref android.R.styleable#Gallery_gravity
  * 
  * @deprecated This widget is no longer supported. Other horizontally scrolling
- * widgets include {@link HorizontalScrollView} and {@link android.support.v4.view.ViewPager}
+ * widgets include {@link HorizontalScrollView} and {@link androidx.viewpager.widget.ViewPager}
  * from the support library.
  */
 @Deprecated
@@ -213,6 +213,8 @@ public class Gallery extends AbsSpinner implements GestureDetector.OnGestureList
 
         final TypedArray a = context.obtainStyledAttributes(
                 attrs, com.android.internal.R.styleable.Gallery, defStyleAttr, defStyleRes);
+        saveAttributeDataForStyleable(context, com.android.internal.R.styleable.Gallery,
+                attrs, a, defStyleAttr, defStyleRes);
 
         int index = a.getInt(com.android.internal.R.styleable.Gallery_gravity, -1);
         if (index >= 0) {
@@ -429,7 +431,8 @@ public class Gallery extends AbsSpinner implements GestureDetector.OnGestureList
             mSelectedCenterOffset = childLeft + childCenter - galleryCenter;
         }
 
-        onScrollChanged(0, 0, 0, 0); // dummy values, View's implementation does not use these.
+        // placeholder values, View's implementation does not use these.
+        onScrollChanged(0, 0, 0, 0);
 
         invalidate();
     }

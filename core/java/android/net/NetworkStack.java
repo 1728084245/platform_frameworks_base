@@ -15,23 +15,20 @@
  */
 package android.net;
 
-import static android.Manifest.permission.NETWORK_STACK;
-import static android.content.pm.PackageManager.PERMISSION_GRANTED;
-
 import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.SystemApi;
 import android.annotation.TestApi;
 import android.content.Context;
+import android.os.IBinder;
+import android.os.ServiceManager;
 
-import java.util.ArrayList;
-import java.util.Arrays;
+import com.android.net.module.util.PermissionUtils;
 /**
- *
- * Constants for client code communicating with the network stack service.
+ * Constants and utilities for client code communicating with the network stack service.
  * @hide
  */
 @SystemApi
-@TestApi
 public class NetworkStack {
     /**
      * Permission granted only to the NetworkStack APK, defined in NetworkStackStub with signature
@@ -39,9 +36,35 @@ public class NetworkStack {
      * @hide
      */
     @SystemApi
-    @TestApi
     public static final String PERMISSION_MAINLINE_NETWORK_STACK =
             "android.permission.MAINLINE_NETWORK_STACK";
+
+    @Nullable
+    private static volatile IBinder sMockService;
+
+    /**
+     * Get an {@link IBinder} representing the NetworkStack stable AIDL Interface, if registered.
+     * @hide
+     */
+    @Nullable
+    @SystemApi
+    public static IBinder getService() {
+        final IBinder mockService = sMockService;
+        if (mockService != null) return mockService;
+        return ServiceManager.getService(Context.NETWORK_STACK_SERVICE);
+    }
+
+    /**
+     * Set a mock service for testing, to be returned by future calls to {@link #getService()}.
+     *
+     * <p>Passing a {@code null} {@code mockService} resets {@link #getService()} to normal
+     * behavior.
+     * @hide
+     */
+    @TestApi
+    public static void setServiceForTest(@Nullable IBinder mockService) {
+        sMockService = mockService;
+    }
 
     private NetworkStack() {}
 
@@ -52,9 +75,14 @@ public class NetworkStack {
      * @param context {@link android.content.Context} for the process.
      *
      * @hide
+     *
+     * @deprecated Use {@link PermissionUtils#enforceNetworkStackPermission} instead.
+     *
+     * TODO: remove this method and let the users call to PermissionUtils directly.
      */
+    @Deprecated
     public static void checkNetworkStackPermission(final @NonNull Context context) {
-        checkNetworkStackPermissionOr(context);
+        PermissionUtils.enforceNetworkStackPermission(context);
     }
 
     /**
@@ -65,31 +93,14 @@ public class NetworkStack {
      * @param otherPermissions The set of permissions that could be the candidate permissions , or
      *                         empty string if none of other permissions needed.
      * @hide
+     *
+     * @deprecated Use {@link PermissionUtils#enforceNetworkStackPermissionOr} instead.
+     *
+     * TODO: remove this method and let the users call to PermissionUtils directly.
      */
+    @Deprecated
     public static void checkNetworkStackPermissionOr(final @NonNull Context context,
             final @NonNull String... otherPermissions) {
-        ArrayList<String> permissions = new ArrayList<String>(Arrays.asList(otherPermissions));
-        permissions.add(NETWORK_STACK);
-        permissions.add(PERMISSION_MAINLINE_NETWORK_STACK);
-        enforceAnyPermissionOf(context, permissions.toArray(new String[0]));
+        PermissionUtils.enforceNetworkStackPermissionOr(context, otherPermissions);
     }
-
-    private static void enforceAnyPermissionOf(final @NonNull Context context,
-            final @NonNull String... permissions) {
-        if (!checkAnyPermissionOf(context, permissions)) {
-            throw new SecurityException("Requires one of the following permissions: "
-                + String.join(", ", permissions) + ".");
-        }
-    }
-
-    private static boolean checkAnyPermissionOf(final @NonNull Context context,
-            final @NonNull String... permissions) {
-        for (String permission : permissions) {
-            if (context.checkCallingOrSelfPermission(permission) == PERMISSION_GRANTED) {
-                return true;
-            }
-        }
-        return false;
-    }
-
 }

@@ -22,7 +22,11 @@ import android.telecom.TelecomAnalytics;
 import android.telecom.PhoneAccountHandle;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.UserHandle;
 import android.telecom.PhoneAccount;
+import android.content.pm.ParceledListSlice;
+import android.telecom.CallAttributes;
+import com.android.internal.telecom.ICallEventCallback;
 
 /**
  * Interface used to interact with Telecom. Mostly this is used by TelephonyManager for passing
@@ -35,12 +39,13 @@ interface ITelecomService {
      *
      * @param showDialpad if true, make the dialpad visible initially.
      */
-    void showInCallScreen(boolean showDialpad, String callingPackage);
+    void showInCallScreen(boolean showDialpad, String callingPackage, String callingFeatureId);
 
     /**
      * @see TelecomServiceImpl#getDefaultOutgoingPhoneAccount
      */
-    PhoneAccountHandle getDefaultOutgoingPhoneAccount(in String uriScheme, String callingPackage);
+    PhoneAccountHandle getDefaultOutgoingPhoneAccount(in String uriScheme, String callingPackage,
+            String callingFeatureId);
 
     /**
      * @see TelecomServiceImpl#getUserSelectedOutgoingPhoneAccount
@@ -55,29 +60,43 @@ interface ITelecomService {
     /**
      * @see TelecomServiceImpl#getCallCapablePhoneAccounts
      */
-    List<PhoneAccountHandle> getCallCapablePhoneAccounts(
-            boolean includeDisabledAccounts, String callingPackage);
+    ParceledListSlice<PhoneAccountHandle> getCallCapablePhoneAccounts(
+            boolean includeDisabledAccounts, String callingPackage,
+            String callingFeatureId, boolean acrossProfiles);
 
     /**
      * @see TelecomServiceImpl#getSelfManagedPhoneAccounts
      */
-    List<PhoneAccountHandle> getSelfManagedPhoneAccounts(String callingPackage);
+    ParceledListSlice<PhoneAccountHandle> getSelfManagedPhoneAccounts(String callingPackage,
+            String callingFeatureId);
+
+    /**
+     * @see TelecomServiceImpl#getOwnSelfManagedPhoneAccounts
+     */
+    ParceledListSlice<PhoneAccountHandle> getOwnSelfManagedPhoneAccounts(String callingPackage,
+            String callingFeatureId);
 
     /**
      * @see TelecomManager#getPhoneAccountsSupportingScheme
      */
-    List<PhoneAccountHandle> getPhoneAccountsSupportingScheme(in String uriScheme,
+    ParceledListSlice<PhoneAccountHandle> getPhoneAccountsSupportingScheme(in String uriScheme,
             String callingPackage);
 
     /**
      * @see TelecomManager#getPhoneAccountsForPackage
      */
-    List<PhoneAccountHandle> getPhoneAccountsForPackage(in String packageName);
+    ParceledListSlice<PhoneAccountHandle> getPhoneAccountsForPackage(in String packageName);
 
     /**
      * @see TelecomManager#getPhoneAccount
      */
-    PhoneAccount getPhoneAccount(in PhoneAccountHandle account);
+    PhoneAccount getPhoneAccount(in PhoneAccountHandle account, String callingPackage);
+
+    /**
+     * @see TelecomManager#getPhoneAccount
+     */
+    ParceledListSlice<PhoneAccount> getRegisteredPhoneAccounts(String callingPackage,
+            String callingFeatureId);
 
     /**
      * @see TelecomManager#getAllPhoneAccountsCount
@@ -87,32 +106,32 @@ interface ITelecomService {
     /**
      * @see TelecomManager#getAllPhoneAccounts
      */
-    List<PhoneAccount> getAllPhoneAccounts();
+    ParceledListSlice<PhoneAccount> getAllPhoneAccounts();
 
     /**
      * @see TelecomManager#getAllPhoneAccountHandles
      */
-    List<PhoneAccountHandle> getAllPhoneAccountHandles();
+    ParceledListSlice<PhoneAccountHandle> getAllPhoneAccountHandles();
 
     /**
      * @see TelecomServiceImpl#getSimCallManager
      */
-    PhoneAccountHandle getSimCallManager(int subId);
+    PhoneAccountHandle getSimCallManager(int subId, String callingPackage);
 
     /**
      * @see TelecomServiceImpl#getSimCallManagerForUser
      */
-    PhoneAccountHandle getSimCallManagerForUser(int userId);
+    PhoneAccountHandle getSimCallManagerForUser(int userId, String callingPackage);
 
     /**
      * @see TelecomServiceImpl#registerPhoneAccount
      */
-    void registerPhoneAccount(in PhoneAccount metadata);
+    void registerPhoneAccount(in PhoneAccount metadata, String callingPackage);
 
     /**
      * @see TelecomServiceImpl#unregisterPhoneAccount
      */
-    void unregisterPhoneAccount(in PhoneAccountHandle account);
+    void unregisterPhoneAccount(in PhoneAccountHandle account, String callingPackage);
 
     /**
      * @see TelecomServiceImpl#clearAccounts
@@ -123,17 +142,19 @@ interface ITelecomService {
      * @see TelecomServiceImpl#isVoiceMailNumber
      */
     boolean isVoiceMailNumber(in PhoneAccountHandle accountHandle, String number,
-            String callingPackage);
+            String callingPackage, String callingFeatureId);
 
     /**
      * @see TelecomServiceImpl#getVoiceMailNumber
      */
-    String getVoiceMailNumber(in PhoneAccountHandle accountHandle, String callingPackage);
+    String getVoiceMailNumber(in PhoneAccountHandle accountHandle, String callingPackage,
+            String callingFeatureId);
 
     /**
      * @see TelecomServiceImpl#getLine1Number
      */
-    String getLine1Number(in PhoneAccountHandle accountHandle, String callingPackage);
+    String getLine1Number(in PhoneAccountHandle accountHandle, String callingPackage,
+            String callingFeatureId);
 
     /**
      * @see TelecomServiceImpl#getDefaultPhoneApp
@@ -143,12 +164,17 @@ interface ITelecomService {
     /**
      * @see TelecomServiceImpl#getDefaultDialerPackage
      */
-    String getDefaultDialerPackage();
+    String getDefaultDialerPackage(String callingPackage);
+
+    /**
+     * @see TelecomServiceImpl#getDefaultDialerPackage
+     */
+    String getDefaultDialerPackageForUser(int userId);
 
     /**
      * @see TelecomServiceImpl#getSystemDialerPackage
      */
-    String getSystemDialerPackage();
+    String getSystemDialerPackage(String callingPackage);
 
     /**
     * @see TelecomServiceImpl#dumpCallAnalytics
@@ -167,12 +193,17 @@ interface ITelecomService {
     /**
      * @see TelecomServiceImpl#isInCall
      */
-    boolean isInCall(String callingPackage);
+    boolean isInCall(String callingPackage, String callingFeatureId);
+
+    /**
+     * @see TelecomServiceImpl#hasManageOngoingCallsPermission
+     */
+    boolean hasManageOngoingCallsPermission(String callingPackage);
 
     /**
      * @see TelecomServiceImpl#isInManagedCall
      */
-    boolean isInManagedCall(String callingPackage);
+    boolean isInManagedCall(String callingPackage, String callingFeatureId);
 
     /**
      * @see TelecomServiceImpl#isRinging
@@ -181,9 +212,16 @@ interface ITelecomService {
 
     /**
      * @see TelecomServiceImpl#getCallState
+     * Note: only kept around to not break app compat, however this will throw a SecurityException
+     * on API 31+.
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = 30, trackingBug = 170729553)
     int getCallState();
+
+    /**
+     * @see TelecomServiceImpl#getCallState
+     */
+    int getCallStateUsingPackage(String callingPackage, String callingFeatureId);
 
     /**
      * @see TelecomServiceImpl#endCall
@@ -224,17 +262,25 @@ interface ITelecomService {
     /**
      * @see TelecomServiceImpl#isTtySupported
      */
-    boolean isTtySupported(String callingPackage);
+    boolean isTtySupported(String callingPackage, String callingFeatureId);
 
     /**
      * @see TelecomServiceImpl#getCurrentTtyMode
      */
-    int getCurrentTtyMode(String callingPackage);
+    int getCurrentTtyMode(String callingPackage, String callingFeatureId);
 
     /**
      * @see TelecomServiceImpl#addNewIncomingCall
      */
-    void addNewIncomingCall(in PhoneAccountHandle phoneAccount, in Bundle extras);
+    void addNewIncomingCall(in PhoneAccountHandle phoneAccount, in Bundle extras,
+            String callingPackage);
+
+    /**
+     * @see TelecomServiceImpl#addNewIncomingConference
+     */
+    void addNewIncomingConference(in PhoneAccountHandle phoneAccount, in Bundle extras,
+            String callingPackage);
+
 
     /**
      * @see TelecomServiceImpl#addNewUnknownCall
@@ -242,9 +288,15 @@ interface ITelecomService {
     void addNewUnknownCall(in PhoneAccountHandle phoneAccount, in Bundle extras);
 
     /**
+     * @see TelecomServiceImpl#startConference
+     */
+    void startConference(in List<Uri> participants, in Bundle extras,
+            String callingPackage);
+
+    /**
      * @see TelecomServiceImpl#placeCall
      */
-    void placeCall(in Uri handle, in Bundle extras, String callingPackage);
+    void placeCall(in Uri handle, in Bundle extras, String callingPackage, String callingFeatureId);
 
     /**
      * @see TelecomServiceImpl#enablePhoneAccount
@@ -257,19 +309,31 @@ interface ITelecomService {
     boolean setDefaultDialer(in String packageName);
 
     /**
+     * Stop suppressing blocked numbers after a call to emergency services. Shell only.
+     */
+    void stopBlockSuppression();
+
+    /**
     * @see TelecomServiceImpl#createManageBlockedNumbersIntent
     **/
-    Intent createManageBlockedNumbersIntent();
+    Intent createManageBlockedNumbersIntent(String callingPackage);
+
+   /**
+    * @see TelecomServiceImpl#createLaunchEmergencyDialerIntent
+    */
+    Intent createLaunchEmergencyDialerIntent(in String number);
 
     /**
      * @see TelecomServiceImpl#isIncomingCallPermitted
      */
-    boolean isIncomingCallPermitted(in PhoneAccountHandle phoneAccountHandle);
+    boolean isIncomingCallPermitted(in PhoneAccountHandle phoneAccountHandle,
+            String callingPackage);
 
     /**
      * @see TelecomServiceImpl#isOutgoingCallPermitted
      */
-    boolean isOutgoingCallPermitted(in PhoneAccountHandle phoneAccountHandle);
+    boolean isOutgoingCallPermitted(in PhoneAccountHandle phoneAccountHandle,
+            String callingPackage);
 
     /**
      * @see TelecomServiceImpl#waitOnHandler
@@ -279,7 +343,13 @@ interface ITelecomService {
     /**
      * @see TelecomServiceImpl#acceptHandover
      */
-    void acceptHandover(in Uri srcAddr, int videoState, in PhoneAccountHandle destAcct);
+    void acceptHandover(in Uri srcAddr, int videoState, in PhoneAccountHandle destAcct,
+                String callingPackage);
+
+    /**
+     * @see TelecomServiceImpl#setTestEmergencyPhoneAccountPackageNameFilter
+     */
+    void setTestEmergencyPhoneAccountPackageNameFilter(String packageName);
 
     /**
      * @see TelecomServiceImpl#isInEmergencyCall
@@ -289,16 +359,54 @@ interface ITelecomService {
     /**
      * @see TelecomServiceImpl#handleCallIntent
      */
-    void handleCallIntent(in Intent intent);
+    void handleCallIntent(in Intent intent, in String callingPackageProxy);
+
+    void cleanupStuckCalls();
+
+    int cleanupOrphanPhoneAccounts();
+
+    boolean isNonUiInCallServiceBound(in String packageName);
+
+    void resetCarMode();
 
     void setTestDefaultCallRedirectionApp(String packageName);
 
-    void setTestPhoneAcctSuggestionComponent(String flattenedComponentName);
+    /**
+     * @see TelecomServiceImpl#requestLogMark
+     */
+    void requestLogMark(in String message);
+
+    void setTestPhoneAcctSuggestionComponent(String flattenedComponentName,
+        in UserHandle userHandle);
 
     void setTestDefaultCallScreeningApp(String packageName);
 
     void addOrRemoveTestCallCompanionApp(String packageName, boolean isAdded);
 
-    void setTestAutoModeApp(String packageName);
+    /**
+     * @see TelecomServiceImpl#setSystemDialer
+     */
+    void setSystemDialer(in ComponentName testComponentName);
 
+    /**
+     * @see TelecomServiceImpl#setTestDefaultDialer
+     */
+    void setTestDefaultDialer(in String packageName);
+
+    /**
+     * @see TelecomServiceImpl#setTestCallDiagnosticService
+     */
+    void setTestCallDiagnosticService(in String packageName);
+
+    /**
+     * @see TelecomServiceImpl#isInSelfManagedCall
+     */
+    boolean isInSelfManagedCall(String packageName, in UserHandle userHandle,
+        String callingPackage);
+
+    /**
+     * @see TelecomServiceImpl#addCall
+     */
+    void addCall(in CallAttributes callAttributes, in ICallEventCallback callback, String callId,
+        String callingPackage);
 }

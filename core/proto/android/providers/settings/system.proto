@@ -20,7 +20,7 @@ package android.providers.settings;
 option java_multiple_files = true;
 
 import "frameworks/base/core/proto/android/providers/settings/common.proto";
-import "frameworks/base/libs/incident/proto/android/privacy.proto";
+import "frameworks/base/core/proto/android/privacy.proto";
 
 // Note: it's a conscious decision to add each setting as a separate field. This
 // allows annotating each setting with its own privacy tag.
@@ -52,7 +52,8 @@ message SystemSettingsProto {
     }
     optional Bluetooth bluetooth = 4;
 
-    optional SettingProto date_format = 5 [ (android.privacy).dest = DEST_AUTOMATIC ];
+    reserved 5; // date_format is not used
+
     optional SettingProto display_color_mode = 6 [ (android.privacy).dest = DEST_AUTOMATIC ];
 
     message DevOptions {
@@ -67,6 +68,8 @@ message SystemSettingsProto {
         // orientationplot.py tool.
         // 0 = no, 1 = yes
         optional SettingProto window_orientation_listener_log = 3 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto show_key_presses = 4 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto touchpad_visualizer = 5 [ (android.privacy).dest = DEST_AUTOMATIC ];
     }
     optional DevOptions developer_options = 7;
 
@@ -114,9 +117,20 @@ message SystemSettingsProto {
         optional SettingProto sound_cache = 2;
         optional SettingProto light_pulse = 3 [ (android.privacy).dest = DEST_AUTOMATIC ];
         optional SettingProto vibration_intensity = 4 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto camera_flash_notification = 5 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto screen_flash_notification = 6 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto screen_flash_notification_color_global = 7 [ (android.privacy).dest = DEST_AUTOMATIC ];
     }
     optional Notification notification = 17;
 
+    message Pointer {
+        option (android.msg_privacy).dest = DEST_EXPLICIT;
+
+        optional SettingProto pointer_fill_style = 1 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto pointer_stroke_style = 2 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto pointer_scale = 3 [ (android.privacy).dest = DEST_AUTOMATIC ];
+    }
+    optional Pointer pointer = 37;
     optional SettingProto pointer_speed = 18 [ (android.privacy).dest = DEST_AUTOMATIC ];
 
     message Ringtone {
@@ -161,6 +175,8 @@ message SystemSettingsProto {
         optional SettingProto brightness_for_vr = 3 [ (android.privacy).dest = DEST_AUTOMATIC ];
         optional SettingProto brightness_mode = 4 [ (android.privacy).dest = DEST_AUTOMATIC ];
         optional SettingProto auto_brightness_adj = 5 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto brightness_float = 6 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto brightness_for_vr_float = 7 [ (android.privacy).dest = DEST_AUTOMATIC ];
     }
     optional Screen screen = 22;
 
@@ -192,6 +208,18 @@ message SystemSettingsProto {
     optional Text text = 29;
 
     optional SettingProto time_12_24 = 30 [ (android.privacy).dest = DEST_AUTOMATIC ];
+
+    message Touchpad {
+        option (android.msg_privacy).dest = DEST_EXPLICIT;
+
+        optional SettingProto natural_scrolling = 1 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto pointer_speed = 2 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto right_click_zone = 3 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto tap_to_click = 4 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto tap_dragging = 5 [ (android.privacy).dest = DEST_AUTOMATIC ];
+    }
+    optional Touchpad touchpad = 36;
+
     optional SettingProto tty_mode = 31 [ (android.privacy).dest = DEST_AUTOMATIC ];
 
     message Vibrate {
@@ -209,6 +237,12 @@ message SystemSettingsProto {
         // DatabaseHelper.
         optional SettingProto in_silent = 3 [ (android.privacy).dest = DEST_AUTOMATIC ];
         optional SettingProto when_ringing = 4 [ (android.privacy).dest = DEST_AUTOMATIC ];
+
+        optional SettingProto alarm_intensity = 5 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto media_intensity = 6 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto ring_intensity = 7 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        // notification_intensity is already logged at Notification.vibration_intensity
+        // haptic_feedback_intensity is already logged at HapticFeedback.intensity
     }
     optional Vibrate vibrate = 32;
 
@@ -232,12 +266,16 @@ message SystemSettingsProto {
         // Which streams are affected by mute. The stream type's bit should be set
         // to 1 if it should be muted when a mute request is received.
         optional SettingProto mute_streams_affected = 12 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        // Master balance (float -1.f = 100% left, 0.f = dead center, 1.f = 100% right).
+        optional SettingProto master_balance = 13 [ (android.privacy).dest = DEST_AUTOMATIC ];
     }
     optional Volume volume = 33;
 
     optional SettingProto when_to_make_wifi_calls = 34 [ (android.privacy).dest = DEST_AUTOMATIC ];
 
+    optional SettingProto apply_ramping_ringer = 35 [ (android.privacy).dest = DEST_AUTOMATIC ];
+
     // Please insert fields in alphabetical order and group them into messages
     // if possible (to avoid reaching the method limit).
-    // Next tag = 35;
+    // Next tag = 38;
 }

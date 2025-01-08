@@ -16,12 +16,18 @@
 
 package com.android.internal.os;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 
+/**
+ * @deprecated Use {@link com.android.internal.util.function.pooled.PooledLambda#obtainMessage}
+ *      to achieve the same effect of storing multiple values in a message with the added typesafety
+ *      and code continuity benefits.
+ */
+@Deprecated
 public class HandlerCaller {
     final Looper mMainLooper;
     final Handler mH;

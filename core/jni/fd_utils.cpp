@@ -17,6 +17,7 @@
 #include "fd_utils.h"
 
 #include <algorithm>
+#include <utility>
 
 #include <fcntl.h>
 #include <grp.h>
@@ -31,119 +32,156 @@
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
 
-// Static whitelist of open paths that the zygote is allowed to keep open.
-static const char* kPathWhitelist[] = {
-  "/apex/com.android.conscrypt/javalib/conscrypt.jar",
-  "/dev/null",
-  "/dev/socket/zygote",
-  "/dev/socket/zygote_secondary",
-  "/dev/socket/blastula_pool",
-  "/dev/socket/blastula_pool_secondary",
-  "/dev/socket/webview_zygote",
-  "/dev/socket/heapprofd",
-  "/sys/kernel/debug/tracing/trace_marker",
-  "/system/framework/framework-res.apk",
-  "/dev/urandom",
-  "/dev/ion",
-  "/dev/dri/renderD129", // Fixes b/31172436
+// Static allowlist of open paths that the zygote is allowed to keep open.
+static const char* kPathAllowlist[] = {
+        "/dev/null",
+        "/dev/socket/zygote",
+        "/dev/socket/zygote_secondary",
+        "/dev/socket/usap_pool_primary",
+        "/dev/socket/usap_pool_secondary",
+        "/dev/socket/webview_zygote",
+        "/dev/socket/heapprofd",
+        "/sys/kernel/debug/tracing/trace_marker",
+        "/sys/kernel/tracing/trace_marker",
+        "/system/framework/framework-res.apk",
+        "/dev/urandom",
+        "/dev/ion",
+        "/dev/dri/renderD129", // Fixes b/31172436
+        "/dev/stune/foreground/tasks",
+        "/dev/blkio/tasks",
+        "/metadata/aconfig/maps/system.package.map",
+        "/metadata/aconfig/maps/system.flag.map",
+        "/metadata/aconfig/boot/system.val"
 };
 
 static const char kFdPath[] = "/proc/self/fd";
 
-// static
-FileDescriptorWhitelist* FileDescriptorWhitelist::Get() {
-  if (instance_ == nullptr) {
-    instance_ = new FileDescriptorWhitelist();
-  }
-  return instance_;
+FileDescriptorAllowlist* FileDescriptorAllowlist::Get() {
+    if (instance_ == nullptr) {
+        instance_ = new FileDescriptorAllowlist();
+    }
+    return instance_;
 }
 
-bool FileDescriptorWhitelist::IsAllowed(const std::string& path) const {
-  // Check the static whitelist path.
-  for (const auto& whitelist_path : kPathWhitelist) {
-    if (path == whitelist_path)
-      return true;
-  }
-
-  // Check any paths added to the dynamic whitelist.
-  for (const auto& whitelist_path : whitelist_) {
-    if (path == whitelist_path)
-      return true;
-  }
-
-  // Framework jars are allowed.
-  static const char* kFrameworksPrefix = "/system/framework/";
-  static const char* kJarSuffix = ".jar";
-  if (android::base::StartsWith(path, kFrameworksPrefix)
-      && android::base::EndsWith(path, kJarSuffix)) {
-    return true;
-  }
-
-  // Jars from the runtime apex are allowed.
-  static const char* kRuntimeApexPrefix = "/apex/com.android.runtime/javalib/";
-  if (android::base::StartsWith(path, kRuntimeApexPrefix)
-      && android::base::EndsWith(path, kJarSuffix)) {
-    return true;
-  }
-
-  // Whitelist files needed for Runtime Resource Overlay, like these:
-  // /system/vendor/overlay/framework-res.apk
-  // /system/vendor/overlay-subdir/pg/framework-res.apk
-  // /vendor/overlay/framework-res.apk
-  // /vendor/overlay/PG/android-framework-runtime-resource-overlay.apk
-  // /data/resource-cache/system@vendor@overlay@framework-res.apk@idmap
-  // /data/resource-cache/system@vendor@overlay-subdir@pg@framework-res.apk@idmap
-  // See AssetManager.cpp for more details on overlay-subdir.
-  static const char* kOverlayDir = "/system/vendor/overlay/";
-  static const char* kVendorOverlayDir = "/vendor/overlay";
-  static const char* kOverlaySubdir = "/system/vendor/overlay-subdir/";
-  static const char* kSystemProductOverlayDir = "/system/product/overlay/";
-  static const char* kProductOverlayDir = "/product/overlay";
-  static const char* kApkSuffix = ".apk";
-
-  if ((android::base::StartsWith(path, kOverlayDir)
-       || android::base::StartsWith(path, kOverlaySubdir)
-       || android::base::StartsWith(path, kVendorOverlayDir)
-       || android::base::StartsWith(path, kSystemProductOverlayDir)
-       || android::base::StartsWith(path, kProductOverlayDir))
-      && android::base::EndsWith(path, kApkSuffix)
-      && path.find("/../") == std::string::npos) {
-    return true;
-  }
-
-  static const char* kOverlayIdmapPrefix = "/data/resource-cache/";
-  static const char* kOverlayIdmapSuffix = ".apk@idmap";
-  if (android::base::StartsWith(path, kOverlayIdmapPrefix)
-      && android::base::EndsWith(path, kOverlayIdmapSuffix)
-      && path.find("/../") == std::string::npos) {
-    return true;
-  }
-
-  // All regular files that are placed under this path are whitelisted automatically.
-  static const char* kZygoteWhitelistPath = "/vendor/zygote_whitelist/";
-  if (android::base::StartsWith(path, kZygoteWhitelistPath)
-      && path.find("/../") == std::string::npos) {
-    return true;
-  }
-
-  return false;
+static bool IsArtMemfd(const std::string& path) {
+  return android::base::StartsWith(path, "/memfd:/boot-image-methods.art");
 }
 
-FileDescriptorWhitelist::FileDescriptorWhitelist()
-    : whitelist_() {
+bool FileDescriptorAllowlist::IsAllowed(const std::string& path) const {
+    // Check the static allowlist path.
+    for (const auto& allowlist_path : kPathAllowlist) {
+        if (path == allowlist_path) return true;
+    }
+
+    // Check any paths added to the dynamic allowlist.
+    for (const auto& allowlist_path : allowlist_) {
+        if (path == allowlist_path) return true;
+    }
+
+    // Framework jars are allowed.
+    static const char* kFrameworksPrefix[] = {
+            "/system/framework/",
+            "/system_ext/framework/",
+    };
+
+    static const char* kJarSuffix = ".jar";
+
+    for (const auto& frameworks_prefix : kFrameworksPrefix) {
+        if (android::base::StartsWith(path, frameworks_prefix) &&
+            android::base::EndsWith(path, kJarSuffix)) {
+            return true;
+        }
+    }
+
+    // Jars from APEXes are allowed. This matches /apex/**/javalib/*.jar.
+    static const char* kApexPrefix = "/apex/";
+    static const char* kApexJavalibPathSuffix = "/javalib";
+    if (android::base::StartsWith(path, kApexPrefix) && android::base::EndsWith(path, kJarSuffix) &&
+        android::base::EndsWith(android::base::Dirname(path), kApexJavalibPathSuffix)) {
+        return true;
+    }
+
+    // the in-memory file created by ART through memfd_create is allowed.
+    if (IsArtMemfd(path)) {
+        return true;
+    }
+
+    // Allowlist files needed for Runtime Resource Overlay, like these:
+    // /system/vendor/overlay/framework-res.apk
+    // /system/vendor/overlay-subdir/pg/framework-res.apk
+    // /vendor/overlay/framework-res.apk
+    // /vendor/overlay/PG/android-framework-runtime-resource-overlay.apk
+    // /data/resource-cache/system@vendor@overlay@framework-res.apk@idmap
+    // /data/resource-cache/system@vendor@overlay-subdir@pg@framework-res.apk@idmap
+    // See AssetManager.cpp for more details on overlay-subdir.
+    static const char* kOverlayDir = "/system/vendor/overlay/";
+    static const char* kVendorOverlayDir = "/vendor/overlay";
+    static const char* kVendorOverlaySubdir = "/system/vendor/overlay-subdir/";
+    static const char* kSystemProductOverlayDir = "/system/product/overlay/";
+    static const char* kProductOverlayDir = "/product/overlay";
+    static const char* kSystemSystemExtOverlayDir = "/system/system_ext/overlay/";
+    static const char* kSystemExtOverlayDir = "/system_ext/overlay";
+    static const char* kSystemOdmOverlayDir = "/system/odm/overlay";
+    static const char* kOdmOverlayDir = "/odm/overlay";
+    static const char* kSystemOemOverlayDir = "/system/oem/overlay";
+    static const char* kOemOverlayDir = "/oem/overlay";
+    static const char* kApkSuffix = ".apk";
+
+    if ((android::base::StartsWith(path, kOverlayDir) ||
+         android::base::StartsWith(path, kVendorOverlaySubdir) ||
+         android::base::StartsWith(path, kVendorOverlayDir) ||
+         android::base::StartsWith(path, kSystemProductOverlayDir) ||
+         android::base::StartsWith(path, kProductOverlayDir) ||
+         android::base::StartsWith(path, kSystemSystemExtOverlayDir) ||
+         android::base::StartsWith(path, kSystemExtOverlayDir) ||
+         android::base::StartsWith(path, kSystemOdmOverlayDir) ||
+         android::base::StartsWith(path, kOdmOverlayDir) ||
+         android::base::StartsWith(path, kSystemOemOverlayDir) ||
+         android::base::StartsWith(path, kOemOverlayDir)) &&
+        android::base::EndsWith(path, kApkSuffix) && path.find("/../") == std::string::npos) {
+        return true;
+    }
+
+    // Allow Runtime Resource Overlays inside APEXes.
+    static const char* kOverlayPathSuffix = "/overlay";
+    if (android::base::StartsWith(path, kApexPrefix) &&
+        android::base::EndsWith(android::base::Dirname(path), kOverlayPathSuffix) &&
+        android::base::EndsWith(path, kApkSuffix) && path.find("/../") == std::string::npos) {
+        return true;
+    }
+
+    static const char* kOverlayIdmapPrefix = "/data/resource-cache/";
+    static const char* kOverlayIdmapSuffix = ".apk@idmap";
+    if (android::base::StartsWith(path, kOverlayIdmapPrefix) &&
+        android::base::EndsWith(path, kOverlayIdmapSuffix) &&
+        path.find("/../") == std::string::npos) {
+        return true;
+    }
+
+    // All regular files that are placed under this path are allowlisted
+    // automatically.  The directory name is maintained for compatibility.
+    static const char* kZygoteAllowlistPath = "/vendor/zygote_whitelist/";
+    if (android::base::StartsWith(path, kZygoteAllowlistPath) &&
+        path.find("/../") == std::string::npos) {
+        return true;
+    }
+
+    return false;
 }
 
-FileDescriptorWhitelist* FileDescriptorWhitelist::instance_ = nullptr;
+FileDescriptorAllowlist::FileDescriptorAllowlist() : allowlist_() {}
+
+FileDescriptorAllowlist* FileDescriptorAllowlist::instance_ = nullptr;
 
 // Keeps track of all relevant information (flags, offset etc.) of an
 // open zygote file descriptor.
 class FileDescriptorInfo {
  public:
   // Create a FileDescriptorInfo for a given file descriptor.
-  static FileDescriptorInfo* CreateFromFd(int fd, fail_fn_t fail_fn);
+  static std::unique_ptr<FileDescriptorInfo> CreateFromFd(int fd, fail_fn_t fail_fn);
 
-  // Checks whether the file descriptor associated with this object
-  // refers to the same description.
+  // Checks whether the file descriptor associated with this object refers to
+  // the same description.
   bool RefersToSameFile() const;
 
   void ReopenOrDetach(fail_fn_t fail_fn) const;
@@ -158,8 +196,10 @@ class FileDescriptorInfo {
   const bool is_sock;
 
  private:
+  // Constructs for sockets.
   explicit FileDescriptorInfo(int fd);
 
+  // Constructs for non-socket file descriptors.
   FileDescriptorInfo(struct stat stat, const std::string& file_path, int fd, int open_flags,
                      int fd_flags, int fs_flags, off_t offset);
 
@@ -177,8 +217,7 @@ class FileDescriptorInfo {
   DISALLOW_COPY_AND_ASSIGN(FileDescriptorInfo);
 };
 
-// static
-FileDescriptorInfo* FileDescriptorInfo::CreateFromFd(int fd, fail_fn_t fail_fn) {
+std::unique_ptr<FileDescriptorInfo> FileDescriptorInfo::CreateFromFd(int fd, fail_fn_t fail_fn) {
   struct stat f_stat;
   // This should never happen; the zygote should always have the right set
   // of permissions required to stat all its open files.
@@ -186,7 +225,7 @@ FileDescriptorInfo* FileDescriptorInfo::CreateFromFd(int fd, fail_fn_t fail_fn) 
     fail_fn(android::base::StringPrintf("Unable to stat %d", fd));
   }
 
-  const FileDescriptorWhitelist* whitelist = FileDescriptorWhitelist::Get();
+  const FileDescriptorAllowlist* allowlist = FileDescriptorAllowlist::Get();
 
   if (S_ISSOCK(f_stat.st_mode)) {
     std::string socket_name;
@@ -194,23 +233,22 @@ FileDescriptorInfo* FileDescriptorInfo::CreateFromFd(int fd, fail_fn_t fail_fn) 
       fail_fn("Unable to get socket name");
     }
 
-    if (!whitelist->IsAllowed(socket_name)) {
-      fail_fn(android::base::StringPrintf("Socket name not whitelisted : %s (fd=%d)",
-                                          socket_name.c_str(),
-                                          fd));
+    if (!allowlist->IsAllowed(socket_name)) {
+        fail_fn(android::base::StringPrintf("Socket name not allowlisted : %s (fd=%d)",
+                                            socket_name.c_str(), fd));
     }
 
-    return new FileDescriptorInfo(fd);
+    return std::unique_ptr<FileDescriptorInfo>(new FileDescriptorInfo(fd));
   }
 
-  // We only handle whitelisted regular files and character devices. Whitelisted
+  // We only handle allowlisted regular files and character devices. Allowlisted
   // character devices must provide a guarantee of sensible behaviour when
   // reopened.
   //
   // S_ISDIR : Not supported. (We could if we wanted to, but it's unused).
   // S_ISLINK : Not supported.
   // S_ISBLK : Not supported.
-  // S_ISFIFO : Not supported. Note that the Zygote and blastulas use pipes to
+  // S_ISFIFO : Not supported. Note that the Zygote and USAPs use pipes to
   // communicate with the child processes across forks but those should have been
   // added to the redirection exemption list.
   if (!S_ISCHR(f_stat.st_mode) && !S_ISREG(f_stat.st_mode)) {
@@ -237,8 +275,8 @@ FileDescriptorInfo* FileDescriptorInfo::CreateFromFd(int fd, fail_fn_t fail_fn) 
                                         strerror(errno)));
   }
 
-  if (!whitelist->IsAllowed(file_path)) {
-    fail_fn(android::base::StringPrintf("Not whitelisted (%d): %s", fd, file_path.c_str()));
+  if (!allowlist->IsAllowed(file_path)) {
+      fail_fn(android::base::StringPrintf("Not allowlisted (%d): %s", fd, file_path.c_str()));
   }
 
   // File descriptor flags : currently on FD_CLOEXEC. We can set these
@@ -281,7 +319,8 @@ FileDescriptorInfo* FileDescriptorInfo::CreateFromFd(int fd, fail_fn_t fail_fn) 
   int open_flags = fs_flags & (kOpenFlags);
   fs_flags = fs_flags & (~(kOpenFlags));
 
-  return new FileDescriptorInfo(f_stat, file_path, fd, open_flags, fd_flags, fs_flags, offset);
+  return std::unique_ptr<FileDescriptorInfo>(
+    new FileDescriptorInfo(f_stat, file_path, fd, open_flags, fd_flags, fs_flags, offset));
 }
 
 bool FileDescriptorInfo::RefersToSameFile() const {
@@ -297,6 +336,11 @@ bool FileDescriptorInfo::RefersToSameFile() const {
 void FileDescriptorInfo::ReopenOrDetach(fail_fn_t fail_fn) const {
   if (is_sock) {
     return DetachSocket(fail_fn);
+  }
+
+  // Children can directly use the in-memory file created by ART through memfd_create.
+  if (IsArtMemfd(file_path)) {
+    return;
   }
 
   // NOTE: This might happen if the file was unlinked after being opened.
@@ -434,42 +478,24 @@ void FileDescriptorInfo::DetachSocket(fail_fn_t fail_fn) const {
   }
 }
 
-// static
+// TODO: Move the definitions here and eliminate the forward declarations. They
+// temporarily help making code reviews easier.
+static int ParseFd(dirent* dir_entry, int dir_fd);
+static std::unique_ptr<std::set<int>> GetOpenFdsIgnoring(const std::vector<int>& fds_to_ignore,
+                                                         fail_fn_t fail_fn);
+
 FileDescriptorTable* FileDescriptorTable::Create(const std::vector<int>& fds_to_ignore,
                                                  fail_fn_t fail_fn) {
-  DIR* proc_fd_dir = opendir(kFdPath);
-  if (proc_fd_dir == nullptr) {
-    fail_fn(std::string("Unable to open directory ").append(kFdPath));
-  }
-
-  int dir_fd = dirfd(proc_fd_dir);
-  dirent* dir_entry;
-
-  std::unordered_map<int, FileDescriptorInfo*> open_fd_map;
-  while ((dir_entry = readdir(proc_fd_dir)) != nullptr) {
-    const int fd = ParseFd(dir_entry, dir_fd);
-    if (fd == -1) {
-      continue;
-    }
-
-    if (std::find(fds_to_ignore.begin(), fds_to_ignore.end(), fd) != fds_to_ignore.end()) {
-      continue;
-    }
-
+  std::unique_ptr<std::set<int>> open_fds = GetOpenFdsIgnoring(fds_to_ignore, fail_fn);
+  std::unordered_map<int, std::unique_ptr<FileDescriptorInfo>> open_fd_map;
+  for (auto fd : *open_fds) {
     open_fd_map[fd] = FileDescriptorInfo::CreateFromFd(fd, fail_fn);
   }
-
-  if (closedir(proc_fd_dir) == -1) {
-    fail_fn("Unable to close directory");
-  }
-
-  return new FileDescriptorTable(open_fd_map);
+  return new FileDescriptorTable(std::move(open_fd_map));
 }
 
-void FileDescriptorTable::Restat(const std::vector<int>& fds_to_ignore, fail_fn_t fail_fn) {
-  std::set<int> open_fds;
-
-  // First get the list of open descriptors.
+static std::unique_ptr<std::set<int>> GetOpenFdsIgnoring(const std::vector<int>& fds_to_ignore,
+                                                         fail_fn_t fail_fn) {
   DIR* proc_fd_dir = opendir(kFdPath);
   if (proc_fd_dir == nullptr) {
     fail_fn(android::base::StringPrintf("Unable to open directory %s: %s",
@@ -477,6 +503,7 @@ void FileDescriptorTable::Restat(const std::vector<int>& fds_to_ignore, fail_fn_
                                         strerror(errno)));
   }
 
+  auto result = std::make_unique<std::set<int>>();
   int dir_fd = dirfd(proc_fd_dir);
   dirent* dir_entry;
   while ((dir_entry = readdir(proc_fd_dir)) != nullptr) {
@@ -489,21 +516,33 @@ void FileDescriptorTable::Restat(const std::vector<int>& fds_to_ignore, fail_fn_
       continue;
     }
 
-    open_fds.insert(fd);
+    result->insert(fd);
   }
 
   if (closedir(proc_fd_dir) == -1) {
     fail_fn(android::base::StringPrintf("Unable to close directory: %s", strerror(errno)));
   }
+  return result;
+}
 
-  RestatInternal(open_fds, fail_fn);
+std::unique_ptr<std::set<int>> GetOpenFds(fail_fn_t fail_fn) {
+  const std::vector<int> nothing_to_ignore;
+  return GetOpenFdsIgnoring(nothing_to_ignore, fail_fn);
+}
+
+void FileDescriptorTable::Restat(const std::vector<int>& fds_to_ignore, fail_fn_t fail_fn) {
+  std::unique_ptr<std::set<int>> open_fds = GetOpenFdsIgnoring(fds_to_ignore, fail_fn);
+
+  // Check that the files did not change, and leave only newly opened FDs in
+  // |open_fds|.
+  RestatInternal(*open_fds, fail_fn);
 }
 
 // Reopens all file descriptors that are contained in the table.
 void FileDescriptorTable::ReopenOrDetach(fail_fn_t fail_fn) {
-  std::unordered_map<int, FileDescriptorInfo*>::const_iterator it;
+  std::unordered_map<int, std::unique_ptr<FileDescriptorInfo>>::const_iterator it;
   for (it = open_fd_map_.begin(); it != open_fd_map_.end(); ++it) {
-    const FileDescriptorInfo* info = it->second;
+    const FileDescriptorInfo* info = it->second.get();
     if (info == nullptr) {
       return;
     } else {
@@ -513,11 +552,17 @@ void FileDescriptorTable::ReopenOrDetach(fail_fn_t fail_fn) {
 }
 
 FileDescriptorTable::FileDescriptorTable(
-    const std::unordered_map<int, FileDescriptorInfo*>& map)
-    : open_fd_map_(map) {
+  std::unordered_map<int, std::unique_ptr<FileDescriptorInfo>> map)
+  : open_fd_map_(std::move(map)) {
 }
 
+FileDescriptorTable::~FileDescriptorTable() {}
+
 void FileDescriptorTable::RestatInternal(std::set<int>& open_fds, fail_fn_t fail_fn) {
+  // ART creates a file through memfd for optimization purposes. We make sure
+  // there is at most one being created.
+  bool art_memfd_seen = false;
+
   // Iterate through the list of file descriptors we've already recorded
   // and check whether :
   //
@@ -525,7 +570,7 @@ void FileDescriptorTable::RestatInternal(std::set<int>& open_fds, fail_fn_t fail
   // (b) they refer to the same file.
   //
   // We'll only store the last error message.
-  std::unordered_map<int, FileDescriptorInfo*>::iterator it = open_fd_map_.begin();
+  std::unordered_map<int, std::unique_ptr<FileDescriptorInfo>>::iterator it = open_fd_map_.begin();
   while (it != open_fd_map_.end()) {
     std::set<int>::const_iterator element = open_fds.find(it->first);
     if (element == open_fds.end()) {
@@ -543,11 +588,18 @@ void FileDescriptorTable::RestatInternal(std::set<int>& open_fds, fail_fn_t fail
       if (!it->second->RefersToSameFile()) {
         // The file descriptor refers to a different description. We must
         // update our entry in the table.
-        delete it->second;
         it->second = FileDescriptorInfo::CreateFromFd(*element, fail_fn);
       } else {
         // It's the same file. Nothing to do here. Move on to the next open
         // FD.
+      }
+
+      if (IsArtMemfd(it->second->file_path)) {
+        if (art_memfd_seen) {
+          fail_fn("ART fd already seen: " + it->second->file_path);
+        } else {
+          art_memfd_seen = true;
+        }
       }
 
       ++it;
@@ -575,8 +627,7 @@ void FileDescriptorTable::RestatInternal(std::set<int>& open_fds, fail_fn_t fail
   }
 }
 
-// static
-int FileDescriptorTable::ParseFd(dirent* dir_entry, int dir_fd) {
+static int ParseFd(dirent* dir_entry, int dir_fd) {
   char* end;
   const int fd = strtol(dir_entry->d_name, &end, 10);
   if ((*end) != '\0') {

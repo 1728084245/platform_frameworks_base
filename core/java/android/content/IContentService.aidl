@@ -51,17 +51,17 @@ interface IContentService {
      *     hold the INTERACT_ACROSS_USERS_FULL permission.  Pseudousers USER_ALL
      *     USER_CURRENT are properly interpreted.
      */
-    void notifyChange(in Uri uri, IContentObserver observer,
+    void notifyChange(in Uri[] uris, IContentObserver observer,
             boolean observerWantsSelfNotifications, int flags,
-            int userHandle, int targetSdkVersion);
+            int userHandle, int targetSdkVersion, String callingPackage);
 
-    void requestSync(in Account account, String authority, in Bundle extras);
+    void requestSync(in Account account, String authority, in Bundle extras, String callingPackage);
     /**
      * Start a sync given a request.
      */
-    void sync(in SyncRequest request);
-    void syncAsUser(in SyncRequest request, int userId);
-    @UnsupportedAppUsage
+    void sync(in SyncRequest request, String callingPackage);
+    void syncAsUser(in SyncRequest request, int userId, String callingPackage);
+    @UnsupportedAppUsage(maxTargetSdk = 30, trackingBug = 170729553)
     void cancelSync(in Account account, String authority, in ComponentName cname);
     void cancelSyncAsUser(in Account account, String authority, in ComponentName cname, int userId);
 
@@ -128,6 +128,7 @@ interface IContentService {
      * @param syncable, >0 denotes syncable, 0 means not syncable, <0 means unknown
      */
     void setIsSyncable(in Account account, String providerName, int syncable);
+    void setIsSyncableAsUser(in Account account, String providerName, int syncable, int userId);
 
     @UnsupportedAppUsage
     void setMasterSyncAutomatically(boolean flag);
@@ -149,6 +150,7 @@ interface IContentService {
     SyncAdapterType[] getSyncAdapterTypesAsUser(int userId);
 
     String[] getSyncAdapterPackagesForAuthorityAsUser(String authority, int userId);
+    String getSyncAdapterPackageAsUser(String accountType, String authority, int userId);
 
     /**
      * Returns true if there is currently a operation for the given account/authority or service
@@ -158,7 +160,8 @@ interface IContentService {
      * @param cname component to identify sync service, must be null if account/providerName are
      * non-null.
      */
-    @UnsupportedAppUsage
+    @EnforcePermission("READ_SYNC_STATS")
+    @UnsupportedAppUsage(maxTargetSdk = 30, trackingBug = 170729553)
     boolean isSyncActive(in Account account, String authority, in ComponentName cname);
 
     /**
@@ -181,6 +184,7 @@ interface IContentService {
      * non-null.
      */
     boolean isSyncPending(in Account account, String authority, in ComponentName cname);
+    @EnforcePermission("READ_SYNC_STATS")
     boolean isSyncPendingAsUser(in Account account, String authority, in ComponentName cname,
             int userId);
 
@@ -191,4 +195,6 @@ interface IContentService {
     Bundle getCache(in String packageName, in Uri key, int userId);
 
     void resetTodayStats();
+
+    void onDbCorruption(String tag, String message, String stacktrace);
 }

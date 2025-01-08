@@ -22,13 +22,23 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import android.os.Parcel;
-import android.support.test.filters.SmallTest;
-import android.support.test.runner.AndroidJUnit4;
 import android.util.Pair;
+import android.util.Xml;
+
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SmallTest;
+
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.xmlpull.v1.XmlPullParserException;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 @SmallTest
@@ -48,8 +58,8 @@ public class BrightnessConfigurationTest {
 
     @Test
     public void testSetCurveIsUnmodified() {
-        BrightnessConfiguration.Builder builder = new BrightnessConfiguration.Builder();
-        builder.setCurve(LUX_LEVELS, NITS_LEVELS);
+        BrightnessConfiguration.Builder builder = new BrightnessConfiguration.Builder(
+                LUX_LEVELS, NITS_LEVELS);
         BrightnessConfiguration config = builder.build();
         Pair<float[], float[]> curve = config.getCurve();
         assertArrayEquals(LUX_LEVELS, curve.first, "lux");
@@ -58,45 +68,33 @@ public class BrightnessConfigurationTest {
 
     @Test(expected = IllegalArgumentException.class)
     public void testCurveMustHaveZeroLuxPoint() {
-        BrightnessConfiguration.Builder builder = new BrightnessConfiguration.Builder();
         float[] lux = Arrays.copyOf(LUX_LEVELS, LUX_LEVELS.length);
         lux[0] = 1f;
-        builder.setCurve(lux, NITS_LEVELS);
-    }
-
-    @Test(expected = IllegalStateException.class)
-    public void testCurveMustBeSet() {
-        BrightnessConfiguration.Builder builder = new BrightnessConfiguration.Builder();
-        builder.build();
+        new BrightnessConfiguration.Builder(lux, NITS_LEVELS);
     }
 
     @Test(expected = NullPointerException.class)
     public void testCurveMustNotHaveNullArrays() {
-        BrightnessConfiguration.Builder builder = new BrightnessConfiguration.Builder();
-        builder.setCurve(null, null);
+        new BrightnessConfiguration.Builder(null, null);
     }
 
     @Test(expected = IllegalArgumentException.class)
     public void testCurveMustNotHaveEmptyArrays() {
-        BrightnessConfiguration.Builder builder = new BrightnessConfiguration.Builder();
-        builder.setCurve(new float[0], new float[0]);
+        new BrightnessConfiguration.Builder(new float[0], new float[0]);
     }
 
     @Test
     public void testCurveMustNotHaveArraysOfDifferentLengths() {
         assertThrows(IllegalArgumentException.class, () -> {
-            BrightnessConfiguration.Builder builder = new BrightnessConfiguration.Builder();
             float[] lux = Arrays.copyOf(LUX_LEVELS, LUX_LEVELS.length + 1);
             lux[lux.length - 1] = lux[lux.length - 2] + 1;
-            boolean exceptionThrown = false;
-            builder.setCurve(lux, NITS_LEVELS);
+            new BrightnessConfiguration.Builder(lux, NITS_LEVELS);
         });
 
         assertThrows(IllegalArgumentException.class, () -> {
-            BrightnessConfiguration.Builder builder = new BrightnessConfiguration.Builder();
             float[] nits = Arrays.copyOf(NITS_LEVELS, NITS_LEVELS.length + 1);
             nits[nits.length - 1] = nits[nits.length - 2] + 1;
-            builder.setCurve(LUX_LEVELS, nits);
+            new BrightnessConfiguration.Builder(LUX_LEVELS, nits);
         });
     }
 
@@ -105,23 +103,41 @@ public class BrightnessConfigurationTest {
         assertThrows(IllegalArgumentException.class, () -> {
             float[] lux = Arrays.copyOf(LUX_LEVELS, LUX_LEVELS.length);
             lux[lux.length - 1] = Float.NaN;
-            BrightnessConfiguration.Builder builder = new BrightnessConfiguration.Builder();
-            builder.setCurve(lux, NITS_LEVELS);
+            new BrightnessConfiguration.Builder(lux, NITS_LEVELS);
         });
 
         assertThrows(IllegalArgumentException.class, () -> {
             float[] nits = Arrays.copyOf(NITS_LEVELS, NITS_LEVELS.length);
             nits[nits.length - 1] = Float.NaN;
-            BrightnessConfiguration.Builder builder = new BrightnessConfiguration.Builder();
-            builder.setCurve(LUX_LEVELS, nits);
+            new BrightnessConfiguration.Builder(LUX_LEVELS, nits);
         });
     }
 
+    @Test
+    public void testLuxMultipliersMustBePositive() {
+        BrightnessConfiguration.Builder config = new BrightnessConfiguration.Builder(
+                LUX_LEVELS, NITS_LEVELS);
+        assertThrows(IllegalArgumentException.class, () -> {
+            config.setShortTermModelUpperLuxMultiplier(-1f);
+        });
+
+        assertThrows(IllegalArgumentException.class, () -> {
+            config.setShortTermModelLowerLuxMultiplier(-1f);
+        });
+    }
 
     @Test
     public void testParceledConfigIsEquivalent() {
-        BrightnessConfiguration.Builder builder = new BrightnessConfiguration.Builder();
-        builder.setCurve(LUX_LEVELS, NITS_LEVELS);
+        BrightnessConfiguration.Builder builder =
+                new BrightnessConfiguration.Builder(LUX_LEVELS, NITS_LEVELS);
+        builder.setShouldCollectColorSamples(true);
+        builder.setShortTermModelTimeoutMillis(1234L);
+        builder.setShortTermModelLowerLuxMultiplier(0.9f);
+        builder.setShortTermModelUpperLuxMultiplier(0.2f);
+        builder.addCorrectionByCategory(3,
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
+        builder.addCorrectionByPackageName("a.package.name",
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
         BrightnessConfiguration config = builder.build();
         Parcel p = Parcel.obtain();
         p.writeParcelable(config, 0 /*flags*/);
@@ -132,13 +148,52 @@ public class BrightnessConfigurationTest {
     }
 
     @Test
+    public void testWriteReadXml() throws IOException, XmlPullParserException {
+        BrightnessConfiguration.Builder builder =
+                new BrightnessConfiguration.Builder(LUX_LEVELS, NITS_LEVELS);
+        builder.setShouldCollectColorSamples(true);
+        builder.setShortTermModelTimeoutMillis(123L);
+        builder.setShortTermModelLowerLuxMultiplier(0.4f);
+        builder.setShortTermModelUpperLuxMultiplier(0.8f);
+        builder.addCorrectionByCategory(3,
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
+        builder.addCorrectionByPackageName("a.package.name",
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
+        BrightnessConfiguration config = builder.build();
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        TypedXmlSerializer out = Xml.newFastSerializer();
+        out.setOutput(baos, StandardCharsets.UTF_8.name());
+        out.startDocument(null, true);
+        config.saveToXml(out);
+        out.endDocument();
+        baos.flush();
+
+        ByteArrayInputStream input = new ByteArrayInputStream(baos.toByteArray());
+        TypedXmlPullParser parser = Xml.newFastPullParser();
+        parser.setInput(input, StandardCharsets.UTF_8.name());
+        BrightnessConfiguration loadedConfig = BrightnessConfiguration.loadFromXml(parser);
+
+        assertEquals(config, loadedConfig);
+    }
+
+    @Test
     public void testEquals() {
-        BrightnessConfiguration.Builder builder = new BrightnessConfiguration.Builder();
-        builder.setCurve(LUX_LEVELS, NITS_LEVELS);
+        BrightnessConfiguration.Builder builder =
+                new BrightnessConfiguration.Builder(LUX_LEVELS, NITS_LEVELS);
+        builder.setShouldCollectColorSamples(true);
+        builder.addCorrectionByCategory(3,
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
+        builder.addCorrectionByPackageName("a.package.name",
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
         BrightnessConfiguration baseConfig = builder.build();
 
-        builder = new BrightnessConfiguration.Builder();
-        builder.setCurve(LUX_LEVELS, NITS_LEVELS);
+        builder = new BrightnessConfiguration.Builder(LUX_LEVELS, NITS_LEVELS);
+        builder.setShouldCollectColorSamples(true);
+        builder.addCorrectionByCategory(3,
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
+        builder.addCorrectionByPackageName("a.package.name",
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
         BrightnessConfiguration identicalConfig = builder.build();
         assertEquals(baseConfig, identicalConfig);
         assertEquals("hashCodes must be equal for identical configs",
@@ -146,17 +201,53 @@ public class BrightnessConfigurationTest {
 
         float[] lux = Arrays.copyOf(LUX_LEVELS, LUX_LEVELS.length);
         lux[lux.length - 1] = lux[lux.length - 1] * 2;
-        builder = new BrightnessConfiguration.Builder();
-        builder.setCurve(lux, NITS_LEVELS);
+        builder = new BrightnessConfiguration.Builder(lux, NITS_LEVELS);
+        builder.setShouldCollectColorSamples(true);
+        builder.addCorrectionByCategory(3,
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
+        builder.addCorrectionByPackageName("a.package.name",
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
         BrightnessConfiguration luxDifferConfig = builder.build();
         assertNotEquals(baseConfig, luxDifferConfig);
 
         float[] nits = Arrays.copyOf(NITS_LEVELS, NITS_LEVELS.length);
         nits[nits.length - 1] = nits[nits.length - 1] * 2;
-        builder = new BrightnessConfiguration.Builder();
-        builder.setCurve(LUX_LEVELS, nits);
+        builder = new BrightnessConfiguration.Builder(LUX_LEVELS, nits);
+        builder.setShouldCollectColorSamples(true);
+        builder.addCorrectionByCategory(3,
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
+        builder.addCorrectionByPackageName("a.package.name",
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
         BrightnessConfiguration nitsDifferConfig = builder.build();
         assertNotEquals(baseConfig, nitsDifferConfig);
+
+        builder = new BrightnessConfiguration.Builder(LUX_LEVELS, NITS_LEVELS);
+        builder.addCorrectionByCategory(3,
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
+        builder.addCorrectionByPackageName("a.package.name",
+                BrightnessCorrection.createScaleAndTranslateLog(1.0f, 2.0f));
+        BrightnessConfiguration correctionsDiffer = builder.build();
+        assertNotEquals(baseConfig, correctionsDiffer);
+
+        builder = new BrightnessConfiguration.Builder(LUX_LEVELS, NITS_LEVELS);
+        builder.setShouldCollectColorSamples(true);
+        BrightnessConfiguration colorCollectionDiffers = builder.build();
+        assertNotEquals(baseConfig, colorCollectionDiffers);
+
+        builder = new BrightnessConfiguration.Builder(LUX_LEVELS, NITS_LEVELS);
+        builder.setShortTermModelTimeoutMillis(300L);
+        BrightnessConfiguration timeoutDiffers = builder.build();
+        assertNotEquals(baseConfig, timeoutDiffers);
+
+        builder = new BrightnessConfiguration.Builder(LUX_LEVELS, NITS_LEVELS);
+        builder.setShortTermModelLowerLuxMultiplier(0.7f);
+        BrightnessConfiguration lowerLuxDiffers = builder.build();
+        assertNotEquals(baseConfig, lowerLuxDiffers);
+
+        builder = new BrightnessConfiguration.Builder(LUX_LEVELS, NITS_LEVELS);
+        builder.setShortTermModelUpperLuxMultiplier(0.6f);
+        BrightnessConfiguration upperLuxDiffers = builder.build();
+        assertNotEquals(baseConfig, upperLuxDiffers);
     }
 
     private static void assertArrayEquals(float[] expected, float[] actual, String name) {

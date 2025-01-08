@@ -115,6 +115,7 @@ public:
      * wasted)
      */
     size_t usedSize() const { return mTotalAllocated - mWastedSpace; }
+    size_t allocatedSize() const { return mTotalAllocated; }
 
 private:
     LinearAllocator(const LinearAllocator& other);
@@ -201,7 +202,7 @@ public:
             : std::vector<T, LinearStdAllocator<T>>(allocator) {}
 };
 
-};  // namespace uirenderer
-};  // namespace android
+}  // namespace uirenderer
+}  // namespace android
 
 #endif  // ANDROID_LINEARALLOCATOR_H

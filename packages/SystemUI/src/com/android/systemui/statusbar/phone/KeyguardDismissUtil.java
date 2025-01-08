@@ -16,37 +16,41 @@
 
 package com.android.systemui.statusbar.phone;
 
-import android.util.Log;
+import com.android.systemui.dagger.SysUISingleton;
+import com.android.systemui.plugins.ActivityStarter;
+import com.android.systemui.plugins.ActivityStarter.OnDismissAction;
+import com.android.systemui.statusbar.SysuiStatusBarStateController;
+import com.android.systemui.statusbar.policy.KeyguardStateController;
 
-import com.android.keyguard.KeyguardHostView.OnDismissAction;
+import javax.inject.Inject;
 
 /**
- * Executes actions that require the screen to be unlocked. Delegates the actual handling to an
- * implementation passed via {@link #setDismissHandler}.
+ * Executes actions that require the screen to be unlocked.
  */
+@SysUISingleton
 public class KeyguardDismissUtil implements KeyguardDismissHandler {
-    private static final String TAG = "KeyguardDismissUtil";
+    private final KeyguardStateController mKeyguardStateController;
 
-    private volatile KeyguardDismissHandler mDismissHandler;
+    private final SysuiStatusBarStateController mStatusBarStateController;
 
-    /** Sets the actual {@link DismissHandler} implementation. */
-    public void setDismissHandler(KeyguardDismissHandler dismissHandler) {
-        mDismissHandler = dismissHandler;
+    private final ActivityStarter mActivityStarter;
+
+    @Inject
+    public KeyguardDismissUtil(KeyguardStateController keyguardStateController,
+            SysuiStatusBarStateController statusBarStateController,
+            ActivityStarter activityStarter) {
+        mKeyguardStateController = keyguardStateController;
+        mStatusBarStateController = statusBarStateController;
+        mActivityStarter = activityStarter;
     }
 
-    /**
-     * Executes an action that requres the screen to be unlocked.
-     *
-     * <p>Must be called after {@link #setDismissHandler}.
-     */
     @Override
-    public void executeWhenUnlocked(OnDismissAction action) {
-        KeyguardDismissHandler dismissHandler = mDismissHandler;
-        if (dismissHandler == null) {
-            Log.wtf(TAG, "KeyguardDismissHandler not set.");
-            action.onDismiss();
-            return;
+    public void executeWhenUnlocked(OnDismissAction action, boolean requiresShadeOpen,
+            boolean afterKeyguardGone) {
+        if (mKeyguardStateController.isShowing() && requiresShadeOpen) {
+            mStatusBarStateController.setLeaveOpenOnKeyguardHide(true);
         }
-        dismissHandler.executeWhenUnlocked(action);
+        mActivityStarter.dismissKeyguardThenExecute(action, null /* cancelAction */,
+                afterKeyguardGone /* afterKeyguardGone */);
     }
 }

@@ -16,16 +16,31 @@
 
 package com.android.internal.util;
 
-import com.android.internal.util.CharSequences;
 import static com.android.internal.util.CharSequences.forAsciiBytes;
-import junit.framework.TestCase;
-import android.test.suitebuilder.annotation.SmallTest;
 
-public class CharSequencesTest extends TestCase {
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
+import android.platform.test.annotations.IgnoreUnderRavenwood;
+import android.platform.test.ravenwood.RavenwoodRule;
+
+import androidx.test.filters.SmallTest;
+import androidx.test.runner.AndroidJUnit4;
+
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+
+@RunWith(AndroidJUnit4.class)
+@IgnoreUnderRavenwood(blockedBy = CharSequences.class)
+public class CharSequencesTest {
+    @Rule
+    public final RavenwoodRule mRavenwood = new RavenwoodRule();
+
+    @Test
     @SmallTest
     public void testCharSequences() {
-        String s = "Crazy Bob";
+        String s = "Hello Bob";
         byte[] bytes = s.getBytes();
 
         String copy = toString(forAsciiBytes(bytes));
@@ -34,11 +49,11 @@ public class CharSequencesTest extends TestCase {
         copy = toString(forAsciiBytes(bytes, 0, s.length()));
         assertTrue(s.equals(copy));
 
-        String crazy = toString(forAsciiBytes(bytes, 0, 5));
-        assertTrue("Crazy".equals(crazy));
+        String hello = toString(forAsciiBytes(bytes, 0, 5));
+        assertTrue("Hello".equals(hello));
 
-        String a = toString(forAsciiBytes(bytes, 0, 3).subSequence(2, 3));
-        assertTrue("a".equals(a));
+        String l = toString(forAsciiBytes(bytes, 0, 3).subSequence(2, 3));
+        assertTrue("l".equals(l));
 
         String empty = toString(forAsciiBytes(bytes, 0, 3).subSequence(3, 3));
         assertTrue("".equals(empty));

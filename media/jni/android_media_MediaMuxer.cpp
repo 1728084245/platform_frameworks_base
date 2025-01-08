@@ -21,7 +21,7 @@
 #include "android_media_Streams.h"
 #include "android_runtime/AndroidRuntime.h"
 #include "jni.h"
-#include <nativehelper/JNIHelp.h>
+#include <nativehelper/JNIPlatformHelp.h>
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -165,7 +165,11 @@ static jlong android_media_MediaMuxer_native_setup(
 
     MediaMuxer::OutputFormat fileFormat =
         static_cast<MediaMuxer::OutputFormat>(format);
-    sp<MediaMuxer> muxer = new MediaMuxer(fd, fileFormat);
+    sp<MediaMuxer> muxer = MediaMuxer::create(fd, fileFormat);
+    if (muxer == nullptr) {
+        jniThrowException(env, "java/lang/IllegalArgumentException", "Muxer creation failed");
+        return 0;
+    }
     muxer->incStrong(clazz);
     return reinterpret_cast<jlong>(muxer.get());
 }
@@ -230,8 +234,9 @@ static void android_media_MediaMuxer_stop(JNIEnv *env, jclass /* clazz */,
     status_t err = muxer->stop();
 
     if (err != OK) {
+        ALOGE("Error during stop:%d", err);
         jniThrowException(env, "java/lang/IllegalStateException",
-                          "Failed to stop the muxer");
+                    "Error during stop(), muxer would have stopped already");
         return;
     }
 }

@@ -16,31 +16,35 @@
 
 package com.android.server;
 
-import static com.android.internal.logging.nano.MetricsProto.MetricsEvent;
+import static android.os.Flags.batteryServiceSupportCurrentAdbCommand;
+import static android.os.Flags.stateOfHealthPublic;
 
+import static com.android.internal.logging.nano.MetricsProto.MetricsEvent;
+import static com.android.server.health.Utils.copyV1Battery;
+
+import android.annotation.Nullable;
+import android.annotation.SuppressLint;
 import android.app.ActivityManager;
 import android.app.ActivityManagerInternal;
+import android.app.AppOpsManager;
+import android.app.BroadcastOptions;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.database.ContentObserver;
-import android.hardware.health.V1_0.HealthInfo;
-import android.hardware.health.V2_0.IHealth;
-import android.hardware.health.V2_0.IHealthInfoCallback;
-import android.hardware.health.V2_0.Result;
-import android.hidl.manager.V1_0.IServiceManager;
-import android.hidl.manager.V1_0.IServiceNotification;
+import android.hardware.health.HealthInfo;
+import android.hardware.health.V2_1.BatteryCapacityLevel;
 import android.metrics.LogMaker;
 import android.os.BatteryManager;
 import android.os.BatteryManagerInternal;
 import android.os.BatteryProperty;
 import android.os.BatteryStats;
 import android.os.Binder;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.DropBoxManager;
 import android.os.FileUtils;
 import android.os.Handler;
-import android.os.HandlerThread;
 import android.os.IBatteryPropertiesRegistrar;
 import android.os.IBinder;
 import android.os.OsProtoEnums;
@@ -51,23 +55,25 @@ import android.os.ServiceManager;
 import android.os.ShellCallback;
 import android.os.ShellCommand;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.os.Trace;
 import android.os.UEventObserver;
 import android.os.UserHandle;
 import android.provider.Settings;
 import android.service.battery.BatteryServiceDumpProto;
+import android.sysprop.PowerProperties;
 import android.util.EventLog;
-import android.util.MutableInt;
 import android.util.Slog;
 import android.util.proto.ProtoOutputStream;
 
-import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.app.IBatteryStats;
 import com.android.internal.logging.MetricsLogger;
+import com.android.internal.os.SomeArgs;
 import com.android.internal.util.DumpUtils;
 import com.android.server.am.BatteryStatsService;
-import com.android.server.lights.Light;
+import com.android.server.health.HealthServiceWrapper;
 import com.android.server.lights.LightsManager;
+import com.android.server.lights.LogicalLight;
 
 import java.io.File;
 import java.io.FileDescriptor;
@@ -76,11 +82,8 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.Objects;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 /**
  * <p>BatteryService monitors the charging status, and charge level of the device
@@ -127,6 +130,7 @@ public final class BatteryService extends SystemService {
     // discharge stats before the device dies.
     private int mCriticalBatteryLevel;
 
+    // TODO: Current args don't work since "--unplugged" flag was purposefully removed.
     private static final String[] DUMPSYS_ARGS = new String[] { "--checkin", "--unplugged" };
 
     private static final String DUMPSYS_DATA_PATH = "/data/system/";
@@ -154,6 +158,15 @@ public final class BatteryService extends SystemService {
     private int mLastMaxChargingCurrent;
     private int mLastMaxChargingVoltage;
     private int mLastChargeCounter;
+    private int mLastBatteryCycleCount;
+    private int mLastChargingState;
+    private int mLastBatteryCapacityLevel;
+    /**
+     * The last seen charging policy. This requires the
+     * {@link android.Manifest.permission#BATTERY_STATS} permission and should therefore not be
+     * included in the ACTION_BATTERY_CHANGED intent extras.
+     */
+    private int mLastChargingPolicy;
 
     private int mSequence = 1;
 
@@ -161,8 +174,13 @@ public final class BatteryService extends SystemService {
     private int mLastInvalidCharger;
 
     private int mLowBatteryWarningLevel;
+    private int mLastLowBatteryWarningLevel;
     private int mLowBatteryCloseWarningLevel;
+    private int mBatteryNearlyFullLevel;
     private int mShutdownBatteryTemperature;
+    private boolean mShutdownIfNoPower;
+
+    private static String sSystemUiPackage;
 
     private int mPlugType;
     private int mLastPlugType = -1; // Extra state so we can detect first run
@@ -176,6 +194,7 @@ public final class BatteryService extends SystemService {
     private int mChargeStartLevel;
 
     private boolean mUpdatesStopped;
+    private boolean mBatteryInputSuspended;
 
     private Led mLed;
 
@@ -184,18 +203,89 @@ public final class BatteryService extends SystemService {
     private ActivityManagerInternal mActivityManagerInternal;
 
     private HealthServiceWrapper mHealthServiceWrapper;
-    private HealthHalCallback mHealthHalCallback;
     private BatteryPropertiesRegistrar mBatteryPropertiesRegistrar;
     private ArrayDeque<Bundle> mBatteryLevelsEventQueue;
     private long mLastBatteryLevelChangedSentMs;
 
+    private final CopyOnWriteArraySet<BatteryManagerInternal.ChargingPolicyChangeListener>
+            mChargingPolicyChangeListeners = new CopyOnWriteArraySet<>();
+
+    private static final Bundle BATTERY_CHANGED_OPTIONS = BroadcastOptions.makeBasic()
+            .setDeliveryGroupPolicy(BroadcastOptions.DELIVERY_GROUP_POLICY_MOST_RECENT)
+            .setDeferralPolicy(BroadcastOptions.DEFERRAL_POLICY_UNTIL_ACTIVE)
+            .toBundle();
+    /** Used for both connected/disconnected, so match using key */
+    private static final Bundle POWER_OPTIONS = BroadcastOptions.makeBasic()
+            .setDeliveryGroupPolicy(BroadcastOptions.DELIVERY_GROUP_POLICY_MOST_RECENT)
+            .setDeliveryGroupMatchingKey("android", Intent.ACTION_POWER_CONNECTED)
+            .setDeferralPolicy(BroadcastOptions.DEFERRAL_POLICY_UNTIL_ACTIVE)
+            .toBundle();
+    /** Used for both low/okay, so match using key */
+    private static final Bundle BATTERY_OPTIONS = BroadcastOptions.makeBasic()
+            .setDeliveryGroupPolicy(BroadcastOptions.DELIVERY_GROUP_POLICY_MOST_RECENT)
+            .setDeliveryGroupMatchingKey("android", Intent.ACTION_BATTERY_OKAY)
+            .setDeferralPolicy(BroadcastOptions.DEFERRAL_POLICY_UNTIL_ACTIVE)
+            .toBundle();
+
     private MetricsLogger mMetricsLogger;
+
+    private static final int MSG_BROADCAST_BATTERY_CHANGED = 1;
+    private static final int MSG_BROADCAST_POWER_CONNECTION_CHANGED = 2;
+    private static final int MSG_BROADCAST_BATTERY_LOW_OKAY = 3;
+
+    private final Handler.Callback mLocalCallback = msg -> {
+        switch (msg.what) {
+            case MSG_BROADCAST_BATTERY_CHANGED: {
+                final SomeArgs args = (SomeArgs) msg.obj;
+                final Context context;
+                final Intent intent;
+                final boolean forceUpdate;
+                try {
+                    context = (Context) args.arg1;
+                    intent = (Intent) args.arg2;
+                    forceUpdate = (Boolean) args.arg3;
+                } finally {
+                    args.recycle();
+                }
+                broadcastBatteryChangedIntent(context, intent, BATTERY_CHANGED_OPTIONS,
+                        forceUpdate);
+                return true;
+            }
+            case MSG_BROADCAST_POWER_CONNECTION_CHANGED: {
+                final SomeArgs args = (SomeArgs) msg.obj;
+                final Context context;
+                final Intent intent;
+                try {
+                    context = (Context) args.arg1;
+                    intent = (Intent) args.arg2;
+                } finally {
+                    args.recycle();
+                }
+                sendBroadcastToAllUsers(context, intent, POWER_OPTIONS);
+                return true;
+            }
+            case MSG_BROADCAST_BATTERY_LOW_OKAY: {
+                final SomeArgs args = (SomeArgs) msg.obj;
+                final Context context;
+                final Intent intent;
+                try {
+                    context = (Context) args.arg1;
+                    intent = (Intent) args.arg2;
+                } finally {
+                    args.recycle();
+                }
+                sendBroadcastToAllUsers(context, intent, BATTERY_OPTIONS);
+                return true;
+            }
+        }
+        return false;
+    };
 
     public BatteryService(Context context) {
         super(context);
 
         mContext = context;
-        mHandler = new Handler(true /*async*/);
+        mHandler = new Handler(mLocalCallback, true /*async*/);
         mLed = new Led(context, getLocalService(LightsManager.class));
         mBatteryStats = BatteryStatsService.getService();
         mActivityManagerInternal = LocalServices.getService(ActivityManagerInternal.class);
@@ -208,6 +298,10 @@ public final class BatteryService extends SystemService {
                 com.android.internal.R.integer.config_lowBatteryCloseWarningBump);
         mShutdownBatteryTemperature = mContext.getResources().getInteger(
                 com.android.internal.R.integer.config_shutdownBatteryTemperature);
+        mShutdownIfNoPower = mContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_shutdownIfNoPower);
+        sSystemUiPackage = mContext.getResources().getString(
+                com.android.internal.R.string.config_systemUi);
 
         mBatteryLevelsEventQueue = new ArrayDeque<>();
         mMetricsLogger = new MetricsLogger();
@@ -228,6 +322,8 @@ public final class BatteryService extends SystemService {
             invalidChargerObserver.startObserving(
                     "DEVPATH=/devices/virtual/switch/invalid_charger");
         }
+
+        mBatteryInputSuspended = PowerProperties.battery_input_suspended().orElse(false);
     }
 
     @Override
@@ -265,13 +361,9 @@ public final class BatteryService extends SystemService {
 
     private void registerHealthCallback() {
         traceBegin("HealthInitWrapper");
-        mHealthServiceWrapper = new HealthServiceWrapper();
-        mHealthHalCallback = new HealthHalCallback();
         // IHealth is lazily retrieved.
         try {
-            mHealthServiceWrapper.init(mHealthHalCallback,
-                    new HealthServiceWrapper.IServiceManagerSupplier() {},
-                    new HealthServiceWrapper.IHealthSupplier() {});
+            mHealthServiceWrapper = HealthServiceWrapper.create(this::update);
         } catch (RemoteException ex) {
             Slog.e(TAG, "health: cannot register callback. (RemoteException)");
             throw ex.rethrowFromSystemServer();
@@ -309,6 +401,7 @@ public final class BatteryService extends SystemService {
         final ContentResolver resolver = mContext.getContentResolver();
         int defWarnLevel = mContext.getResources().getInteger(
                 com.android.internal.R.integer.config_lowBatteryWarningLevel);
+        mLastLowBatteryWarningLevel = mLowBatteryWarningLevel;
         mLowBatteryWarningLevel = Settings.Global.getInt(resolver,
                 Settings.Global.LOW_POWER_MODE_TRIGGER_LEVEL, defWarnLevel);
         if (mLowBatteryWarningLevel == 0) {
@@ -328,13 +421,20 @@ public final class BatteryService extends SystemService {
         if (mHealthInfo.batteryStatus == BatteryManager.BATTERY_STATUS_UNKNOWN) {
             return true;
         }
-        if ((plugTypeSet & BatteryManager.BATTERY_PLUGGED_AC) != 0 && mHealthInfo.chargerAcOnline) {
+        if ((plugTypeSet & BatteryManager.BATTERY_PLUGGED_AC) != 0
+                && mHealthInfo.chargerAcOnline) {
             return true;
         }
-        if ((plugTypeSet & BatteryManager.BATTERY_PLUGGED_USB) != 0 && mHealthInfo.chargerUsbOnline) {
+        if ((plugTypeSet & BatteryManager.BATTERY_PLUGGED_USB) != 0
+                && mHealthInfo.chargerUsbOnline) {
             return true;
         }
-        if ((plugTypeSet & BatteryManager.BATTERY_PLUGGED_WIRELESS) != 0 && mHealthInfo.chargerWirelessOnline) {
+        if ((plugTypeSet & BatteryManager.BATTERY_PLUGGED_WIRELESS) != 0
+                && mHealthInfo.chargerWirelessOnline) {
+            return true;
+        }
+        if ((plugTypeSet & BatteryManager.BATTERY_PLUGGED_DOCK) != 0
+                && mHealthInfo.chargerDockOnline) {
             return true;
         }
         return false;
@@ -353,10 +453,17 @@ public final class BatteryService extends SystemService {
         return !plugged
                 && mHealthInfo.batteryStatus != BatteryManager.BATTERY_STATUS_UNKNOWN
                 && mHealthInfo.batteryLevel <= mLowBatteryWarningLevel
-                && (oldPlugged || mLastBatteryLevel > mLowBatteryWarningLevel);
+                && (oldPlugged || mLastBatteryLevel > mLowBatteryWarningLevel
+                    || mHealthInfo.batteryLevel > mLastLowBatteryWarningLevel);
     }
 
     private boolean shouldShutdownLocked() {
+        if (mHealthInfo.batteryCapacityLevel != BatteryCapacityLevel.UNSUPPORTED) {
+            return (mHealthInfo.batteryCapacityLevel == BatteryCapacityLevel.CRITICAL);
+        }
+        if (!mShutdownIfNoPower) {
+            return false;
+        }
         if (mHealthInfo.batteryLevel > 0) {
             return false;
         }
@@ -397,7 +504,7 @@ public final class BatteryService extends SystemService {
         // shut down gracefully if temperature is too high (> 68.0C by default)
         // wait until the system has booted before attempting to display the
         // shutdown dialog.
-        if (mHealthInfo.batteryTemperature > mShutdownBatteryTemperature) {
+        if (mHealthInfo.batteryTemperatureTenthsCelsius > mShutdownBatteryTemperature) {
             mHandler.post(new Runnable() {
                 @Override
                 public void run() {
@@ -414,38 +521,40 @@ public final class BatteryService extends SystemService {
         }
     }
 
-    private void update(android.hardware.health.V2_0.HealthInfo info) {
+    private void update(android.hardware.health.HealthInfo info) {
         traceBegin("HealthInfoUpdate");
+
+        Trace.traceCounter(
+                Trace.TRACE_TAG_POWER, "BatteryChargeCounter", info.batteryChargeCounterUah);
+        Trace.traceCounter(Trace.TRACE_TAG_POWER, "BatteryCurrent", info.batteryCurrentMicroamps);
+        Trace.traceCounter(Trace.TRACE_TAG_POWER, "PlugType", plugType(info));
+        Trace.traceCounter(Trace.TRACE_TAG_POWER, "BatteryStatus", info.batteryStatus);
+
         synchronized (mLock) {
             if (!mUpdatesStopped) {
-                mHealthInfo = info.legacy;
+                mHealthInfo = info;
                 // Process the new values.
                 processValuesLocked(false);
                 mLock.notifyAll(); // for any waiters on new info
             } else {
-                copy(mLastHealthInfo, info.legacy);
+                copyV1Battery(mLastHealthInfo, info);
             }
         }
         traceEnd();
     }
 
-    private static void copy(HealthInfo dst, HealthInfo src) {
-        dst.chargerAcOnline = src.chargerAcOnline;
-        dst.chargerUsbOnline = src.chargerUsbOnline;
-        dst.chargerWirelessOnline = src.chargerWirelessOnline;
-        dst.maxChargingCurrent = src.maxChargingCurrent;
-        dst.maxChargingVoltage = src.maxChargingVoltage;
-        dst.batteryStatus = src.batteryStatus;
-        dst.batteryHealth = src.batteryHealth;
-        dst.batteryPresent = src.batteryPresent;
-        dst.batteryLevel = src.batteryLevel;
-        dst.batteryVoltage = src.batteryVoltage;
-        dst.batteryTemperature = src.batteryTemperature;
-        dst.batteryCurrent = src.batteryCurrent;
-        dst.batteryCycleCount = src.batteryCycleCount;
-        dst.batteryFullCharge = src.batteryFullCharge;
-        dst.batteryChargeCounter = src.batteryChargeCounter;
-        dst.batteryTechnology = src.batteryTechnology;
+    private static int plugType(HealthInfo healthInfo) {
+        if (healthInfo.chargerAcOnline) {
+            return BatteryManager.BATTERY_PLUGGED_AC;
+        } else if (healthInfo.chargerUsbOnline) {
+            return BatteryManager.BATTERY_PLUGGED_USB;
+        } else if (healthInfo.chargerWirelessOnline) {
+            return BatteryManager.BATTERY_PLUGGED_WIRELESS;
+        } else if (healthInfo.chargerDockOnline) {
+            return BatteryManager.BATTERY_PLUGGED_DOCK;
+        } else {
+            return BATTERY_PLUGGED_NONE;
+        }
     }
 
     private void processValuesLocked(boolean force) {
@@ -455,15 +564,7 @@ public final class BatteryService extends SystemService {
         mBatteryLevelCritical =
             mHealthInfo.batteryStatus != BatteryManager.BATTERY_STATUS_UNKNOWN
             && mHealthInfo.batteryLevel <= mCriticalBatteryLevel;
-        if (mHealthInfo.chargerAcOnline) {
-            mPlugType = BatteryManager.BATTERY_PLUGGED_AC;
-        } else if (mHealthInfo.chargerUsbOnline) {
-            mPlugType = BatteryManager.BATTERY_PLUGGED_USB;
-        } else if (mHealthInfo.chargerWirelessOnline) {
-            mPlugType = BatteryManager.BATTERY_PLUGGED_WIRELESS;
-        } else {
-            mPlugType = BATTERY_PLUGGED_NONE;
-        }
+        mPlugType = plugType(mHealthInfo);
 
         if (DEBUG) {
             Slog.d(TAG, "Processing new values: "
@@ -474,10 +575,16 @@ public final class BatteryService extends SystemService {
 
         // Let the battery stats keep track of the current level.
         try {
-            mBatteryStats.setBatteryState(mHealthInfo.batteryStatus, mHealthInfo.batteryHealth,
-                    mPlugType, mHealthInfo.batteryLevel, mHealthInfo.batteryTemperature,
-                    mHealthInfo.batteryVoltage, mHealthInfo.batteryChargeCounter,
-                    mHealthInfo.batteryFullCharge);
+            mBatteryStats.setBatteryState(
+                    mHealthInfo.batteryStatus,
+                    mHealthInfo.batteryHealth,
+                    mPlugType,
+                    mHealthInfo.batteryLevel,
+                    mHealthInfo.batteryTemperatureTenthsCelsius,
+                    mHealthInfo.batteryVoltageMillivolts,
+                    mHealthInfo.batteryChargeCounterUah,
+                    mHealthInfo.batteryFullChargeUah,
+                    mHealthInfo.batteryChargeTimeToFullNowSeconds);
         } catch (RemoteException e) {
             // Should never happen.
         }
@@ -485,17 +592,26 @@ public final class BatteryService extends SystemService {
         shutdownIfNoPowerLocked();
         shutdownIfOverTempLocked();
 
-        if (force || (mHealthInfo.batteryStatus != mLastBatteryStatus ||
-                mHealthInfo.batteryHealth != mLastBatteryHealth ||
-                mHealthInfo.batteryPresent != mLastBatteryPresent ||
-                mHealthInfo.batteryLevel != mLastBatteryLevel ||
-                mPlugType != mLastPlugType ||
-                mHealthInfo.batteryVoltage != mLastBatteryVoltage ||
-                mHealthInfo.batteryTemperature != mLastBatteryTemperature ||
-                mHealthInfo.maxChargingCurrent != mLastMaxChargingCurrent ||
-                mHealthInfo.maxChargingVoltage != mLastMaxChargingVoltage ||
-                mHealthInfo.batteryChargeCounter != mLastChargeCounter ||
-                mInvalidCharger != mLastInvalidCharger)) {
+        if (force || mHealthInfo.chargingPolicy != mLastChargingPolicy) {
+            mLastChargingPolicy = mHealthInfo.chargingPolicy;
+            mHandler.post(this::notifyChargingPolicyChanged);
+        }
+
+        if (force
+                || (mHealthInfo.batteryStatus != mLastBatteryStatus
+                        || mHealthInfo.batteryHealth != mLastBatteryHealth
+                        || mHealthInfo.batteryPresent != mLastBatteryPresent
+                        || mHealthInfo.batteryLevel != mLastBatteryLevel
+                        || mPlugType != mLastPlugType
+                        || mHealthInfo.batteryVoltageMillivolts != mLastBatteryVoltage
+                        || mHealthInfo.batteryTemperatureTenthsCelsius != mLastBatteryTemperature
+                        || mHealthInfo.maxChargingCurrentMicroamps != mLastMaxChargingCurrent
+                        || mHealthInfo.maxChargingVoltageMicrovolts != mLastMaxChargingVoltage
+                        || mHealthInfo.batteryChargeCounterUah != mLastChargeCounter
+                        || mInvalidCharger != mLastInvalidCharger
+                        || mHealthInfo.batteryCycleCount != mLastBatteryCycleCount
+                        || mHealthInfo.chargingState != mLastChargingState
+                        || mHealthInfo.batteryCapacityLevel != mLastBatteryCapacityLevel)) {
 
             if (mPlugType != mLastPlugType) {
                 if (mLastPlugType == BATTERY_PLUGGED_NONE) {
@@ -548,12 +664,19 @@ public final class BatteryService extends SystemService {
                 EventLog.writeEvent(EventLogTags.BATTERY_STATUS,
                         mHealthInfo.batteryStatus, mHealthInfo.batteryHealth, mHealthInfo.batteryPresent ? 1 : 0,
                         mPlugType, mHealthInfo.batteryTechnology);
+                SystemProperties.set(
+                        "debug.tracing.battery_status",
+                        Integer.toString(mHealthInfo.batteryStatus));
+                SystemProperties.set("debug.tracing.plug_type", Integer.toString(mPlugType));
             }
             if (mHealthInfo.batteryLevel != mLastBatteryLevel) {
                 // Don't do this just from voltage or temperature changes, that is
                 // too noisy.
-                EventLog.writeEvent(EventLogTags.BATTERY_LEVEL,
-                        mHealthInfo.batteryLevel, mHealthInfo.batteryVoltage, mHealthInfo.batteryTemperature);
+                EventLog.writeEvent(
+                        EventLogTags.BATTERY_LEVEL,
+                        mHealthInfo.batteryLevel,
+                        mHealthInfo.batteryVoltageMillivolts,
+                        mHealthInfo.batteryTemperatureTenthsCelsius);
             }
             if (mBatteryLevelCritical && !mLastBatteryLevelCritical &&
                     mPlugType == BATTERY_PLUGGED_NONE) {
@@ -593,23 +716,43 @@ public final class BatteryService extends SystemService {
                 final Intent statusIntent = new Intent(Intent.ACTION_POWER_CONNECTED);
                 statusIntent.setFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
                 statusIntent.putExtra(BatteryManager.EXTRA_SEQUENCE, mSequence);
-                mHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        mContext.sendBroadcastAsUser(statusIntent, UserHandle.ALL);
-                    }
-                });
+                if (com.android.server.flags.Flags.consolidateBatteryChangeEvents()) {
+                    mHandler.removeMessages(MSG_BROADCAST_POWER_CONNECTION_CHANGED);
+                    final SomeArgs args = SomeArgs.obtain();
+                    args.arg1 = mContext;
+                    args.arg2 = statusIntent;
+                    mHandler.obtainMessage(MSG_BROADCAST_POWER_CONNECTION_CHANGED, args)
+                            .sendToTarget();
+                } else {
+                    mHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            mContext.sendBroadcastAsUser(statusIntent, UserHandle.ALL, null,
+                                    POWER_OPTIONS);
+                        }
+                    });
+                }
             }
             else if (mPlugType == 0 && mLastPlugType != 0) {
                 final Intent statusIntent = new Intent(Intent.ACTION_POWER_DISCONNECTED);
                 statusIntent.setFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
                 statusIntent.putExtra(BatteryManager.EXTRA_SEQUENCE, mSequence);
-                mHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        mContext.sendBroadcastAsUser(statusIntent, UserHandle.ALL);
-                    }
-                });
+                if (com.android.server.flags.Flags.consolidateBatteryChangeEvents()) {
+                    mHandler.removeMessages(MSG_BROADCAST_POWER_CONNECTION_CHANGED);
+                    final SomeArgs args = SomeArgs.obtain();
+                    args.arg1 = mContext;
+                    args.arg2 = statusIntent;
+                    mHandler.obtainMessage(MSG_BROADCAST_POWER_CONNECTION_CHANGED, args)
+                            .sendToTarget();
+                } else {
+                    mHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            mContext.sendBroadcastAsUser(statusIntent, UserHandle.ALL, null,
+                                    POWER_OPTIONS);
+                        }
+                    });
+                }
             }
 
             if (shouldSendBatteryLowLocked()) {
@@ -617,30 +760,50 @@ public final class BatteryService extends SystemService {
                 final Intent statusIntent = new Intent(Intent.ACTION_BATTERY_LOW);
                 statusIntent.setFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
                 statusIntent.putExtra(BatteryManager.EXTRA_SEQUENCE, mSequence);
-                mHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        mContext.sendBroadcastAsUser(statusIntent, UserHandle.ALL);
-                    }
-                });
+                if (com.android.server.flags.Flags.consolidateBatteryChangeEvents()) {
+                    mHandler.removeMessages(MSG_BROADCAST_BATTERY_LOW_OKAY);
+                    final SomeArgs args = SomeArgs.obtain();
+                    args.arg1 = mContext;
+                    args.arg2 = statusIntent;
+                    mHandler.obtainMessage(MSG_BROADCAST_BATTERY_LOW_OKAY, args)
+                            .sendToTarget();
+                } else {
+                    mHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            mContext.sendBroadcastAsUser(statusIntent, UserHandle.ALL, null,
+                                    BATTERY_OPTIONS);
+                        }
+                    });
+                }
             } else if (mSentLowBatteryBroadcast &&
                     mHealthInfo.batteryLevel >= mLowBatteryCloseWarningLevel) {
                 mSentLowBatteryBroadcast = false;
                 final Intent statusIntent = new Intent(Intent.ACTION_BATTERY_OKAY);
                 statusIntent.setFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
                 statusIntent.putExtra(BatteryManager.EXTRA_SEQUENCE, mSequence);
-                mHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        mContext.sendBroadcastAsUser(statusIntent, UserHandle.ALL);
-                    }
-                });
+                if (com.android.server.flags.Flags.consolidateBatteryChangeEvents()) {
+                    mHandler.removeMessages(MSG_BROADCAST_BATTERY_LOW_OKAY);
+                    final SomeArgs args = SomeArgs.obtain();
+                    args.arg1 = mContext;
+                    args.arg2 = statusIntent;
+                    mHandler.obtainMessage(MSG_BROADCAST_BATTERY_LOW_OKAY, args)
+                            .sendToTarget();
+                } else {
+                    mHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            mContext.sendBroadcastAsUser(statusIntent, UserHandle.ALL, null,
+                                    BATTERY_OPTIONS);
+                        }
+                    });
+                }
             }
 
             // We are doing this after sending the above broadcasts, so anything processing
             // them will get the new sequence number at that point.  (See for example how testing
             // of JobScheduler's BatteryController works.)
-            sendBatteryChangedIntentLocked();
+            sendBatteryChangedIntentLocked(force);
             if (mLastBatteryLevel != mHealthInfo.batteryLevel || mLastPlugType != mPlugType) {
                 sendBatteryLevelChangedIntentLocked();
             }
@@ -659,17 +822,20 @@ public final class BatteryService extends SystemService {
             mLastBatteryPresent = mHealthInfo.batteryPresent;
             mLastBatteryLevel = mHealthInfo.batteryLevel;
             mLastPlugType = mPlugType;
-            mLastBatteryVoltage = mHealthInfo.batteryVoltage;
-            mLastBatteryTemperature = mHealthInfo.batteryTemperature;
-            mLastMaxChargingCurrent = mHealthInfo.maxChargingCurrent;
-            mLastMaxChargingVoltage = mHealthInfo.maxChargingVoltage;
-            mLastChargeCounter = mHealthInfo.batteryChargeCounter;
+            mLastBatteryVoltage = mHealthInfo.batteryVoltageMillivolts;
+            mLastBatteryTemperature = mHealthInfo.batteryTemperatureTenthsCelsius;
+            mLastMaxChargingCurrent = mHealthInfo.maxChargingCurrentMicroamps;
+            mLastMaxChargingVoltage = mHealthInfo.maxChargingVoltageMicrovolts;
+            mLastChargeCounter = mHealthInfo.batteryChargeCounterUah;
             mLastBatteryLevelCritical = mBatteryLevelCritical;
             mLastInvalidCharger = mInvalidCharger;
+            mLastBatteryCycleCount = mHealthInfo.batteryCycleCount;
+            mLastChargingState = mHealthInfo.chargingState;
+            mLastBatteryCapacityLevel = mHealthInfo.batteryCapacityLevel;
         }
     }
 
-    private void sendBatteryChangedIntentLocked() {
+    private void sendBatteryChangedIntentLocked(boolean forceUpdate) {
         //  Pack up the values and broadcast them to everyone
         final Intent intent = new Intent(Intent.ACTION_BATTERY_CHANGED);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY
@@ -686,19 +852,103 @@ public final class BatteryService extends SystemService {
         intent.putExtra(BatteryManager.EXTRA_SCALE, BATTERY_SCALE);
         intent.putExtra(BatteryManager.EXTRA_ICON_SMALL, icon);
         intent.putExtra(BatteryManager.EXTRA_PLUGGED, mPlugType);
-        intent.putExtra(BatteryManager.EXTRA_VOLTAGE, mHealthInfo.batteryVoltage);
-        intent.putExtra(BatteryManager.EXTRA_TEMPERATURE, mHealthInfo.batteryTemperature);
+        intent.putExtra(BatteryManager.EXTRA_VOLTAGE, mHealthInfo.batteryVoltageMillivolts);
+        intent.putExtra(
+                BatteryManager.EXTRA_TEMPERATURE, mHealthInfo.batteryTemperatureTenthsCelsius);
         intent.putExtra(BatteryManager.EXTRA_TECHNOLOGY, mHealthInfo.batteryTechnology);
         intent.putExtra(BatteryManager.EXTRA_INVALID_CHARGER, mInvalidCharger);
-        intent.putExtra(BatteryManager.EXTRA_MAX_CHARGING_CURRENT, mHealthInfo.maxChargingCurrent);
-        intent.putExtra(BatteryManager.EXTRA_MAX_CHARGING_VOLTAGE, mHealthInfo.maxChargingVoltage);
-        intent.putExtra(BatteryManager.EXTRA_CHARGE_COUNTER, mHealthInfo.batteryChargeCounter);
+        intent.putExtra(
+                BatteryManager.EXTRA_MAX_CHARGING_CURRENT, mHealthInfo.maxChargingCurrentMicroamps);
+        intent.putExtra(
+                BatteryManager.EXTRA_MAX_CHARGING_VOLTAGE,
+                mHealthInfo.maxChargingVoltageMicrovolts);
+        intent.putExtra(BatteryManager.EXTRA_CHARGE_COUNTER, mHealthInfo.batteryChargeCounterUah);
+        intent.putExtra(BatteryManager.EXTRA_CYCLE_COUNT, mHealthInfo.batteryCycleCount);
+        intent.putExtra(BatteryManager.EXTRA_CHARGING_STATUS, mHealthInfo.chargingState);
+        intent.putExtra(BatteryManager.EXTRA_CAPACITY_LEVEL, mHealthInfo.batteryCapacityLevel);
         if (DEBUG) {
             Slog.d(TAG, "Sending ACTION_BATTERY_CHANGED. scale:" + BATTERY_SCALE
                     + ", info:" + mHealthInfo.toString());
         }
 
-        mHandler.post(() -> ActivityManager.broadcastStickyIntent(intent, UserHandle.USER_ALL));
+        if (com.android.server.flags.Flags.consolidateBatteryChangeEvents()) {
+            mHandler.removeMessages(MSG_BROADCAST_BATTERY_CHANGED);
+            final SomeArgs args = SomeArgs.obtain();
+            args.arg1 = mContext;
+            args.arg2 = intent;
+            args.arg3 = forceUpdate;
+            mHandler.obtainMessage(MSG_BROADCAST_BATTERY_CHANGED, args).sendToTarget();
+        } else {
+            mHandler.post(() -> broadcastBatteryChangedIntent(mContext,
+                    intent, BATTERY_CHANGED_OPTIONS, forceUpdate));
+        }
+    }
+
+    private static void broadcastBatteryChangedIntent(Context context, Intent intent,
+            Bundle options, boolean forceUpdate) {
+        traceBatteryChangedBroadcastEvent(intent, forceUpdate);
+        // TODO (293959093): It is important that SystemUI receives this broadcast as soon as
+        // possible. Ideally, it should be using binder callbacks but until then, dispatch this
+        // as a foreground broadcast to SystemUI.
+        final Intent fgIntent = new Intent(intent);
+        fgIntent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
+        fgIntent.setPackage(sSystemUiPackage);
+        if (com.android.server.flags.Flags.pkgTargetedBatteryChangedNotSticky()) {
+            context.sendBroadcastAsUser(fgIntent, UserHandle.ALL, null, options);
+        } else {
+            ActivityManager.broadcastStickyIntent(fgIntent, AppOpsManager.OP_NONE,
+                    options, UserHandle.USER_ALL);
+        }
+
+        ActivityManager.broadcastStickyIntent(intent, new String[] {sSystemUiPackage},
+                AppOpsManager.OP_NONE, options, UserHandle.USER_ALL);
+    }
+
+    private static void traceBatteryChangedBroadcastEvent(Intent intent, boolean forceUpdate) {
+        if (!com.android.server.flags.Flags.traceBatteryChangedBroadcastEvent()) {
+            return;
+        }
+        if (!Trace.isTagEnabled(Trace.TRACE_TAG_SYSTEM_SERVER)) return;
+
+        final StringBuilder builder = new StringBuilder();
+        builder.append("broadcastBatteryChanged; ");
+        builder.append("force="); builder.append(forceUpdate);
+        builder.append(",seq="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_SEQUENCE, -1));
+        builder.append(",s="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_STATUS, -1));
+        builder.append(",h="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_HEALTH, -1));
+        builder.append(",p="); builder.append(intent.getBooleanExtra(
+                BatteryManager.EXTRA_PRESENT, false));
+        builder.append(",l="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_LEVEL, -1));
+        builder.append(",bl="); builder.append(intent.getBooleanExtra(
+                BatteryManager.EXTRA_BATTERY_LOW, false));
+        builder.append(",sc="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_SCALE, -1));
+        builder.append(",pt="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_PLUGGED, -1));
+        builder.append(",v="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_VOLTAGE, -1));
+        builder.append(",t="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_TEMPERATURE, -1));
+        builder.append(",tech="); builder.append(intent.getStringExtra(
+                BatteryManager.EXTRA_TECHNOLOGY));
+        builder.append(",invc="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_INVALID_CHARGER, -1));
+        builder.append(",mcc="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_MAX_CHARGING_CURRENT, -1));
+        builder.append(",mcv="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_MAX_CHARGING_VOLTAGE, -1));
+        builder.append(",chc="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_CHARGE_COUNTER, -1));
+        builder.append(",cc="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_CYCLE_COUNT, -1));
+        builder.append(",chs="); builder.append(intent.getIntExtra(
+                BatteryManager.EXTRA_CHARGING_STATUS, -1));
+
+        Trace.instant(Trace.TRACE_TAG_SYSTEM_SERVER, builder.toString());
     }
 
     private void sendBatteryLevelChangedIntentLocked() {
@@ -712,8 +962,13 @@ public final class BatteryService extends SystemService {
         event.putBoolean(BatteryManager.EXTRA_BATTERY_LOW, mSentLowBatteryBroadcast);
         event.putInt(BatteryManager.EXTRA_SCALE, BATTERY_SCALE);
         event.putInt(BatteryManager.EXTRA_PLUGGED, mPlugType);
-        event.putInt(BatteryManager.EXTRA_VOLTAGE, mHealthInfo.batteryVoltage);
+        event.putInt(BatteryManager.EXTRA_VOLTAGE, mHealthInfo.batteryVoltageMillivolts);
+        event.putInt(BatteryManager.EXTRA_TEMPERATURE, mHealthInfo.batteryTemperatureTenthsCelsius);
+        event.putInt(BatteryManager.EXTRA_CHARGE_COUNTER, mHealthInfo.batteryChargeCounterUah);
         event.putLong(BatteryManager.EXTRA_EVENT_TIMESTAMP, now);
+        event.putInt(BatteryManager.EXTRA_CYCLE_COUNT, mHealthInfo.batteryCycleCount);
+        event.putInt(BatteryManager.EXTRA_CHARGING_STATUS, mHealthInfo.chargingState);
+        event.putInt(BatteryManager.EXTRA_CAPACITY_LEVEL, mHealthInfo.batteryCapacityLevel);
 
         boolean queueWasEmpty = mBatteryLevelsEventQueue.isEmpty();
         mBatteryLevelsEventQueue.add(event);
@@ -745,6 +1000,18 @@ public final class BatteryService extends SystemService {
         mLastBatteryLevelChangedSentMs = SystemClock.elapsedRealtime();
     }
 
+    private void notifyChargingPolicyChanged() {
+        final int newPolicy;
+        synchronized (mLock) {
+            newPolicy = mLastChargingPolicy;
+        }
+        for (BatteryManagerInternal.ChargingPolicyChangeListener listener
+                : mChargingPolicyChangeListeners) {
+            listener.onChargingPolicyChanged(newPolicy);
+        }
+    }
+
+    // TODO: Current code doesn't work since "--unplugged" flag in BSS was purposefully removed.
     private void logBatteryStatsLocked() {
         IBinder batteryInfoService = ServiceManager.getService(BatteryStats.SERVICE_NAME);
         if (batteryInfoService == null) return;
@@ -845,7 +1112,12 @@ public final class BatteryService extends SystemService {
         pw.println("Battery service (battery) commands:");
         pw.println("  help");
         pw.println("    Print this help text.");
-        pw.println("  set [-f] [ac|usb|wireless|status|level|temp|present|invalid] <value>");
+        String getSetOptions = "ac|usb|wireless|dock|status|level|temp|present|counter|invalid";
+        if (batteryServiceSupportCurrentAdbCommand()) {
+            getSetOptions += "|current_now|current_average";
+        }
+        pw.println("  get [-f] [" + getSetOptions + "]");
+        pw.println("  set [-f] [" + getSetOptions + "] <value>");
         pw.println("    Force a battery property value, freezing battery state.");
         pw.println("    -f: force a battery change broadcast be sent, prints new sequence.");
         pw.println("  unplug [-f]");
@@ -854,6 +1126,10 @@ public final class BatteryService extends SystemService {
         pw.println("  reset [-f]");
         pw.println("    Unfreeze battery state, returning to current hardware values.");
         pw.println("    -f: force a battery change broadcast be sent, prints new sequence.");
+        if (Build.IS_DEBUGGABLE) {
+            pw.println("  suspend_input");
+            pw.println("    Suspend charging even if plugged in. ");
+        }
     }
 
     static final int OPTION_FORCE_UPDATE = 1<<0;
@@ -879,18 +1155,66 @@ public final class BatteryService extends SystemService {
                 int opts = parseOptions(shell);
                 getContext().enforceCallingOrSelfPermission(
                         android.Manifest.permission.DEVICE_POWER, null);
-                if (!mUpdatesStopped) {
-                    copy(mLastHealthInfo, mHealthInfo);
+                unplugBattery(/* forceUpdate= */ (opts & OPTION_FORCE_UPDATE) != 0, pw);
+            } break;
+            case "get": {
+                final int opts = parseOptions(shell);
+                final String key = shell.getNextArg();
+                if (key == null) {
+                    pw.println("No property specified");
+                    return -1;
+
                 }
-                mHealthInfo.chargerAcOnline = false;
-                mHealthInfo.chargerUsbOnline = false;
-                mHealthInfo.chargerWirelessOnline = false;
-                long ident = Binder.clearCallingIdentity();
-                try {
-                    mUpdatesStopped = true;
-                    processValuesFromShellLocked(pw, opts);
-                } finally {
-                    Binder.restoreCallingIdentity(ident);
+                switch (key) {
+                    case "present":
+                        pw.println(mHealthInfo.batteryPresent);
+                        break;
+                    case "ac":
+                        pw.println(mHealthInfo.chargerAcOnline);
+                        break;
+                    case "usb":
+                        pw.println(mHealthInfo.chargerUsbOnline);
+                        break;
+                    case "wireless":
+                        pw.println(mHealthInfo.chargerWirelessOnline);
+                        break;
+                    case "dock":
+                        pw.println(mHealthInfo.chargerDockOnline);
+                        break;
+                    case "status":
+                        pw.println(mHealthInfo.batteryStatus);
+                        break;
+                    case "level":
+                        pw.println(mHealthInfo.batteryLevel);
+                        break;
+                    case "counter":
+                        pw.println(mHealthInfo.batteryChargeCounterUah);
+                        break;
+                    case "current_now":
+                        if (batteryServiceSupportCurrentAdbCommand()) {
+                            if ((opts & OPTION_FORCE_UPDATE) != 0) {
+                                updateHealthInfo();
+                            }
+                            pw.println(mHealthInfo.batteryCurrentMicroamps);
+                        }
+                        break;
+                    case "current_average":
+                        if (batteryServiceSupportCurrentAdbCommand()) {
+                            if ((opts & OPTION_FORCE_UPDATE) != 0) {
+                                updateHealthInfo();
+                            }
+                            pw.println(mHealthInfo.batteryCurrentAverageMicroamps);
+                        }
+                        break;
+                    case "temp":
+                        pw.println(mHealthInfo.batteryTemperatureTenthsCelsius);
+                        break;
+                    case "invalid":
+                        pw.println(mInvalidCharger);
+                        break;
+                    default:
+                        pw.println("Unknown get option: " + key);
+                        break;
                 }
             } break;
             case "set": {
@@ -911,7 +1235,7 @@ public final class BatteryService extends SystemService {
                 }
                 try {
                     if (!mUpdatesStopped) {
-                        copy(mLastHealthInfo, mHealthInfo);
+                        copyV1Battery(mLastHealthInfo, mHealthInfo);
                     }
                     boolean update = true;
                     switch (key) {
@@ -927,6 +1251,9 @@ public final class BatteryService extends SystemService {
                         case "wireless":
                             mHealthInfo.chargerWirelessOnline = Integer.parseInt(value) != 0;
                             break;
+                        case "dock":
+                            mHealthInfo.chargerDockOnline = Integer.parseInt(value) != 0;
+                            break;
                         case "status":
                             mHealthInfo.batteryStatus = Integer.parseInt(value);
                             break;
@@ -934,10 +1261,20 @@ public final class BatteryService extends SystemService {
                             mHealthInfo.batteryLevel = Integer.parseInt(value);
                             break;
                         case "counter":
-                            mHealthInfo.batteryChargeCounter = Integer.parseInt(value);
+                            mHealthInfo.batteryChargeCounterUah = Integer.parseInt(value);
                             break;
+                        case "current_now":
+                            if (batteryServiceSupportCurrentAdbCommand()) {
+                                mHealthInfo.batteryCurrentMicroamps = Integer.parseInt(value);
+                            }
+                            break;
+                        case "current_average":
+                            if (batteryServiceSupportCurrentAdbCommand()) {
+                                mHealthInfo.batteryCurrentAverageMicroamps =
+                                        Integer.parseInt(value);
+                            }
                         case "temp":
-                            mHealthInfo.batteryTemperature = Integer.parseInt(value);
+                            mHealthInfo.batteryTemperatureTenthsCelsius = Integer.parseInt(value);
                             break;
                         case "invalid":
                             mInvalidCharger = Integer.parseInt(value);
@@ -948,10 +1285,11 @@ public final class BatteryService extends SystemService {
                             break;
                     }
                     if (update) {
-                        long ident = Binder.clearCallingIdentity();
+                        final long ident = Binder.clearCallingIdentity();
                         try {
                             mUpdatesStopped = true;
-                            processValuesFromShellLocked(pw, opts);
+                            processValuesLocked(
+                                    /* forceUpdate= */ (opts & OPTION_FORCE_UPDATE) != 0, pw);
                         } finally {
                             Binder.restoreCallingIdentity(ident);
                         }
@@ -965,16 +1303,12 @@ public final class BatteryService extends SystemService {
                 int opts = parseOptions(shell);
                 getContext().enforceCallingOrSelfPermission(
                         android.Manifest.permission.DEVICE_POWER, null);
-                long ident = Binder.clearCallingIdentity();
-                try {
-                    if (mUpdatesStopped) {
-                        mUpdatesStopped = false;
-                        copy(mHealthInfo, mLastHealthInfo);
-                        processValuesFromShellLocked(pw, opts);
-                    }
-                } finally {
-                    Binder.restoreCallingIdentity(ident);
-                }
+                resetBattery(/* forceUpdate= */ (opts & OPTION_FORCE_UPDATE) != 0, pw);
+            } break;
+            case "suspend_input": {
+                getContext().enforceCallingOrSelfPermission(
+                        android.Manifest.permission.DEVICE_POWER, null);
+                suspendBatteryInput();
             } break;
             default:
                 return shell.handleDefaultCommands(cmd);
@@ -982,9 +1316,68 @@ public final class BatteryService extends SystemService {
         return 0;
     }
 
-    private void processValuesFromShellLocked(PrintWriter pw, int opts) {
-        processValuesLocked((opts & OPTION_FORCE_UPDATE) != 0);
-        if ((opts & OPTION_FORCE_UPDATE) != 0) {
+    private void updateHealthInfo() {
+        try {
+            mHealthServiceWrapper.scheduleUpdate();
+        } catch (RemoteException e) {
+            Slog.e(TAG, "Unable to update health service data.", e);
+        }
+    }
+
+    private void setChargerAcOnline(boolean online, boolean forceUpdate) {
+        if (!mUpdatesStopped) {
+            copyV1Battery(mLastHealthInfo, mHealthInfo);
+        }
+        mHealthInfo.chargerAcOnline = online;
+        mUpdatesStopped = true;
+        Binder.withCleanCallingIdentity(() -> processValuesLocked(forceUpdate));
+    }
+
+    private void setBatteryLevel(int level, boolean forceUpdate) {
+        if (!mUpdatesStopped) {
+            copyV1Battery(mLastHealthInfo, mHealthInfo);
+        }
+        mHealthInfo.batteryLevel = level;
+        mUpdatesStopped = true;
+        Binder.withCleanCallingIdentity(() -> processValuesLocked(forceUpdate));
+    }
+
+    private void unplugBattery(boolean forceUpdate, PrintWriter pw) {
+        if (!mUpdatesStopped) {
+            copyV1Battery(mLastHealthInfo, mHealthInfo);
+        }
+        mHealthInfo.chargerAcOnline = false;
+        mHealthInfo.chargerUsbOnline = false;
+        mHealthInfo.chargerWirelessOnline = false;
+        mHealthInfo.chargerDockOnline = false;
+        mUpdatesStopped = true;
+        Binder.withCleanCallingIdentity(() -> processValuesLocked(forceUpdate, pw));
+    }
+
+    private void resetBattery(boolean forceUpdate, @Nullable PrintWriter pw) {
+        if (mUpdatesStopped) {
+            mUpdatesStopped = false;
+            copyV1Battery(mHealthInfo, mLastHealthInfo);
+            Binder.withCleanCallingIdentity(() -> processValuesLocked(forceUpdate, pw));
+        }
+        if (mBatteryInputSuspended) {
+            PowerProperties.battery_input_suspended(false);
+            mBatteryInputSuspended = false;
+        }
+    }
+
+    private void suspendBatteryInput() {
+        if (!Build.IS_DEBUGGABLE) {
+            throw new SecurityException(
+                    "battery suspend_input is only supported on debuggable builds");
+        }
+        PowerProperties.battery_input_suspended(true);
+        mBatteryInputSuspended = true;
+    }
+
+    private void processValuesLocked(boolean forceUpdate, @Nullable PrintWriter pw) {
+        processValuesLocked(forceUpdate);
+        if (pw != null && forceUpdate) {
             pw.println(mSequence);
         }
     }
@@ -999,17 +1392,21 @@ public final class BatteryService extends SystemService {
                 pw.println("  AC powered: " + mHealthInfo.chargerAcOnline);
                 pw.println("  USB powered: " + mHealthInfo.chargerUsbOnline);
                 pw.println("  Wireless powered: " + mHealthInfo.chargerWirelessOnline);
-                pw.println("  Max charging current: " + mHealthInfo.maxChargingCurrent);
-                pw.println("  Max charging voltage: " + mHealthInfo.maxChargingVoltage);
-                pw.println("  Charge counter: " + mHealthInfo.batteryChargeCounter);
+                pw.println("  Dock powered: " + mHealthInfo.chargerDockOnline);
+                pw.println("  Max charging current: " + mHealthInfo.maxChargingCurrentMicroamps);
+                pw.println("  Max charging voltage: " + mHealthInfo.maxChargingVoltageMicrovolts);
+                pw.println("  Charge counter: " + mHealthInfo.batteryChargeCounterUah);
                 pw.println("  status: " + mHealthInfo.batteryStatus);
                 pw.println("  health: " + mHealthInfo.batteryHealth);
                 pw.println("  present: " + mHealthInfo.batteryPresent);
                 pw.println("  level: " + mHealthInfo.batteryLevel);
                 pw.println("  scale: " + BATTERY_SCALE);
-                pw.println("  voltage: " + mHealthInfo.batteryVoltage);
-                pw.println("  temperature: " + mHealthInfo.batteryTemperature);
+                pw.println("  voltage: " + mHealthInfo.batteryVoltageMillivolts);
+                pw.println("  temperature: " + mHealthInfo.batteryTemperatureTenthsCelsius);
                 pw.println("  technology: " + mHealthInfo.batteryTechnology);
+                pw.println("  Charging state: " + mHealthInfo.chargingState);
+                pw.println("  Charging policy: " + mHealthInfo.chargingPolicy);
+                pw.println("  Capacity level: " + mHealthInfo.batteryCapacityLevel);
             } else {
                 Shell shell = new Shell();
                 shell.exec(mBinderService, null, fd, null, args, null, new ResultReceiver(null));
@@ -1029,18 +1426,27 @@ public final class BatteryService extends SystemService {
                 batteryPluggedValue = OsProtoEnums.BATTERY_PLUGGED_USB;
             } else if (mHealthInfo.chargerWirelessOnline) {
                 batteryPluggedValue = OsProtoEnums.BATTERY_PLUGGED_WIRELESS;
+            } else if (mHealthInfo.chargerDockOnline) {
+                batteryPluggedValue = OsProtoEnums.BATTERY_PLUGGED_DOCK;
             }
             proto.write(BatteryServiceDumpProto.PLUGGED, batteryPluggedValue);
-            proto.write(BatteryServiceDumpProto.MAX_CHARGING_CURRENT, mHealthInfo.maxChargingCurrent);
-            proto.write(BatteryServiceDumpProto.MAX_CHARGING_VOLTAGE, mHealthInfo.maxChargingVoltage);
-            proto.write(BatteryServiceDumpProto.CHARGE_COUNTER, mHealthInfo.batteryChargeCounter);
+            proto.write(
+                    BatteryServiceDumpProto.MAX_CHARGING_CURRENT,
+                    mHealthInfo.maxChargingCurrentMicroamps);
+            proto.write(
+                    BatteryServiceDumpProto.MAX_CHARGING_VOLTAGE,
+                    mHealthInfo.maxChargingVoltageMicrovolts);
+            proto.write(
+                    BatteryServiceDumpProto.CHARGE_COUNTER, mHealthInfo.batteryChargeCounterUah);
             proto.write(BatteryServiceDumpProto.STATUS, mHealthInfo.batteryStatus);
             proto.write(BatteryServiceDumpProto.HEALTH, mHealthInfo.batteryHealth);
             proto.write(BatteryServiceDumpProto.IS_PRESENT, mHealthInfo.batteryPresent);
             proto.write(BatteryServiceDumpProto.LEVEL, mHealthInfo.batteryLevel);
             proto.write(BatteryServiceDumpProto.SCALE, BATTERY_SCALE);
-            proto.write(BatteryServiceDumpProto.VOLTAGE, mHealthInfo.batteryVoltage);
-            proto.write(BatteryServiceDumpProto.TEMPERATURE, mHealthInfo.batteryTemperature);
+            proto.write(BatteryServiceDumpProto.VOLTAGE, mHealthInfo.batteryVoltageMillivolts);
+            proto.write(
+                    BatteryServiceDumpProto.TEMPERATURE,
+                    mHealthInfo.batteryTemperatureTenthsCelsius);
             proto.write(BatteryServiceDumpProto.TECHNOLOGY, mHealthInfo.batteryTechnology);
         }
         proto.flush();
@@ -1054,14 +1460,26 @@ public final class BatteryService extends SystemService {
         Trace.traceEnd(Trace.TRACE_TAG_SYSTEM_SERVER);
     }
 
+    @SuppressLint("AndroidFrameworkRequiresPermission")
+    private static void sendBroadcastToAllUsers(Context context, Intent intent,
+            Bundle options) {
+        context.sendBroadcastAsUser(intent, UserHandle.ALL, null, options);
+    }
+
     private final class Led {
-        private final Light mBatteryLight;
+        // must match: config_notificationsBatteryLowBehavior in config.xml
+        static final int LOW_BATTERY_BEHAVIOR_DEFAULT = 0;
+        static final int LOW_BATTERY_BEHAVIOR_SOLID = 1;
+        static final int LOW_BATTERY_BEHAVIOR_FLASHING = 2;
+
+        private final LogicalLight mBatteryLight;
 
         private final int mBatteryLowARGB;
         private final int mBatteryMediumARGB;
         private final int mBatteryFullARGB;
         private final int mBatteryLedOn;
         private final int mBatteryLedOff;
+        private final int mBatteryLowBehavior;
 
         public Led(Context context, LightsManager lights) {
             mBatteryLight = lights.getLight(LightsManager.LIGHT_ID_BATTERY);
@@ -1076,26 +1494,47 @@ public final class BatteryService extends SystemService {
                     com.android.internal.R.integer.config_notificationsBatteryLedOn);
             mBatteryLedOff = context.getResources().getInteger(
                     com.android.internal.R.integer.config_notificationsBatteryLedOff);
+            mBatteryNearlyFullLevel = context.getResources().getInteger(
+                    com.android.internal.R.integer.config_notificationsBatteryNearlyFullLevel);
+            mBatteryLowBehavior = context.getResources().getInteger(
+                    com.android.internal.R.integer.config_notificationsBatteryLowBehavior);
         }
 
         /**
          * Synchronize on BatteryService.
          */
         public void updateLightsLocked() {
+            if (mBatteryLight == null) {
+                return;
+            }
             final int level = mHealthInfo.batteryLevel;
             final int status = mHealthInfo.batteryStatus;
             if (level < mLowBatteryWarningLevel) {
-                if (status == BatteryManager.BATTERY_STATUS_CHARGING) {
-                    // Solid red when battery is charging
-                    mBatteryLight.setColor(mBatteryLowARGB);
-                } else {
-                    // Flash red when battery is low and not charging
-                    mBatteryLight.setFlashing(mBatteryLowARGB, Light.LIGHT_FLASH_TIMED,
-                            mBatteryLedOn, mBatteryLedOff);
+                switch (mBatteryLowBehavior) {
+                    case LOW_BATTERY_BEHAVIOR_SOLID:
+                        // Solid red when low battery
+                        mBatteryLight.setColor(mBatteryLowARGB);
+                        break;
+                    case LOW_BATTERY_BEHAVIOR_FLASHING:
+                        // Flash red when battery is low and not charging
+                        mBatteryLight.setFlashing(mBatteryLowARGB, LogicalLight.LIGHT_FLASH_TIMED,
+                                mBatteryLedOn, mBatteryLedOff);
+                        break;
+                    default:
+                        if (status == BatteryManager.BATTERY_STATUS_CHARGING) {
+                            // Solid red when battery is charging
+                            mBatteryLight.setColor(mBatteryLowARGB);
+                        } else {
+                            // Flash red when battery is low and not charging
+                            mBatteryLight.setFlashing(mBatteryLowARGB,
+                                    LogicalLight.LIGHT_FLASH_TIMED, mBatteryLedOn, mBatteryLedOff);
+                        }
+                        break;
                 }
             } else if (status == BatteryManager.BATTERY_STATUS_CHARGING
                     || status == BatteryManager.BATTERY_STATUS_FULL) {
-                if (status == BatteryManager.BATTERY_STATUS_FULL || level >= 90) {
+                if (status == BatteryManager.BATTERY_STATUS_FULL
+                        || level >= mBatteryNearlyFullLevel) {
                     // Solid green when full or charging and nearly full
                     mBatteryLight.setColor(mBatteryFullARGB);
                 } else {
@@ -1105,51 +1544,6 @@ public final class BatteryService extends SystemService {
             } else {
                 // No lights if not charging and not low
                 mBatteryLight.turnOff();
-            }
-        }
-    }
-
-    private final class HealthHalCallback extends IHealthInfoCallback.Stub
-            implements HealthServiceWrapper.Callback {
-        @Override public void healthInfoChanged(android.hardware.health.V2_0.HealthInfo props) {
-            BatteryService.this.update(props);
-        }
-        // on new service registered
-        @Override public void onRegistration(IHealth oldService, IHealth newService,
-                String instance) {
-            if (newService == null) return;
-
-            traceBegin("HealthUnregisterCallback");
-            try {
-                if (oldService != null) {
-                    int r = oldService.unregisterCallback(this);
-                    if (r != Result.SUCCESS) {
-                        Slog.w(TAG, "health: cannot unregister previous callback: " +
-                                Result.toString(r));
-                    }
-                }
-            } catch (RemoteException ex) {
-                Slog.w(TAG, "health: cannot unregister previous callback (transaction error): "
-                            + ex.getMessage());
-            } finally {
-                traceEnd();
-            }
-
-            traceBegin("HealthRegisterCallback");
-            try {
-                int r = newService.registerCallback(this);
-                if (r != Result.SUCCESS) {
-                    Slog.w(TAG, "health: cannot register callback: " + Result.toString(r));
-                    return;
-                }
-                // registerCallback does NOT guarantee that update is called
-                // immediately, so request a manual update here.
-                newService.update();
-            } catch (RemoteException ex) {
-                Slog.e(TAG, "health: cannot register callback (transaction error): "
-                        + ex.getMessage());
-            } finally {
-                traceEnd();
             }
         }
     }
@@ -1172,69 +1566,31 @@ public final class BatteryService extends SystemService {
         }
     }
 
-    // Reduced IBatteryPropertiesRegistrar that only implements getProperty for usage
-    // in BatteryManager.
+    // Reduced IBatteryPropertiesRegistrar that implements getProperty for usage
+    // in BatteryManager and enforce permissions.
     private final class BatteryPropertiesRegistrar extends IBatteryPropertiesRegistrar.Stub {
         @Override
         public int getProperty(int id, final BatteryProperty prop) throws RemoteException {
-            traceBegin("HealthGetProperty");
-            try {
-                IHealth service = mHealthServiceWrapper.getLastService();
-                if (service == null) throw new RemoteException("no health service");
-                final MutableInt outResult = new MutableInt(Result.NOT_SUPPORTED);
-                switch(id) {
-                    case BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER:
-                        service.getChargeCounter((int result, int value) -> {
-                            outResult.value = result;
-                            if (result == Result.SUCCESS) prop.setLong(value);
-                        });
+            switch (id) {
+                case BatteryManager.BATTERY_PROPERTY_STATE_OF_HEALTH:
+                    if (stateOfHealthPublic()) {
                         break;
-                    case BatteryManager.BATTERY_PROPERTY_CURRENT_NOW:
-                        service.getCurrentNow((int result, int value) -> {
-                            outResult.value = result;
-                            if (result == Result.SUCCESS) prop.setLong(value);
-                        });
-                        break;
-                    case BatteryManager.BATTERY_PROPERTY_CURRENT_AVERAGE:
-                        service.getCurrentAverage((int result, int value) -> {
-                            outResult.value = result;
-                            if (result == Result.SUCCESS) prop.setLong(value);
-                        });
-                        break;
-                    case BatteryManager.BATTERY_PROPERTY_CAPACITY:
-                        service.getCapacity((int result, int value) -> {
-                            outResult.value = result;
-                            if (result == Result.SUCCESS) prop.setLong(value);
-                        });
-                        break;
-                    case BatteryManager.BATTERY_PROPERTY_STATUS:
-                        service.getChargeStatus((int result, int value) -> {
-                            outResult.value = result;
-                            if (result == Result.SUCCESS) prop.setLong(value);
-                        });
-                        break;
-                    case BatteryManager.BATTERY_PROPERTY_ENERGY_COUNTER:
-                        service.getEnergyCounter((int result, long value) -> {
-                            outResult.value = result;
-                            if (result == Result.SUCCESS) prop.setLong(value);
-                        });
-                        break;
-                }
-                return outResult.value;
-            } finally {
-                traceEnd();
+                    }
+
+                case BatteryManager.BATTERY_PROPERTY_MANUFACTURING_DATE:
+                case BatteryManager.BATTERY_PROPERTY_FIRST_USAGE_DATE:
+                case BatteryManager.BATTERY_PROPERTY_CHARGING_POLICY:
+                case BatteryManager.BATTERY_PROPERTY_SERIAL_NUMBER:
+                case BatteryManager.BATTERY_PROPERTY_PART_STATUS:
+                    mContext.enforceCallingPermission(
+                            android.Manifest.permission.BATTERY_STATS, null);
+                    break;
             }
+            return mHealthServiceWrapper.getProperty(id, prop);
         }
         @Override
         public void scheduleUpdate() throws RemoteException {
-            traceBegin("HealthScheduleUpdate");
-            try {
-                IHealth service = mHealthServiceWrapper.getLastService();
-                if (service == null) throw new RemoteException("no health service");
-                service.update();
-            } finally {
-                traceEnd();
-            }
+            mHealthServiceWrapper.scheduleUpdate();
         }
     }
 
@@ -1263,14 +1619,21 @@ public final class BatteryService extends SystemService {
         @Override
         public int getBatteryChargeCounter() {
             synchronized (mLock) {
-                return mHealthInfo.batteryChargeCounter;
+                return mHealthInfo.batteryChargeCounterUah;
             }
         }
 
         @Override
         public int getBatteryFullCharge() {
             synchronized (mLock) {
-                return mHealthInfo.batteryFullCharge;
+                return mHealthInfo.batteryFullChargeUah;
+            }
+        }
+
+        @Override
+        public int getBatteryHealth() {
+            synchronized (mLock) {
+                return mHealthInfo.batteryHealth;
             }
         }
 
@@ -1282,185 +1645,48 @@ public final class BatteryService extends SystemService {
         }
 
         @Override
+        public void registerChargingPolicyChangeListener(
+                BatteryManagerInternal.ChargingPolicyChangeListener listener) {
+            mChargingPolicyChangeListeners.add(listener);
+        }
+
+        @Override
+        public int getChargingPolicy() {
+            synchronized (mLock) {
+                return mLastChargingPolicy;
+            }
+        }
+
+        @Override
         public int getInvalidCharger() {
             synchronized (mLock) {
                 return mInvalidCharger;
             }
         }
-    }
 
-    /**
-     * HealthServiceWrapper wraps the internal IHealth service and refreshes the service when
-     * necessary.
-     *
-     * On new registration of IHealth service, {@link #onRegistration onRegistration} is called and
-     * the internal service is refreshed.
-     * On death of an existing IHealth service, the internal service is NOT cleared to avoid
-     * race condition between death notification and new service notification. Hence,
-     * a caller must check for transaction errors when calling into the service.
-     *
-     * @hide Should only be used internally.
-     */
-    @VisibleForTesting
-    static final class HealthServiceWrapper {
-        private static final String TAG = "HealthServiceWrapper";
-        public static final String INSTANCE_HEALTHD = "backup";
-        public static final String INSTANCE_VENDOR = "default";
-        // All interesting instances, sorted by priority high -> low.
-        private static final List<String> sAllInstances =
-                Arrays.asList(INSTANCE_VENDOR, INSTANCE_HEALTHD);
-
-        private final IServiceNotification mNotification = new Notification();
-        private final HandlerThread mHandlerThread = new HandlerThread("HealthServiceRefresh");
-        // These variables are fixed after init.
-        private Callback mCallback;
-        private IHealthSupplier mHealthSupplier;
-        private String mInstanceName;
-
-        // Last IHealth service received.
-        private final AtomicReference<IHealth> mLastService = new AtomicReference<>();
-
-        /**
-         * init should be called after constructor. For testing purposes, init is not called by
-         * constructor.
-         */
-        HealthServiceWrapper() {
+        @Override
+        public void setChargerAcOnline(boolean online, boolean forceUpdate) {
+            BatteryService.this.setChargerAcOnline(online, forceUpdate);
         }
 
-        IHealth getLastService() {
-            return mLastService.get();
+        @Override
+        public void setBatteryLevel(int level, boolean forceUpdate) {
+            BatteryService.this.setBatteryLevel(level, forceUpdate);
         }
 
-        /**
-         * Start monitoring registration of new IHealth services. Only instances that are in
-         * {@code sAllInstances} and in device / framework manifest are used. This function should
-         * only be called once.
-         *
-         * mCallback.onRegistration() is called synchronously (aka in init thread) before
-         * this method returns.
-         *
-         * @throws RemoteException transaction error when talking to IServiceManager
-         * @throws NoSuchElementException if one of the following cases:
-         *         - No service manager;
-         *         - none of {@code sAllInstances} are in manifests (i.e. not
-         *           available on this device), or none of these instances are available to current
-         *           process.
-         * @throws NullPointerException when callback is null or supplier is null
-         */
-        void init(Callback callback,
-                  IServiceManagerSupplier managerSupplier,
-                  IHealthSupplier healthSupplier)
-                throws RemoteException, NoSuchElementException, NullPointerException {
-            if (callback == null || managerSupplier == null || healthSupplier == null)
-                throw new NullPointerException();
-
-            IServiceManager manager;
-
-            mCallback = callback;
-            mHealthSupplier = healthSupplier;
-
-            // Initialize mLastService and call callback for the first time (in init thread)
-            IHealth newService = null;
-            for (String name : sAllInstances) {
-                traceBegin("HealthInitGetService_" + name);
-                try {
-                    newService = healthSupplier.get(name);
-                } catch (NoSuchElementException ex) {
-                    /* ignored, handled below */
-                } finally {
-                    traceEnd();
-                }
-                if (newService != null) {
-                    mInstanceName = name;
-                    mLastService.set(newService);
-                    break;
-                }
-            }
-
-            if (mInstanceName == null || newService == null) {
-                throw new NoSuchElementException(String.format(
-                        "No IHealth service instance among %s is available. Perhaps no permission?",
-                        sAllInstances.toString()));
-            }
-            mCallback.onRegistration(null, newService, mInstanceName);
-
-            // Register for future service registrations
-            traceBegin("HealthInitRegisterNotification");
-            mHandlerThread.start();
-            try {
-                managerSupplier.get().registerForNotifications(
-                        IHealth.kInterfaceName, mInstanceName, mNotification);
-            } finally {
-                traceEnd();
-            }
-            Slog.i(TAG, "health: HealthServiceWrapper listening to instance " + mInstanceName);
+        @Override
+        public void unplugBattery(boolean forceUpdate) {
+            BatteryService.this.unplugBattery(forceUpdate, /* printWriter= */ null);
         }
 
-        @VisibleForTesting
-        HandlerThread getHandlerThread() {
-            return mHandlerThread;
+        @Override
+        public void resetBattery(boolean forceUpdate) {
+            BatteryService.this.resetBattery(forceUpdate, /* printWriter= */ null);
         }
 
-        interface Callback {
-            /**
-             * This function is invoked asynchronously when a new and related IServiceNotification
-             * is received.
-             * @param service the recently retrieved service from IServiceManager.
-             * Can be a dead service before service notification of a new service is delivered.
-             * Implementation must handle cases for {@link RemoteException}s when calling
-             * into service.
-             * @param instance instance name.
-             */
-            void onRegistration(IHealth oldService, IHealth newService, String instance);
-        }
-
-        /**
-         * Supplier of services.
-         * Must not return null; throw {@link NoSuchElementException} if a service is not available.
-         */
-        interface IServiceManagerSupplier {
-            default IServiceManager get() throws NoSuchElementException, RemoteException {
-                return IServiceManager.getService();
-            }
-        }
-        /**
-         * Supplier of services.
-         * Must not return null; throw {@link NoSuchElementException} if a service is not available.
-         */
-        interface IHealthSupplier {
-            default IHealth get(String name) throws NoSuchElementException, RemoteException {
-                return IHealth.getService(name, true /* retry */);
-            }
-        }
-
-        private class Notification extends IServiceNotification.Stub {
-            @Override
-            public final void onRegistration(String interfaceName, String instanceName,
-                    boolean preexisting) {
-                if (!IHealth.kInterfaceName.equals(interfaceName)) return;
-                if (!mInstanceName.equals(instanceName)) return;
-
-                // This runnable only runs on mHandlerThread and ordering is ensured, hence
-                // no locking is needed inside the runnable.
-                mHandlerThread.getThreadHandler().post(new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            IHealth newService = mHealthSupplier.get(mInstanceName);
-                            IHealth oldService = mLastService.getAndSet(newService);
-
-                            // preexisting may be inaccurate (race). Check for equality here.
-                            if (Objects.equals(newService, oldService)) return;
-
-                            Slog.i(TAG, "health: new instance registered " + mInstanceName);
-                            mCallback.onRegistration(oldService, newService, mInstanceName);
-                        } catch (NoSuchElementException | RemoteException ex) {
-                            Slog.e(TAG, "health: Cannot get instance '" + mInstanceName
-                                    + "': " + ex.getMessage() + ". Perhaps no permission?");
-                        }
-                    }
-                });
-            }
+        @Override
+        public void suspendBatteryInput() {
+            BatteryService.this.suspendBatteryInput();
         }
     }
 }

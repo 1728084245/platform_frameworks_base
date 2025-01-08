@@ -28,7 +28,6 @@ namespace aapt {
 TEST(ReferenceLinkerTest, LinkSimpleReferences) {
   std::unique_ptr<ResourceTable> table =
       test::ResourceTableBuilder()
-          .SetPackageId("com.app.test", 0x7f)
           .AddReference("com.app.test:string/foo", ResourceId(0x7f020000),
                         "com.app.test:string/bar")
 
@@ -75,7 +74,6 @@ TEST(ReferenceLinkerTest, LinkSimpleReferences) {
 TEST(ReferenceLinkerTest, LinkStyleAttributes) {
   std::unique_ptr<ResourceTable> table =
       test::ResourceTableBuilder()
-          .SetPackageId("com.app.test", 0x7f)
           .AddValue("com.app.test:style/Theme",
                     test::StyleBuilder()
                         .SetParent("android:style/Theme.Material")
@@ -155,7 +153,6 @@ TEST(ReferenceLinkerTest, LinkMangledReferencesAndAttributes) {
 
   std::unique_ptr<ResourceTable> table =
       test::ResourceTableBuilder()
-          .SetPackageId("com.app.test", 0x7f)
           .AddValue("com.app.test:style/Theme", ResourceId(0x7f020000),
                     test::StyleBuilder()
                         .AddItem("com.android.support:attr/foo",
@@ -176,7 +173,6 @@ TEST(ReferenceLinkerTest, LinkMangledReferencesAndAttributes) {
 TEST(ReferenceLinkerTest, FailToLinkPrivateSymbols) {
   std::unique_ptr<ResourceTable> table =
       test::ResourceTableBuilder()
-          .SetPackageId("com.app.test", 0x7f)
           .AddReference("com.app.test:string/foo", ResourceId(0x7f020000),
                         "android:string/hidden")
           .Build();
@@ -201,7 +197,6 @@ TEST(ReferenceLinkerTest, FailToLinkPrivateSymbols) {
 TEST(ReferenceLinkerTest, FailToLinkPrivateMangledSymbols) {
   std::unique_ptr<ResourceTable> table =
       test::ResourceTableBuilder()
-          .SetPackageId("com.app.test", 0x7f)
           .AddReference("com.app.test:string/foo", ResourceId(0x7f020000),
                         "com.app.lib:string/hidden")
           .Build();
@@ -229,7 +224,6 @@ TEST(ReferenceLinkerTest, FailToLinkPrivateMangledSymbols) {
 TEST(ReferenceLinkerTest, FailToLinkPrivateStyleAttributes) {
   std::unique_ptr<ResourceTable> table =
       test::ResourceTableBuilder()
-          .SetPackageId("com.app.test", 0x7f)
           .AddValue("com.app.test:style/Theme",
                     test::StyleBuilder()
                         .AddItem("android:attr/hidden",
@@ -266,8 +260,13 @@ TEST(ReferenceLinkerTest, AppsWithSamePackageButDifferentIdAreVisibleNonPublic) 
 
   std::string error;
   const CallSite call_site{"com.app.test"};
+  std::unique_ptr<IAaptContext> context =
+    test::ContextBuilder()
+        .SetCompilationPackage("com.app.test")
+        .SetPackageId(0x7f)
+        .Build();
   const SymbolTable::Symbol* symbol = ReferenceLinker::ResolveSymbolCheckVisibility(
-      *test::BuildReference("com.app.test:string/foo"), call_site, &table, &error);
+      *test::BuildReference("com.app.test:string/foo"), call_site, context.get(), &table, &error);
   ASSERT_THAT(symbol, NotNull());
   EXPECT_TRUE(error.empty());
 }
@@ -281,17 +280,23 @@ TEST(ReferenceLinkerTest, AppsWithDifferentPackageCanNotUseEachOthersAttribute) 
                          .AddPublicSymbol("com.app.test:attr/public_foo", ResourceId(0x7f010001),
                                           test::AttributeBuilder().Build())
                          .Build());
+  std::unique_ptr<IAaptContext> context =
+    test::ContextBuilder()
+        .SetCompilationPackage("com.app.ext")
+        .SetPackageId(0x7f)
+        .Build();
 
   std::string error;
   const CallSite call_site{"com.app.ext"};
 
   EXPECT_FALSE(ReferenceLinker::CompileXmlAttribute(
-      *test::BuildReference("com.app.test:attr/foo"), call_site, &table, &error));
+      *test::BuildReference("com.app.test:attr/foo"), call_site, context.get(), &table, &error));
   EXPECT_FALSE(error.empty());
 
   error = "";
   ASSERT_TRUE(ReferenceLinker::CompileXmlAttribute(
-      *test::BuildReference("com.app.test:attr/public_foo"), call_site, &table, &error));
+      *test::BuildReference("com.app.test:attr/public_foo"), call_site, context.get(), &table,
+      &error));
   EXPECT_TRUE(error.empty());
 }
 
@@ -302,20 +307,80 @@ TEST(ReferenceLinkerTest, ReferenceWithNoPackageUsesCallSitePackage) {
                          .AddSymbol("com.app.test:string/foo", ResourceId(0x7f010000))
                          .AddSymbol("com.app.lib:string/foo", ResourceId(0x7f010001))
                          .Build());
+  std::unique_ptr<IAaptContext> context =
+    test::ContextBuilder()
+        .SetCompilationPackage("com.app.test")
+        .SetPackageId(0x7f)
+        .Build();
 
   const SymbolTable::Symbol* s = ReferenceLinker::ResolveSymbol(*test::BuildReference("string/foo"),
-                                                                CallSite{"com.app.test"}, &table);
+                                                                CallSite{"com.app.test"},
+                                                                context.get(), &table);
   ASSERT_THAT(s, NotNull());
-  EXPECT_THAT(s->id, Eq(make_value<ResourceId>(0x7f010000)));
+  EXPECT_THAT(s->id, Eq(0x7f010000));
 
   s = ReferenceLinker::ResolveSymbol(*test::BuildReference("string/foo"), CallSite{"com.app.lib"},
-                                     &table);
+                                     context.get(), &table);
   ASSERT_THAT(s, NotNull());
-  EXPECT_THAT(s->id, Eq(make_value<ResourceId>(0x7f010001)));
+  EXPECT_THAT(s->id, Eq(0x7f010001));
 
   EXPECT_THAT(ReferenceLinker::ResolveSymbol(*test::BuildReference("string/foo"),
-                                             CallSite{"com.app.bad"}, &table),
+                                             CallSite{"com.app.bad"}, context.get(), &table),
               IsNull());
+}
+
+TEST(ReferenceLinkerTest, ReferenceSymbolFromOtherSplit) {
+  NameMangler mangler(NameManglerPolicy{"com.app.test"});
+  SymbolTable table(&mangler);
+  table.AppendSource(test::StaticSymbolSourceBuilder()
+                         .AddSymbol("com.app.test.feature:string/bar", ResourceId(0x80010000))
+                         .Build());
+  std::set<std::string> split_name_dependencies;
+  split_name_dependencies.insert("feature");
+  std::unique_ptr<IAaptContext> context =
+      test::ContextBuilder()
+          .SetCompilationPackage("com.app.test")
+          .SetPackageId(0x81)
+          .SetSplitNameDependencies(split_name_dependencies)
+          .Build();
+
+  const SymbolTable::Symbol* s = ReferenceLinker::ResolveSymbol(*test::BuildReference("string/bar"),
+                                                                CallSite{"com.app.test"},
+                                                                context.get(), &table);
+  ASSERT_THAT(s, NotNull());
+  EXPECT_THAT(s->id, Eq(0x80010000));
+
+  s = ReferenceLinker::ResolveSymbol(*test::BuildReference("string/foo"), CallSite{"com.app.lib"},
+                                     context.get(), &table);
+  EXPECT_THAT(s, IsNull());
+
+  context =
+    test::ContextBuilder()
+        .SetCompilationPackage("com.app.test")
+        .SetPackageId(0x81)
+        .Build();
+  s = ReferenceLinker::ResolveSymbol(*test::BuildReference("string/bar"),CallSite{"com.app.test"},
+                                     context.get(), &table);
+
+  EXPECT_THAT(s, IsNull());
+}
+
+TEST(ReferenceLinkerTest, MacroFailToFindDefinition) {
+  std::unique_ptr<ResourceTable> table =
+      test::ResourceTableBuilder()
+          .AddReference("com.app.test:string/foo", ResourceId(0x7f020000), "com.app.test:macro/bar")
+          .Build();
+
+  std::unique_ptr<IAaptContext> context =
+      test::ContextBuilder()
+          .SetCompilationPackage("com.app.test")
+          .SetPackageId(0x7f)
+          .SetNameManglerPolicy(NameManglerPolicy{"com.app.test"})
+          .AddSymbolSource(util::make_unique<ResourceTableSymbolSource>(table.get()))
+          .Build();
+
+  ReferenceLinker linker;
+  ASSERT_FALSE(linker.Consume(context.get(), table.get()));
 }
 
 }  // namespace aapt

@@ -74,7 +74,7 @@
     <string name="enabled_services_title" msgid="7036986099096582296">"Қосылған қызметтер"</string>
     <string name="recommended_services_title" msgid="3799434882937956924">"Ұсынылған қызметтер"</string>
     <string name="disabled_services_title" msgid="7313253167968363211">"Өшірілген қызметтер"</string>
-    <string name="all_services_title" msgid="5578662754874906455">"Барлық қызметтер"</string>
+    <string name="all_services_title" msgid="5578662754874906455">"Барлық қызмет"</string>
     <plurals name="print_services_recommendation_subtitle" formatted="false" msgid="5678487708807185138">
       <item quantity="other"><xliff:g id="COUNT_1">%1$s</xliff:g> принтерді табу үшін орнатыңыз</item>
       <item quantity="one"><xliff:g id="COUNT_0">%1$s</xliff:g> принтерді табу үшін орнатыңыз</item>
@@ -94,7 +94,7 @@
     <item msgid="2762241247228983754">"Түс"</item>
   </string-array>
   <string-array name="duplex_mode_labels">
-    <item msgid="3882302912790928315">"Ешқандай"</item>
+    <item msgid="3882302912790928315">"Жоқ"</item>
     <item msgid="7296563835355641719">"Ұзын жиек"</item>
     <item msgid="79513688117503758">"Қысқа жиек"</item>
   </string-array>
@@ -106,6 +106,6 @@
     <string name="print_error_default_message" msgid="8602678405502922346">"Кешіріңіз, бұл нәтиже бермеді. Әрекетті қайталаңыз."</string>
     <string name="print_error_retry" msgid="1426421728784259538">"Қайталау"</string>
     <string name="print_error_printer_unavailable" msgid="8985614415253203381">"Бұл принтер дәл қазір қол жетімді емес."</string>
-    <string name="print_cannot_load_page" msgid="6179560924492912009">"Бетті алдын ала қарау мүмкін емес"</string>
-    <string name="print_preparing_preview" msgid="3939930735671364712">"Алдын ала қарау дайындалуда…"</string>
+    <string name="print_cannot_load_page" msgid="6179560924492912009">"Бетті алдын ала көру мүмкін емес"</string>
+    <string name="print_preparing_preview" msgid="3939930735671364712">"Алдын ала көру дайындалуда…"</string>
 </resources>

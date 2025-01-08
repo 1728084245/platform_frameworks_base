@@ -16,8 +16,13 @@
 
 package android.os;
 
+import static java.util.Objects.requireNonNull;
+
+import android.annotation.IntDef;
+import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.SuppressLint;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.util.ArrayMap;
 import android.util.Size;
 import android.util.SizeF;
@@ -27,14 +32,20 @@ import android.util.proto.ProtoOutputStream;
 import com.android.internal.annotations.VisibleForTesting;
 
 import java.io.Serializable;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * A mapping from String keys to various {@link Parcelable} values.
  *
+ * <p><b>Warning:</b> Note that {@link Bundle} is a lazy container and as such it does NOT implement
+ * {@link #equals(Object)} or {@link #hashCode()}.
+ *
  * @see PersistableBundle
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
     @VisibleForTesting
     static final int FLAG_HAS_FDS = 1 << 8;
@@ -45,6 +56,54 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
     @VisibleForTesting
     static final int FLAG_ALLOW_FDS = 1 << 10;
 
+    @VisibleForTesting
+    static final int FLAG_HAS_BINDERS_KNOWN = 1 << 11;
+
+    @VisibleForTesting
+    static final int FLAG_HAS_BINDERS = 1 << 12;
+
+
+    /**
+     * Status when the Bundle can <b>assert</b> that the underlying Parcel DOES NOT contain
+     * Binder object(s).
+     *
+     * @hide
+     */
+    public static final int STATUS_BINDERS_NOT_PRESENT = 0;
+
+    /**
+     * Status when the Bundle can <b>assert</b> that there are Binder object(s) in the Parcel.
+     *
+     * @hide
+     */
+    public static final int STATUS_BINDERS_PRESENT = 1;
+
+    /**
+     * Status when the Bundle cannot be checked for Binders and there is no parcelled data
+     * available to check either.
+     * <p> This could happen when a Bundle is unparcelled or was never parcelled, and modified such
+     * that it is not possible to assert if the Bundle has any Binder objects in the current state.
+     *
+     * For e.g. calling {@link #putParcelable} or {@link #putBinder} could have added a Binder
+     * object to the Bundle but it is not possible to assert this fact unless the Bundle is written
+     * to a Parcel.
+     * </p>
+     *
+     * @hide
+     */
+    public static final int STATUS_BINDERS_UNKNOWN = 2;
+
+    /** @hide */
+    @IntDef(flag = true, prefix = {"STATUS_BINDERS_"}, value = {
+            STATUS_BINDERS_PRESENT,
+            STATUS_BINDERS_UNKNOWN,
+            STATUS_BINDERS_NOT_PRESENT
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface HasBinderStatus {
+    }
+
+    /** An unmodifiable {@code Bundle} that is always {@link #isEmpty() empty}. */
     public static final Bundle EMPTY;
 
     /**
@@ -66,7 +125,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
      */
     public Bundle() {
         super();
-        mFlags = FLAG_HAS_FDS_KNOWN | FLAG_ALLOW_FDS;
+        mFlags = FLAG_HAS_FDS_KNOWN | FLAG_HAS_BINDERS_KNOWN | FLAG_ALLOW_FDS;
     }
 
     /**
@@ -98,6 +157,17 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
     }
 
     /**
+     * Constructs a {@link Bundle} containing a copy of {@code from}.
+     *
+     * @param from The bundle to be copied.
+     * @param deep Whether is a deep or shallow copy.
+     * @hide
+     */
+    Bundle(Bundle from, boolean deep) {
+        super(from, deep);
+    }
+
+    /**
      * If {@link #mParcelledData} is not null, copy the HAS FDS bit from it because it's fast.
      * Otherwise (if {@link #mParcelledData} is already null), leave {@link #FLAG_HAS_FDS_KNOWN}
      * unset, because scanning a map is slower.  We'll do it lazily in
@@ -122,7 +192,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
      */
     public Bundle(ClassLoader loader) {
         super(loader);
-        mFlags = FLAG_HAS_FDS_KNOWN | FLAG_ALLOW_FDS;
+        mFlags = FLAG_HAS_FDS_KNOWN | FLAG_HAS_BINDERS_KNOWN | FLAG_ALLOW_FDS;
     }
 
     /**
@@ -133,7 +203,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
      */
     public Bundle(int capacity) {
         super(capacity);
-        mFlags = FLAG_HAS_FDS_KNOWN | FLAG_ALLOW_FDS;
+        mFlags = FLAG_HAS_FDS_KNOWN | FLAG_HAS_BINDERS_KNOWN | FLAG_ALLOW_FDS;
     }
 
     /**
@@ -159,14 +229,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
      */
     public Bundle(PersistableBundle b) {
         super(b);
-        mFlags = FLAG_HAS_FDS_KNOWN | FLAG_ALLOW_FDS;
-    }
-
-    /**
-     * Constructs a Bundle without initializing it.
-     */
-    Bundle(boolean doInit) {
-        super(doInit);
+        mFlags = FLAG_HAS_FDS_KNOWN | FLAG_HAS_BINDERS_KNOWN | FLAG_ALLOW_FDS;
     }
 
     /**
@@ -174,7 +237,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
      *
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public static Bundle forPair(String key, String value) {
         Bundle b = new Bundle(1);
         b.putString(key, value);
@@ -256,9 +319,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
      * are referenced as-is and not copied in any way.
      */
     public Bundle deepCopy() {
-        Bundle b = new Bundle(false);
-        b.copyInternal(this, true);
-        return b;
+        return new Bundle(this, /* deep */ true);
     }
 
     /**
@@ -280,6 +341,9 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
         if ((mFlags & FLAG_HAS_FDS) != 0) {
             mFlags &= ~FLAG_HAS_FDS_KNOWN;
         }
+        if ((mFlags & FLAG_HAS_BINDERS) != 0) {
+            mFlags &= ~FLAG_HAS_BINDERS_KNOWN;
+        }
     }
 
     /**
@@ -290,14 +354,23 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
     public void putAll(Bundle bundle) {
         unparcel();
         bundle.unparcel();
+        mOwnsLazyValues = false;
+        bundle.mOwnsLazyValues = false;
         mMap.putAll(bundle.mMap);
 
-        // FD state is now known if and only if both bundles already knew
+        // FD and Binders state is now known if and only if both bundles already knew
         if ((bundle.mFlags & FLAG_HAS_FDS) != 0) {
             mFlags |= FLAG_HAS_FDS;
         }
         if ((bundle.mFlags & FLAG_HAS_FDS_KNOWN) == 0) {
             mFlags &= ~FLAG_HAS_FDS_KNOWN;
+        }
+
+        if ((bundle.mFlags & FLAG_HAS_BINDERS) != 0) {
+            mFlags |= FLAG_HAS_BINDERS;
+        }
+        if ((bundle.mFlags & FLAG_HAS_BINDERS_KNOWN) == 0) {
+            mFlags &= ~FLAG_HAS_BINDERS_KNOWN;
         }
     }
 
@@ -306,7 +379,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
      *
      * @hide
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public int getSize() {
         if (mParcelledData != null) {
             return mParcelledData.dataSize();
@@ -320,119 +393,90 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
      */
     public boolean hasFileDescriptors() {
         if ((mFlags & FLAG_HAS_FDS_KNOWN) == 0) {
-            boolean fdFound = false;    // keep going until we find one or run out of data
-
-            if (mParcelledData != null) {
-                if (mParcelledData.hasFileDescriptors()) {
-                    fdFound = true;
-                }
-            } else {
-                // It's been unparcelled, so we need to walk the map
-                for (int i=mMap.size()-1; i>=0; i--) {
-                    Object obj = mMap.valueAt(i);
-                    if (obj instanceof Parcelable) {
-                        if ((((Parcelable)obj).describeContents()
-                                & Parcelable.CONTENTS_FILE_DESCRIPTOR) != 0) {
-                            fdFound = true;
-                            break;
-                        }
-                    } else if (obj instanceof Parcelable[]) {
-                        Parcelable[] array = (Parcelable[]) obj;
-                        for (int n = array.length - 1; n >= 0; n--) {
-                            Parcelable p = array[n];
-                            if (p != null && ((p.describeContents()
-                                    & Parcelable.CONTENTS_FILE_DESCRIPTOR) != 0)) {
-                                fdFound = true;
-                                break;
-                            }
-                        }
-                    } else if (obj instanceof SparseArray) {
-                        SparseArray<? extends Parcelable> array =
-                                (SparseArray<? extends Parcelable>) obj;
-                        for (int n = array.size() - 1; n >= 0; n--) {
-                            Parcelable p = array.valueAt(n);
-                            if (p != null && (p.describeContents()
-                                    & Parcelable.CONTENTS_FILE_DESCRIPTOR) != 0) {
-                                fdFound = true;
-                                break;
-                            }
-                        }
-                    } else if (obj instanceof ArrayList) {
-                        ArrayList array = (ArrayList) obj;
-                        // an ArrayList here might contain either Strings or
-                        // Parcelables; only look inside for Parcelables
-                        if (!array.isEmpty() && (array.get(0) instanceof Parcelable)) {
-                            for (int n = array.size() - 1; n >= 0; n--) {
-                                Parcelable p = (Parcelable) array.get(n);
-                                if (p != null && ((p.describeContents()
-                                        & Parcelable.CONTENTS_FILE_DESCRIPTOR) != 0)) {
-                                    fdFound = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (fdFound) {
-                mFlags |= FLAG_HAS_FDS;
-            } else {
-                mFlags &= ~FLAG_HAS_FDS;
-            }
+            Parcel p = mParcelledData;
+            mFlags = (Parcel.hasFileDescriptors((p != null) ? p : mMap))
+                    ? mFlags | FLAG_HAS_FDS
+                    : mFlags & ~FLAG_HAS_FDS;
             mFlags |= FLAG_HAS_FDS_KNOWN;
         }
         return (mFlags & FLAG_HAS_FDS) != 0;
     }
 
     /**
-     * Filter values in Bundle to only basic types.
+     * Returns a status indicating whether the bundle contains any parcelled Binder objects.
      * @hide
      */
-    @UnsupportedAppUsage
-    public Bundle filterValues() {
-        unparcel();
-        Bundle bundle = this;
-        if (mMap != null) {
-            ArrayMap<String, Object> map = mMap;
-            for (int i = map.size() - 1; i >= 0; i--) {
-                Object value = map.valueAt(i);
-                if (PersistableBundle.isValidType(value)) {
-                    continue;
-                }
-                if (value instanceof Bundle) {
-                    Bundle newBundle = ((Bundle)value).filterValues();
-                    if (newBundle != value) {
-                        if (map == mMap) {
-                            // The filter had to generate a new bundle, but we have not yet
-                            // created a new one here.  Do that now.
-                            bundle = new Bundle(this);
-                            // Note the ArrayMap<> constructor is guaranteed to generate
-                            // a new object with items in the same order as the original.
-                            map = bundle.mMap;
-                        }
-                        // Replace this current entry with the new child bundle.
-                        map.setValueAt(i, newBundle);
-                    }
-                    continue;
-                }
-                if (value.getClass().getName().startsWith("android.")) {
-                    continue;
-                }
-                if (map == mMap) {
-                    // This is the first time we have had to remove something, that means we
-                    // need to switch to a new Bundle.
-                    bundle = new Bundle(this);
-                    // Note the ArrayMap<> constructor is guaranteed to generate
-                    // a new object with items in the same order as the original.
-                    map = bundle.mMap;
-                }
-                map.removeAt(i);
+    public @HasBinderStatus int hasBinders() {
+        if ((mFlags & FLAG_HAS_BINDERS_KNOWN) != 0) {
+            if ((mFlags & FLAG_HAS_BINDERS) != 0) {
+                return STATUS_BINDERS_PRESENT;
+            } else {
+                return STATUS_BINDERS_NOT_PRESENT;
             }
         }
-        mFlags |= FLAG_HAS_FDS_KNOWN;
-        mFlags &= ~FLAG_HAS_FDS;
-        return bundle;
+
+        final Parcel p = mParcelledData;
+        if (p == null) {
+            return STATUS_BINDERS_UNKNOWN;
+        }
+        if (p.hasBinders()) {
+            mFlags = mFlags | FLAG_HAS_BINDERS | FLAG_HAS_BINDERS_KNOWN;
+            return STATUS_BINDERS_PRESENT;
+        } else {
+            mFlags = mFlags & ~FLAG_HAS_BINDERS;
+            mFlags |= FLAG_HAS_BINDERS_KNOWN;
+            return STATUS_BINDERS_NOT_PRESENT;
+        }
+    }
+
+    /** {@hide} */
+    @Override
+    public void putObject(@Nullable String key, @Nullable Object value) {
+        if (value instanceof Byte) {
+            putByte(key, (Byte) value);
+        } else if (value instanceof Character) {
+            putChar(key, (Character) value);
+        } else if (value instanceof Short) {
+            putShort(key, (Short) value);
+        } else if (value instanceof Float) {
+            putFloat(key, (Float) value);
+        } else if (value instanceof CharSequence) {
+            putCharSequence(key, (CharSequence) value);
+        } else if (value instanceof Parcelable) {
+            putParcelable(key, (Parcelable) value);
+        } else if (value instanceof Size) {
+            putSize(key, (Size) value);
+        } else if (value instanceof SizeF) {
+            putSizeF(key, (SizeF) value);
+        } else if (value instanceof Parcelable[]) {
+            putParcelableArray(key, (Parcelable[]) value);
+        } else if (value instanceof ArrayList) {
+            putParcelableArrayList(key, (ArrayList) value);
+        } else if (value instanceof List) {
+            putParcelableList(key, (List) value);
+        } else if (value instanceof SparseArray) {
+            putSparseParcelableArray(key, (SparseArray) value);
+        } else if (value instanceof Serializable) {
+            putSerializable(key, (Serializable) value);
+        } else if (value instanceof byte[]) {
+            putByteArray(key, (byte[]) value);
+        } else if (value instanceof short[]) {
+            putShortArray(key, (short[]) value);
+        } else if (value instanceof char[]) {
+            putCharArray(key, (char[]) value);
+        } else if (value instanceof float[]) {
+            putFloatArray(key, (float[]) value);
+        } else if (value instanceof CharSequence[]) {
+            putCharSequenceArray(key, (CharSequence[]) value);
+        } else if (value instanceof Bundle) {
+            putBundle(key, (Bundle) value);
+        } else if (value instanceof Binder) {
+            putBinder(key, (Binder) value);
+        } else if (value instanceof IBinder) {
+            putIBinder(key, (IBinder) value);
+        } else {
+            super.putObject(key, value);
+        }
     }
 
     /**
@@ -506,6 +550,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
         unparcel();
         mMap.put(key, value);
         mFlags &= ~FLAG_HAS_FDS_KNOWN;
+        mFlags &= ~FLAG_HAS_BINDERS_KNOWN;
     }
 
     /**
@@ -544,6 +589,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
         unparcel();
         mMap.put(key, value);
         mFlags &= ~FLAG_HAS_FDS_KNOWN;
+        mFlags &= ~FLAG_HAS_BINDERS_KNOWN;
     }
 
     /**
@@ -559,6 +605,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
         unparcel();
         mMap.put(key, value);
         mFlags &= ~FLAG_HAS_FDS_KNOWN;
+        mFlags &= ~FLAG_HAS_BINDERS_KNOWN;
     }
 
     /** {@hide} */
@@ -567,6 +614,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
         unparcel();
         mMap.put(key, value);
         mFlags &= ~FLAG_HAS_FDS_KNOWN;
+        mFlags &= ~FLAG_HAS_BINDERS_KNOWN;
     }
 
     /**
@@ -582,6 +630,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
         unparcel();
         mMap.put(key, value);
         mFlags &= ~FLAG_HAS_FDS_KNOWN;
+        mFlags &= ~FLAG_HAS_BINDERS_KNOWN;
     }
 
     /**
@@ -722,6 +771,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
     public void putBinder(@Nullable String key, @Nullable IBinder value) {
         unparcel();
         mMap.put(key, value);
+        mFlags &= ~FLAG_HAS_BINDERS_KNOWN;
     }
 
     /**
@@ -739,6 +789,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
     public void putIBinder(@Nullable String key, @Nullable IBinder value) {
         unparcel();
         mMap.put(key, value);
+        mFlags &= ~FLAG_HAS_BINDERS_KNOWN;
     }
 
     /**
@@ -935,17 +986,25 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
     }
 
     /**
-     * Returns the value associated with the given key, or null if
-     * no mapping of the desired type exists for the given key or a null
+     * Returns the value associated with the given key, or {@code null} if
+     * no mapping of the desired type exists for the given key or a {@code null}
      * value is explicitly associated with the key.
      *
-     * @param key a String, or null
-     * @return a Parcelable value, or null
+     * <p><b>Note: </b> if the expected value is not a class provided by the Android platform,
+     * you must call {@link #setClassLoader(ClassLoader)} with the proper {@link ClassLoader} first.
+     * Otherwise, this method might throw an exception or return {@code null}.
+     *
+     * @param key a String, or {@code null}
+     * @return a Parcelable value, or {@code null}
+     *
+     * @deprecated Use the type-safer {@link #getParcelable(String, Class)} starting from Android
+     *      {@link Build.VERSION_CODES#TIRAMISU}.
      */
+    @Deprecated
     @Nullable
     public <T extends Parcelable> T getParcelable(@Nullable String key) {
         unparcel();
-        Object o = mMap.get(key);
+        Object o = getValue(key);
         if (o == null) {
             return null;
         }
@@ -958,17 +1017,56 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
     }
 
     /**
-     * Returns the value associated with the given key, or null if
+     * Returns the value associated with the given key or {@code null} if:
+     * <ul>
+     *     <li>No mapping of the desired type exists for the given key.
+     *     <li>A {@code null} value is explicitly associated with the key.
+     *     <li>The object is not of type {@code clazz}.
+     * </ul>
+     *
+     * <p><b>Note: </b> if the expected value is not a class provided by the Android platform,
+     * you must call {@link #setClassLoader(ClassLoader)} with the proper {@link ClassLoader} first.
+     * Otherwise, this method might throw an exception or return {@code null}.
+     *
+     * <p><b>Warning: </b> the class that implements {@link Parcelable} has to be the immediately
+     * enclosing class of the runtime type of its CREATOR field (that is,
+     * {@link Class#getEnclosingClass()} has to return the parcelable implementing class),
+     * otherwise this method might throw an exception. If the Parcelable class does not enclose the
+     * CREATOR, use the deprecated {@link #getParcelable(String)} instead.
+     *
+     * @param key a String, or {@code null}
+     * @param clazz The type of the object expected
+     * @return a Parcelable value, or {@code null}
+     */
+    @SuppressWarnings("unchecked")
+    @Nullable
+    public <T> T getParcelable(@Nullable String key, @NonNull Class<T> clazz) {
+        // The reason for not using <T extends Parcelable> is because the caller could provide a
+        // super class to restrict the children that doesn't implement Parcelable itself while the
+        // children do, more details at b/210800751 (same reasoning applies here).
+        return get(key, clazz);
+    }
+
+    /**
+     * Returns the value associated with the given key, or {@code null} if
      * no mapping of the desired type exists for the given key or a null
      * value is explicitly associated with the key.
      *
-     * @param key a String, or null
-     * @return a Parcelable[] value, or null
+     * <p><b>Note: </b> if the expected value is not a class provided by the Android platform,
+     * you must call {@link #setClassLoader(ClassLoader)} with the proper {@link ClassLoader} first.
+     * Otherwise, this method might throw an exception or return {@code null}.
+     *
+     * @param key a String, or {@code null}
+     * @return a Parcelable[] value, or {@code null}
+     *
+     * @deprecated Use the type-safer {@link #getParcelableArray(String, Class)} starting from
+     *      Android {@link Build.VERSION_CODES#TIRAMISU}.
      */
+    @Deprecated
     @Nullable
     public Parcelable[] getParcelableArray(@Nullable String key) {
         unparcel();
-        Object o = mMap.get(key);
+        Object o = getValue(key);
         if (o == null) {
             return null;
         }
@@ -981,17 +1079,65 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
     }
 
     /**
-     * Returns the value associated with the given key, or null if
-     * no mapping of the desired type exists for the given key or a null
+     * Returns the value associated with the given key, or {@code null} if:
+     * <ul>
+     *     <li>No mapping of the desired type exists for the given key.
+     *     <li>A {@code null} value is explicitly associated with the key.
+     *     <li>The object is not of type {@code clazz}.
+     * </ul>
+     *
+     * <p><b>Note: </b> if the expected value is not a class provided by the Android platform,
+     * you must call {@link #setClassLoader(ClassLoader)} with the proper {@link ClassLoader} first.
+     * Otherwise, this method might throw an exception or return {@code null}.
+     *
+     * <p><b>Warning: </b> if the list contains items implementing the {@link Parcelable} interface,
+     * the class that implements {@link Parcelable} has to be the immediately
+     * enclosing class of the runtime type of its CREATOR field (that is,
+     * {@link Class#getEnclosingClass()} has to return the parcelable implementing class),
+     * otherwise this method might throw an exception. If the Parcelable class does not enclose the
+     * CREATOR, use the deprecated {@link #getParcelableArray(String)} instead.
+     *
+     * @param key a String, or {@code null}
+     * @param clazz The type of the items inside the array. This is only verified when unparceling.
+     * @return a Parcelable[] value, or {@code null}
+     */
+    @SuppressLint({"ArrayReturn", "NullableCollection"})
+    @SuppressWarnings("unchecked")
+    @Nullable
+    public <T> T[] getParcelableArray(@Nullable String key, @NonNull Class<T> clazz) {
+        // The reason for not using <T extends Parcelable> is because the caller could provide a
+        // super class to restrict the children that doesn't implement Parcelable itself while the
+        // children do, more details at b/210800751 (same reasoning applies here).
+        unparcel();
+        try {
+            // In Java 12, we can pass clazz.arrayType() instead of Parcelable[] and later casting.
+            return (T[]) getValue(key, Parcelable[].class, requireNonNull(clazz));
+        } catch (ClassCastException | BadTypeParcelableException e) {
+            typeWarning(key, clazz.getCanonicalName() + "[]", e);
+            return null;
+        }
+    }
+
+    /**
+     * Returns the value associated with the given key, or {@code null} if
+     * no mapping of the desired type exists for the given key or a {@code null}
      * value is explicitly associated with the key.
      *
-     * @param key a String, or null
-     * @return an ArrayList<T> value, or null
+     * <p><b>Note: </b> if the expected value is not a class provided by the Android platform,
+     * you must call {@link #setClassLoader(ClassLoader)} with the proper {@link ClassLoader} first.
+     * Otherwise, this method might throw an exception or return {@code null}.
+     *
+     * @param key a String, or {@code null}
+     * @return an ArrayList<T> value, or {@code null}
+     *
+     * @deprecated Use the type-safer {@link #getParcelable(String, Class)} starting from Android
+     *      {@link Build.VERSION_CODES#TIRAMISU}.
      */
+    @Deprecated
     @Nullable
     public <T extends Parcelable> ArrayList<T> getParcelableArrayList(@Nullable String key) {
         unparcel();
-        Object o = mMap.get(key);
+        Object o = getValue(key);
         if (o == null) {
             return null;
         }
@@ -1004,18 +1150,56 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
     }
 
     /**
+     * Returns the value associated with the given key, or {@code null} if:
+     * <ul>
+     *     <li>No mapping of the desired type exists for the given key.
+     *     <li>A {@code null} value is explicitly associated with the key.
+     *     <li>The object is not of type {@code clazz}.
+     * </ul>
+     *
+     * <p><b>Note: </b> if the expected value is not a class provided by the Android platform,
+     * you must call {@link #setClassLoader(ClassLoader)} with the proper {@link ClassLoader} first.
+     * Otherwise, this method might throw an exception or return {@code null}.
+     *
+     * <p><b>Warning: </b> if the list contains items implementing the {@link Parcelable} interface,
+     * the class that implements {@link Parcelable} has to be the immediately
+     * enclosing class of the runtime type of its CREATOR field (that is,
+     * {@link Class#getEnclosingClass()} has to return the parcelable implementing class),
+     * otherwise this method might throw an exception. If the Parcelable class does not enclose the
+     * CREATOR, use the deprecated {@link #getParcelableArrayList(String)} instead.
+     *
+     * @param key   a String, or {@code null}
+     * @param clazz The type of the items inside the array list. This is only verified when
+     *     unparceling.
+     * @return an ArrayList<T> value, or {@code null}
+     */
+    @SuppressLint("NullableCollection")
+    @SuppressWarnings("unchecked")
+    @Nullable
+    public <T> ArrayList<T> getParcelableArrayList(@Nullable String key,
+            @NonNull Class<? extends T> clazz) {
+        // The reason for not using <T extends Parcelable> is because the caller could provide a
+        // super class to restrict the children that doesn't implement Parcelable itself while the
+        // children do, more details at b/210800751 (same reasoning applies here).
+        return getArrayList(key, clazz);
+    }
+
+    /**
      * Returns the value associated with the given key, or null if
      * no mapping of the desired type exists for the given key or a null
      * value is explicitly associated with the key.
      *
      * @param key a String, or null
-     *
      * @return a SparseArray of T values, or null
+     *
+     * @deprecated Use the type-safer {@link #getSparseParcelableArray(String, Class)} starting from
+     *      Android {@link Build.VERSION_CODES#TIRAMISU}.
      */
+    @Deprecated
     @Nullable
     public <T extends Parcelable> SparseArray<T> getSparseParcelableArray(@Nullable String key) {
         unparcel();
-        Object o = mMap.get(key);
+        Object o = getValue(key);
         if (o == null) {
             return null;
         }
@@ -1028,17 +1212,75 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
     }
 
     /**
+     * Returns the value associated with the given key, or {@code null} if:
+     * <ul>
+     *     <li>No mapping of the desired type exists for the given key.
+     *     <li>A {@code null} value is explicitly associated with the key.
+     *     <li>The object is not of type {@code clazz}.
+     * </ul>
+     *
+     * <p><b>Warning: </b> if the list contains items implementing the {@link Parcelable} interface,
+     * the class that implements {@link Parcelable} has to be the immediately
+     * enclosing class of the runtime type of its CREATOR field (that is,
+     * {@link Class#getEnclosingClass()} has to return the parcelable implementing class),
+     * otherwise this method might throw an exception. If the Parcelable class does not enclose the
+     * CREATOR, use the deprecated {@link #getSparseParcelableArray(String)} instead.
+     *
+     * @param key a String, or null
+     * @param clazz The type of the items inside the sparse array. This is only verified when
+     *     unparceling.
+     * @return a SparseArray of T values, or null
+     */
+    @SuppressWarnings("unchecked")
+    @Nullable
+    public <T> SparseArray<T> getSparseParcelableArray(@Nullable String key,
+            @NonNull Class<? extends T> clazz) {
+        // The reason for not using <T extends Parcelable> is because the caller could provide a
+        // super class to restrict the children that doesn't implement Parcelable itself while the
+        // children do, more details at b/210800751 (same reasoning applies here).
+        unparcel();
+        try {
+            return (SparseArray<T>) getValue(key, SparseArray.class, requireNonNull(clazz));
+        } catch (ClassCastException | BadTypeParcelableException e) {
+            typeWarning(key, "SparseArray<" + clazz.getCanonicalName() + ">", e);
+            return null;
+        }
+    }
+
+    /**
      * Returns the value associated with the given key, or null if
      * no mapping of the desired type exists for the given key or a null
      * value is explicitly associated with the key.
      *
      * @param key a String, or null
      * @return a Serializable value, or null
+     *
+     * @deprecated Use the type-safer {@link #getSerializable(String, Class)} starting from Android
+     *      {@link Build.VERSION_CODES#TIRAMISU}.
      */
+    @Deprecated
     @Override
     @Nullable
     public Serializable getSerializable(@Nullable String key) {
         return super.getSerializable(key);
+    }
+
+    /**
+     * Returns the value associated with the given key, or {@code null} if:
+     * <ul>
+     *     <li>No mapping of the desired type exists for the given key.
+     *     <li>A {@code null} value is explicitly associated with the key.
+     *     <li>The object is not of type {@code clazz}.
+     * </ul>
+     *
+     * @param key   a String, or null
+     * @param clazz The expected class of the returned type
+     * @return a Serializable value, or null
+     */
+    @Nullable
+    public <T extends Serializable> T getSerializable(@Nullable String key,
+            @NonNull Class<T> clazz) {
+        return super.getSerializable(key, requireNonNull(clazz));
     }
 
     /**
@@ -1204,7 +1446,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
         }
     }
 
-    public static final Parcelable.Creator<Bundle> CREATOR =
+    public static final @android.annotation.NonNull Parcelable.Creator<Bundle> CREATOR =
         new Parcelable.Creator<Bundle>() {
         @Override
         public Bundle createFromParcel(Parcel in) {
@@ -1238,7 +1480,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
     public void writeToParcel(Parcel parcel, int flags) {
         final boolean oldAllowFds = parcel.pushAllowFds((mFlags & FLAG_ALLOW_FDS) != 0);
         try {
-            super.writeToParcelInner(parcel, flags);
+            writeToParcelInner(parcel, flags);
         } finally {
             parcel.restoreAllowFds(oldAllowFds);
         }
@@ -1250,11 +1492,15 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
      * @param parcel The parcel to overwrite this bundle from.
      */
     public void readFromParcel(Parcel parcel) {
-        super.readFromParcelInner(parcel);
+        readFromParcelInner(parcel);
         mFlags = FLAG_ALLOW_FDS;
         maybePrefillHasFds();
     }
 
+    /**
+     * Returns a string representation of the {@link Bundle} that may be suitable for debugging. It
+     * won't print the internal map if its content hasn't been unparcelled.
+     */
     @Override
     public synchronized String toString() {
         if (mParcelledData != null) {
@@ -1283,7 +1529,7 @@ public final class Bundle extends BaseBundle implements Cloneable, Parcelable {
     }
 
     /** @hide */
-    public void writeToProto(ProtoOutputStream proto, long fieldId) {
+    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
         final long token = proto.start(fieldId);
 
         if (mParcelledData != null) {

@@ -21,12 +21,15 @@ import android.os.Looper;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
 import org.robolectric.annotation.RealObject;
+import org.robolectric.shadows.LooperShadowPicker;
+import org.robolectric.shadows.ShadowLegacyLooper;
 import org.robolectric.shadows.ShadowLooper;
+import org.robolectric.shadows.ShadowPausedLooper;
 
 import java.util.Optional;
 
-@Implements(value = Looper.class, inheritImplementationMethods = true)
-public class FrameworkShadowLooper extends ShadowLooper {
+@Implements(value = Looper.class, shadowPicker = FrameworkShadowLooper.Picker.class)
+public class FrameworkShadowLooper extends ShadowLegacyLooper {
     @RealObject private Looper mLooper;
     private Optional<Boolean> mIsCurrentThread = Optional.empty();
 
@@ -39,10 +42,16 @@ public class FrameworkShadowLooper extends ShadowLooper {
     }
 
     @Implementation
-    public boolean isCurrentThread() {
+    protected boolean isCurrentThread() {
         if (mIsCurrentThread.isPresent()) {
             return mIsCurrentThread.get();
         }
         return Thread.currentThread() == mLooper.getThread();
+    }
+
+    public static class Picker extends LooperShadowPicker<ShadowLooper> {
+        public Picker() {
+            super(FrameworkShadowLooper.class, ShadowPausedLooper.class);
+        }
     }
 }

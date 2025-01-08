@@ -16,10 +16,10 @@
 
 package com.android.server.webkit;
 
-import android.content.Context;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
-import android.content.pm.UserInfo;
+import android.os.UserHandle;
 import android.webkit.UserPackage;
 import android.webkit.WebViewProviderInfo;
 
@@ -34,7 +34,6 @@ public class TestSystemImpl implements SystemInterface {
     List<Integer> mUsers = new ArrayList<>();
     // Package -> [user, package]
     Map<String, Map<Integer, PackageInfo>> mPackages = new HashMap();
-    private boolean mFallbackLogicEnabled;
     private final int mNumRelros;
     private final boolean mIsDebuggable;
     private int mMultiProcessSetting;
@@ -42,10 +41,9 @@ public class TestSystemImpl implements SystemInterface {
 
     public static final int PRIMARY_USER_ID = 0;
 
-    public TestSystemImpl(WebViewProviderInfo[] packageConfigs, boolean fallbackLogicEnabled,
-            int numRelros, boolean isDebuggable, boolean multiProcessDefault) {
+    public TestSystemImpl(WebViewProviderInfo[] packageConfigs, int numRelros, boolean isDebuggable,
+            boolean multiProcessDefault) {
         mPackageConfigs = packageConfigs;
-        mFallbackLogicEnabled = fallbackLogicEnabled;
         mNumRelros = numRelros;
         mIsDebuggable = isDebuggable;
         mUsers.add(PRIMARY_USER_ID);
@@ -67,10 +65,12 @@ public class TestSystemImpl implements SystemInterface {
     }
 
     @Override
-    public String getUserChosenWebViewProvider(Context context) { return mUserProvider; }
+    public String getUserChosenWebViewProvider() {
+        return mUserProvider;
+    }
 
     @Override
-    public void updateUserSetting(Context context, String newProviderName) {
+    public void updateUserSetting(String newProviderName) {
         mUserProvider = newProviderName;
     }
 
@@ -78,35 +78,43 @@ public class TestSystemImpl implements SystemInterface {
     public void killPackageDependents(String packageName) {}
 
     @Override
-    public boolean isFallbackLogicEnabled() {
-        return mFallbackLogicEnabled;
-    }
-
-    @Override
-    public void enableFallbackLogic(boolean enable) {
-        mFallbackLogicEnabled = enable;
-    }
-
-    @Override
-    public void uninstallAndDisablePackageForAllUsers(Context context, String packageName) {
-        enablePackageForAllUsers(context, packageName, false);
-    }
-
-    @Override
-    public void enablePackageForAllUsers(Context context, String packageName, boolean enable) {
+    public void enablePackageForAllUsers(String packageName, boolean enable) {
         for(int userId : mUsers) {
             enablePackageForUser(packageName, enable, userId);
         }
     }
 
     @Override
-    public void enablePackageForUser(String packageName, boolean enable, int userId) {
+    public void installExistingPackageForAllUsers(String packageName) {
+        for (int userId : mUsers) {
+            installPackageForUser(packageName, userId);
+        }
+    }
+
+    private void enablePackageForUser(String packageName, boolean enable, int userId) {
         Map<Integer, PackageInfo> userPackages = mPackages.get(packageName);
         if (userPackages == null) {
-            throw new IllegalArgumentException("There is no package called " + packageName);
+            return;
         }
         PackageInfo packageInfo = userPackages.get(userId);
+        if (packageInfo == null) {
+            return;
+        }
         packageInfo.applicationInfo.enabled = enable;
+        setPackageInfoForUser(userId, packageInfo);
+    }
+
+    private void installPackageForUser(String packageName, int userId) {
+        Map<Integer, PackageInfo> userPackages = mPackages.get(packageName);
+        if (userPackages == null) {
+            return;
+        }
+        PackageInfo packageInfo = userPackages.get(userId);
+        if (packageInfo == null) {
+            return;
+        }
+        packageInfo.applicationInfo.flags |= ApplicationInfo.FLAG_INSTALLED;
+        packageInfo.applicationInfo.privateFlags &= (~ApplicationInfo.PRIVATE_FLAG_HIDDEN);
         setPackageInfoForUser(userId, packageInfo);
     }
 
@@ -124,20 +132,15 @@ public class TestSystemImpl implements SystemInterface {
     }
 
     @Override
-    public List<UserPackage> getPackageInfoForProviderAllUsers(
-            Context context, WebViewProviderInfo info) {
+    public List<UserPackage> getPackageInfoForProviderAllUsers(WebViewProviderInfo info) {
         Map<Integer, PackageInfo> userPackages = mPackages.get(info.packageName);
         List<UserPackage> ret = new ArrayList();
         // Loop over defined users, and find the corresponding package for each user.
         for (int userId : mUsers) {
-            ret.add(new UserPackage(createUserInfo(userId),
+            ret.add(new UserPackage(UserHandle.of(userId),
                     userPackages == null ? null : userPackages.get(userId)));
         }
         return ret;
-    }
-
-    private static UserInfo createUserInfo(int userId) {
-        return new UserInfo(userId, "User nr. " + userId, 0 /* flags */);
     }
 
     /**
@@ -172,18 +175,18 @@ public class TestSystemImpl implements SystemInterface {
 
         pi = userPackages.get(PRIMARY_USER_ID);
         if (pi != null && pi.applicationInfo.isSystemApp()) {
-            return pi.applicationInfo.versionCode;
+            return pi.applicationInfo.longVersionCode;
         }
         throw new NameNotFoundException();
     }
 
     @Override
-    public int getMultiProcessSetting(Context context) {
+    public int getMultiProcessSetting() {
         return mMultiProcessSetting;
     }
 
     @Override
-    public void setMultiProcessSetting(Context context, int value) {
+    public void setMultiProcessSetting(int value) {
         mMultiProcessSetting = value;
     }
 
@@ -191,7 +194,13 @@ public class TestSystemImpl implements SystemInterface {
     public void notifyZygote(boolean enableMultiProcess) {}
 
     @Override
+    public void ensureZygoteStarted() {}
+
+    @Override
     public boolean isMultiProcessDefaultEnabled() {
         return mMultiProcessDefault;
     }
+
+    @Override
+    public void pinWebviewIfRequired(ApplicationInfo appInfo) {}
 }

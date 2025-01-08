@@ -26,17 +26,32 @@ import android.content.IOnPrimaryClipChangedListener;
  * {@hide}
  */
 interface IClipboard {
-    void setPrimaryClip(in ClipData clip, String callingPackage);
-    void clearPrimaryClip(String callingPackage);
-    ClipData getPrimaryClip(String pkg);
-    ClipDescription getPrimaryClipDescription(String callingPackage);
-    boolean hasPrimaryClip(String callingPackage);
+    void setPrimaryClip(in ClipData clip, String callingPackage, String attributionTag, int userId,
+            int deviceId);
+    @EnforcePermission("SET_CLIP_SOURCE")
+    void setPrimaryClipAsPackage(in ClipData clip, String callingPackage, String attributionTag,
+            int userId, int deviceId, String sourcePackage);
+    void clearPrimaryClip(String callingPackage, String attributionTag, int userId, int deviceId);
+    ClipData getPrimaryClip(String pkg, String attributionTag, int userId, int deviceId);
+    ClipDescription getPrimaryClipDescription(String callingPackage, String attributionTag,
+            int userId, int deviceId);
+    boolean hasPrimaryClip(String callingPackage, String attributionTag, int userId, int deviceId);
     void addPrimaryClipChangedListener(in IOnPrimaryClipChangedListener listener,
-            String callingPackage);
-    void removePrimaryClipChangedListener(in IOnPrimaryClipChangedListener listener);
+            String callingPackage, String attributionTag, int userId, int deviceId);
+    void removePrimaryClipChangedListener(in IOnPrimaryClipChangedListener listener,
+            String callingPackage, String attributionTag, int userId, int deviceId);
 
     /**
      * Returns true if the clipboard contains text; false otherwise.
      */
-    boolean hasClipboardText(String callingPackage);
+    boolean hasClipboardText(String callingPackage, String attributionTag, int userId,
+            int deviceId);
+
+    @EnforcePermission("SET_CLIP_SOURCE")
+    String getPrimaryClipSource(String callingPackage, String attributionTag, int userId,
+            int deviceId);
+
+    boolean areClipboardAccessNotificationsEnabledForUser(int userId);
+
+    void setClipboardAccessNotificationsEnabledForUser(boolean enable, int userId);
 }

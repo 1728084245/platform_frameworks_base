@@ -18,6 +18,7 @@
 #define _ANDROID_HARDWARE_HARDWAREBUFFER_H
 
 #include <android/hardware_buffer.h>
+#include <ui/GraphicBuffer.h>
 
 #include "jni.h"
 

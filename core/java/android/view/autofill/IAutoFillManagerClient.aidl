@@ -18,14 +18,19 @@ package android.view.autofill;
 
 import java.util.List;
 
+import android.content.ClipData;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.IntentSender;
+import android.credentials.GetCredentialResponse;
 import android.graphics.Rect;
 import android.os.IBinder;
 import android.view.autofill.AutofillId;
 import android.view.autofill.AutofillValue;
 import android.view.autofill.IAutofillWindowPresenter;
 import android.view.KeyEvent;
+
+import com.android.internal.os.IResultReceiver;
 
 /**
  * Object running in the application process and responsible for autofilling it.
@@ -41,13 +46,25 @@ oneway interface IAutoFillManagerClient {
     /**
       * Autofills the activity with the contents of a dataset.
       */
-    void autofill(int sessionId, in List<AutofillId> ids, in List<AutofillValue> values);
+    void autofill(int sessionId, in List<AutofillId> ids, in List<AutofillValue> values,
+            boolean hideHighlight);
+
+    void onGetCredentialResponse(int sessionId, in AutofillId id,
+                 in GetCredentialResponse response);
+
+    void onGetCredentialException(int sessionId, in AutofillId id,
+                     in String errorType, in String errorMsg);
+
+    /**
+     * Autofills the activity with rich content data (e.g. an image) from a dataset.
+     */
+    void autofillContent(int sessionId, in AutofillId id, in ClipData content);
 
     /**
       * Authenticates a fill response or a data set.
       */
     void authenticate(int sessionId, int authenticationId, in IntentSender intent,
-            in Intent fillInIntent);
+            in Intent fillInIntent, boolean authenticateInline);
 
     /**
       * Sets the views to track. If saveOnAllViewsInvisible is set and all these view are invisible
@@ -55,7 +72,8 @@ oneway interface IAutoFillManagerClient {
       */
     void setTrackedViews(int sessionId, in @nullable AutofillId[] savableIds,
             boolean saveOnAllViewsInvisible, boolean saveOnFinish,
-            in @nullable AutofillId[] fillableIds, in AutofillId saveTriggerId);
+            in @nullable AutofillId[] fillableIds, in AutofillId saveTriggerId,
+            in boolean shouldGrabViewFingerprints);
 
     /**
      * Requests showing the fill UI.
@@ -69,10 +87,27 @@ oneway interface IAutoFillManagerClient {
     void requestHideFillUi(int sessionId, in AutofillId id);
 
     /**
+     * Requests hiding the fill UI when it's destroyed
+     */
+    void requestHideFillUiWhenDestroyed(int sessionId, in AutofillId id);
+
+    /**
      * Notifies no fill UI will be shown, and also mark the state as finished if necessary (if
      * sessionFinishedState != 0).
      */
     void notifyNoFillUi(int sessionId, in AutofillId id, int sessionFinishedState);
+
+    /**
+     * Notifies that the fill UI was shown by the system (e.g. as inline chips in the keyboard).
+     */
+    void notifyFillUiShown(int sessionId, in AutofillId id);
+
+    /**
+     * Notifies that the fill UI previously shown by the system has been hidden by the system.
+     *
+     * @see #notifyFillUiShown
+     */
+    void notifyFillUiHidden(int sessionId, in AutofillId id);
 
     /**
      * Dispatches unhandled keyevent from autofill ui. Autofill ui handles DPAD and ENTER events,
@@ -93,8 +128,34 @@ oneway interface IAutoFillManagerClient {
 
    /**
      * Marks the state of the session as finished.
+     *
      * @param newState STATE_FINISHED (because the autofill service returned a null
      * FillResponse) or STATE_UNKNOWN (because the session was removed).
+     * @param autofillableIds list of ids that could trigger autofill, use to not handle a new
+     * session when they're entered.
      */
-   void setSessionFinished(int newState);
+   void setSessionFinished(int newState, in List<AutofillId> autofillableIds);
+
+   /**
+    * Gets a reference to the binder object that can be used by the Augmented Autofill service.
+    *
+    * @param receiver, whose AutofillManager.EXTRA_AUGMENTED_AUTOFILL_CLIENT extra will contain
+    * the reference.
+    */
+   void getAugmentedAutofillClient(in IResultReceiver result);
+
+   /**
+    * Notifies disables autofill for the app or activity.
+    */
+   void notifyDisableAutofill(long disableDuration, in ComponentName componentName);
+
+   /**
+    * Requests to show the soft input method if the focus is on the given id.
+    */
+   void requestShowSoftInput(in AutofillId id);
+
+    /**
+     * Notifies autofill ids that require to show the fill dialog.
+     */
+    void notifyFillDialogTriggerIds(in List<AutofillId> ids);
 }

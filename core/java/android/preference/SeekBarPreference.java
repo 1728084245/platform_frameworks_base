@@ -16,9 +16,10 @@
 
 package android.preference;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.res.TypedArray;
+import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.util.AttributeSet;
@@ -29,7 +30,14 @@ import android.widget.SeekBar.OnSeekBarChangeListener;
 
 /**
  * @hide
+ *
+ * @deprecated Use the <a href="{@docRoot}jetpack/androidx.html">AndroidX</a>
+ *      <a href="{@docRoot}reference/androidx/preference/package-summary.html">
+ *      Preference Library</a> for consistent behavior across all devices. For more information on
+ *      using the AndroidX Preference Library see
+ *      <a href="{@docRoot}guide/topics/ui/settings.html">Settings</a>.
  */
+@Deprecated
 public class SeekBarPreference extends Preference
         implements OnSeekBarChangeListener {
 
@@ -66,7 +74,7 @@ public class SeekBarPreference extends Preference
         this(context, attrs, com.android.internal.R.attr.seekBarPreferenceStyle);
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public SeekBarPreference(Context context) {
         this(context, null);
     }
@@ -242,7 +250,7 @@ public class SeekBarPreference extends Preference
         }
 
         @SuppressWarnings("unused")
-        public static final Parcelable.Creator<SavedState> CREATOR =
+        public static final @android.annotation.NonNull Parcelable.Creator<SavedState> CREATOR =
                 new Parcelable.Creator<SavedState>() {
             public SavedState createFromParcel(Parcel in) {
                 return new SavedState(in);

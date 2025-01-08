@@ -19,7 +19,10 @@ package android.content;
 import android.content.pm.UserInfo;
 import android.os.RemoteException;
 import android.os.UserHandle;
-import android.support.test.filters.LargeTest;
+import android.os.UserManager;
+import android.platform.test.annotations.Presubmit;
+
+import androidx.test.filters.LargeTest;
 
 /**
  * To run the tests, use
@@ -32,13 +35,14 @@ import android.support.test.filters.LargeTest;
  * Install: adb install -r \
  *     ${ANDROID_PRODUCT_OUT}/data/app/FrameworksCoreTests/FrameworksCoreTests.apk
  * Run: adb shell am instrument -e class android.content.ManagedUserContentResolverTest -w \
- *     com.android.frameworks.coretests/android.support.test.runner.AndroidJUnitRunner
+ *     com.android.frameworks.coretests/androidx.test.runner.AndroidJUnitRunner
  */
+@Presubmit
 @LargeTest
 public class ManagedUserContentResolverTest extends AbstractCrossUserContentResolverTest {
     @Override
     protected UserInfo createUser() throws RemoteException {
         return mUm.createProfileForUser("Managed user",
-                UserInfo.FLAG_MANAGED_PROFILE, UserHandle.myUserId());
+                UserManager.USER_TYPE_PROFILE_MANAGED, /* flags */ 0, UserHandle.myUserId());
     }
 }

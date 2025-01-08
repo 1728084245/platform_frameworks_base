@@ -16,7 +16,7 @@
 
 package android.media;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.graphics.Canvas;
 import android.media.MediaPlayer.TrackInfo;
 import android.os.Handler;
@@ -263,7 +263,9 @@ public abstract class SubtitleTrack implements MediaTimeProvider.OnMediaTimeList
         }
         updateView(mActiveCues);
         mNextScheduledTimeMs = -1;
-        mTimeProvider.notifyAt(MediaTimeProvider.NO_TIME, this);
+        if (mTimeProvider != null) {
+            mTimeProvider.notifyAt(MediaTimeProvider.NO_TIME, this);
+        }
     }
 
     /** @hide */

@@ -16,59 +16,99 @@
 
 package com.android.server.locksettings;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+
 import android.content.Context;
 
-import com.android.server.PersistentDataBlockManagerInternal;
+import com.android.server.pdb.PersistentDataBlockManagerInternal;
+
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
 
 import java.io.File;
+import java.util.Arrays;
 
 public class LockSettingsStorageTestable extends LockSettingsStorage {
 
-    public File mStorageDir;
-    public PersistentDataBlockManagerInternal mPersistentDataBlock;
+    public final File mStorageDir;
+    public PersistentDataBlockManagerInternal mPersistentDataBlockManager;
+    private byte[] mPersistentData;
+    private boolean mIsFactoryResetProtectionActive = false;
 
     public LockSettingsStorageTestable(Context context, File storageDir) {
         super(context);
         mStorageDir = storageDir;
+        mPersistentDataBlockManager = mock(PersistentDataBlockManagerInternal.class);
+        doAnswer(new Answer<Void>() {
+            @Override
+            public Void answer(InvocationOnMock invocation) throws Throwable {
+                byte[] handle = (byte[]) invocation.getArguments()[0];
+                if (handle != null) {
+                    mPersistentData = Arrays.copyOf(handle, handle.length);
+                } else {
+                    mPersistentData = null;
+                }
+                return null;
+            }
+        }).when(mPersistentDataBlockManager).setFrpCredentialHandle(any());
+        // For some reasons, simply mocking getFrpCredentialHandle() with
+        // when(mPersistentDataBlockManager.getFrpCredentialHandle()).thenReturn(mPersistentData)
+        // does not work, I had to use the long-winded way below.
+        doAnswer(new Answer<byte[]>() {
+            @Override
+            public byte[] answer(InvocationOnMock invocation) throws Throwable {
+                return mPersistentData;
+            }
+        }).when(mPersistentDataBlockManager).getFrpCredentialHandle();
+    }
+
+    void setTestFactoryResetProtectionState(boolean active) {
+        mIsFactoryResetProtectionActive = active;
     }
 
     @Override
-    String getLockPatternFilename(int userId) {
-        return makeDirs(mStorageDir,
-                super.getLockPatternFilename(userId)).getAbsolutePath();
+    File getChildProfileLockFile(int userId) {
+        return remapToStorageDir(super.getChildProfileLockFile(userId));
     }
 
     @Override
-    String getLockPasswordFilename(int userId) {
-        return makeDirs(mStorageDir,
-                super.getLockPasswordFilename(userId)).getAbsolutePath();
+    File getRebootEscrowServerBlobFile() {
+        return remapToStorageDir(super.getRebootEscrowServerBlobFile());
     }
 
     @Override
-    String getChildProfileLockFile(int userId) {
-        return makeDirs(mStorageDir,
-                super.getChildProfileLockFile(userId)).getAbsolutePath();
+    File getRebootEscrowFile(int userId) {
+        return remapToStorageDir(super.getRebootEscrowFile(userId));
     }
 
     @Override
     protected File getSyntheticPasswordDirectoryForUser(int userId) {
-        return makeDirs(mStorageDir, super.getSyntheticPasswordDirectoryForUser(
-                userId).getAbsolutePath());
+        return remapToStorageDir(super.getSyntheticPasswordDirectoryForUser(userId));
     }
 
     @Override
-    public PersistentDataBlockManagerInternal getPersistentDataBlock() {
-        return mPersistentDataBlock;
+    File getRepairModePersistentDataFile() {
+        return remapToStorageDir(super.getRepairModePersistentDataFile());
     }
 
-    private File makeDirs(File baseDir, String filePath) {
-        File path = new File(filePath);
-        if (path.getParent() == null) {
-            return new File(baseDir, filePath);
-        } else {
-            File mappedDir = new File(baseDir, path.getParent());
-            mappedDir.mkdirs();
-            return new File(mappedDir, path.getName());
-        }
+    @Override
+    PersistentDataBlockManagerInternal getPersistentDataBlockManager() {
+        return mPersistentDataBlockManager;
+    }
+    @Override
+    public boolean isAutoPinConfirmSettingEnabled(int userId) {
+        return true;
+    }
+    private File remapToStorageDir(File origPath) {
+        File mappedPath = new File(mStorageDir, origPath.toString());
+        mappedPath.getParentFile().mkdirs();
+        return mappedPath;
+    }
+
+    @Override
+    public boolean isFactoryResetProtectionActive() {
+        return mIsFactoryResetProtectionActive;
     }
 }

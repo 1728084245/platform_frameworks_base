@@ -28,9 +28,7 @@ import com.android.systemui.plugins.annotations.ProvidesInterface;
 public interface QSFactory extends Plugin {
 
     String ACTION = "com.android.systemui.action.PLUGIN_QS_FACTORY";
-    int VERSION = 1;
+    int VERSION = 3;
 
     QSTile createTile(String tileSpec);
-    QSTileView createTileView(QSTile tile, boolean collapsedView);
-
 }

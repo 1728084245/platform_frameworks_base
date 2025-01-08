@@ -18,66 +18,52 @@
 #define LOG_TAG "AndroidRuntime"
 #define LOG_NDEBUG 1
 
-#include <android_runtime/AndroidRuntime.h>
-
 #include <android-base/macros.h>
+#include <android-base/parsebool.h>
 #include <android-base/properties.h>
+#include <android/graphics/jni_runtime.h>
+#include <android_runtime/AndroidRuntime.h>
+#include <assert.h>
 #include <binder/IBinder.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
-#include <utils/Log.h>
-#include <utils/misc.h>
-#include <utils/Trace.h>
 #include <binder/Parcel.h>
-#include <utils/threads.h>
+#include <bionic/malloc.h>
 #include <cutils/properties.h>
-#include <server_configurable_flags/get_flags.h>
-
-#include <SkGraphics.h>
-
-#include "jni.h"
+#include <dirent.h>
+#include <dlfcn.h>
 #include <nativehelper/JNIHelp.h>
 #include <nativehelper/JniInvocation.h>
-#include "android_util_Binder.h"
-
-#include <stdio.h>
+#include <server_configurable_flags/get_flags.h>
 #include <signal.h>
+#include <stdio.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <signal.h>
-#include <dirent.h>
-#include <assert.h>
+#include <utils/Log.h>
+#include <utils/Trace.h>
+#include <utils/misc.h>
+#include <utils/threads.h>
 
 #include <string>
 #include <vector>
 
+#include "android_util_Binder.h"
+#include "jni.h"
+
 using namespace android;
+using android::base::GetBoolProperty;
 using android::base::GetProperty;
+using android::base::ParseBool;
+using android::base::ParseBoolResult;
 
 extern int register_android_os_Binder(JNIEnv* env);
 extern int register_android_os_Process(JNIEnv* env);
-extern int register_android_graphics_Bitmap(JNIEnv*);
-extern int register_android_graphics_BitmapFactory(JNIEnv*);
-extern int register_android_graphics_BitmapRegionDecoder(JNIEnv*);
-extern int register_android_graphics_ByteBufferStreamAdaptor(JNIEnv* env);
-extern int register_android_graphics_Camera(JNIEnv* env);
-extern int register_android_graphics_CreateJavaOutputStreamAdaptor(JNIEnv* env);
 extern int register_android_graphics_GraphicBuffer(JNIEnv* env);
-extern int register_android_graphics_Graphics(JNIEnv* env);
-extern int register_android_graphics_ImageDecoder(JNIEnv*);
-extern int register_android_graphics_drawable_AnimatedImageDrawable(JNIEnv*);
-extern int register_android_graphics_Interpolator(JNIEnv* env);
-extern int register_android_graphics_MaskFilter(JNIEnv* env);
-extern int register_android_graphics_Movie(JNIEnv* env);
-extern int register_android_graphics_NinePatch(JNIEnv*);
-extern int register_android_graphics_PathEffect(JNIEnv* env);
-extern int register_android_graphics_Shader(JNIEnv* env);
-extern int register_android_graphics_Typeface(JNIEnv* env);
-extern int register_android_graphics_YuvImage(JNIEnv* env);
 
 extern int register_com_google_android_gles_jni_EGLImpl(JNIEnv* env);
 extern int register_com_google_android_gles_jni_GLImpl(JNIEnv* env);
 extern int register_android_opengl_jni_EGL14(JNIEnv* env);
+extern int register_android_opengl_jni_EGL15(JNIEnv* env);
 extern int register_android_opengl_jni_EGLExt(JNIEnv* env);
 extern int register_android_opengl_jni_GLES10(JNIEnv* env);
 extern int register_android_opengl_jni_GLES10Ext(JNIEnv* env);
@@ -91,24 +77,33 @@ extern int register_android_opengl_jni_GLES32(JNIEnv* env);
 
 extern int register_android_hardware_Camera(JNIEnv *env);
 extern int register_android_hardware_camera2_CameraMetadata(JNIEnv *env);
-extern int register_android_hardware_camera2_legacy_LegacyCameraDevice(JNIEnv *env);
-extern int register_android_hardware_camera2_legacy_PerfMeasurement(JNIEnv *env);
 extern int register_android_hardware_camera2_DngCreator(JNIEnv *env);
+extern int register_android_hardware_camera2_impl_CameraExtensionJpegProcessor(JNIEnv* env);
+extern int register_android_hardware_camera2_utils_SurfaceUtils(JNIEnv* env);
+extern int register_android_hardware_display_DisplayManagerGlobal(JNIEnv* env);
 extern int register_android_hardware_HardwareBuffer(JNIEnv *env);
+extern int register_android_hardware_OverlayProperties(JNIEnv* env);
 extern int register_android_hardware_SensorManager(JNIEnv *env);
 extern int register_android_hardware_SerialPort(JNIEnv *env);
-extern int register_android_hardware_SoundTrigger(JNIEnv *env);
+extern int register_android_hardware_SyncFence(JNIEnv* env);
 extern int register_android_hardware_UsbDevice(JNIEnv *env);
 extern int register_android_hardware_UsbDeviceConnection(JNIEnv *env);
 extern int register_android_hardware_UsbRequest(JNIEnv *env);
 extern int register_android_hardware_location_ActivityRecognitionHardware(JNIEnv* env);
 
+extern int register_android_media_AudioDeviceAttributes(JNIEnv* env);
+extern int register_android_media_AudioEffectDescriptor(JNIEnv *env);
 extern int register_android_media_AudioRecord(JNIEnv *env);
 extern int register_android_media_AudioSystem(JNIEnv *env);
 extern int register_android_media_AudioTrack(JNIEnv *env);
+extern int register_android_media_AudioAttributes(JNIEnv *env);
+extern int register_android_media_AudioProductStrategies(JNIEnv *env);
+extern int register_android_media_AudioVolumeGroups(JNIEnv *env);
+extern int register_android_media_AudioVolumeGroupChangeHandler(JNIEnv *env);
 extern int register_android_media_MicrophoneInfo(JNIEnv *env);
-extern int register_android_media_JetPlayer(JNIEnv *env);
 extern int register_android_media_ToneGenerator(JNIEnv *env);
+extern int register_android_media_audio_common_AidlConversion(JNIEnv* env);
+extern int register_android_media_midi(JNIEnv *env);
 
 namespace android {
 
@@ -118,48 +113,32 @@ namespace android {
  */
 extern int register_android_app_admin_SecurityLog(JNIEnv* env);
 extern int register_android_content_AssetManager(JNIEnv* env);
+extern int register_android_util_CharsetUtils(JNIEnv* env);
 extern int register_android_util_EventLog(JNIEnv* env);
-extern int register_android_util_StatsLog(JNIEnv* env);
-extern int register_android_util_StatsLogInternal(JNIEnv* env);
 extern int register_android_util_Log(JNIEnv* env);
 extern int register_android_util_MemoryIntArray(JNIEnv* env);
-extern int register_android_util_PathParser(JNIEnv* env);
 extern int register_android_content_StringBlock(JNIEnv* env);
 extern int register_android_content_XmlBlock(JNIEnv* env);
 extern int register_android_content_res_ApkAssets(JNIEnv* env);
-extern int register_android_graphics_Canvas(JNIEnv* env);
-extern int register_android_graphics_CanvasProperty(JNIEnv* env);
-extern int register_android_graphics_ColorFilter(JNIEnv* env);
-extern int register_android_graphics_DrawFilter(JNIEnv* env);
-extern int register_android_graphics_FontFamily(JNIEnv* env);
-extern int register_android_graphics_Matrix(JNIEnv* env);
-extern int register_android_graphics_Paint(JNIEnv* env);
-extern int register_android_graphics_Path(JNIEnv* env);
-extern int register_android_graphics_PathMeasure(JNIEnv* env);
-extern int register_android_graphics_Picture(JNIEnv*);
-extern int register_android_graphics_Region(JNIEnv* env);
+extern int register_android_content_res_ResourceTimer(JNIEnv* env);
+extern int register_android_graphics_BLASTBufferQueue(JNIEnv* env);
 extern int register_android_graphics_SurfaceTexture(JNIEnv* env);
-extern int register_android_graphics_drawable_AnimatedVectorDrawable(JNIEnv* env);
-extern int register_android_graphics_drawable_VectorDrawable(JNIEnv* env);
-extern int register_android_graphics_pdf_PdfDocument(JNIEnv* env);
-extern int register_android_graphics_pdf_PdfEditor(JNIEnv* env);
-extern int register_android_graphics_pdf_PdfRenderer(JNIEnv* env);
 extern int register_android_view_DisplayEventReceiver(JNIEnv* env);
-extern int register_android_view_DisplayListCanvas(JNIEnv* env);
-extern int register_android_view_TextureLayer(JNIEnv* env);
-extern int register_android_view_RenderNode(JNIEnv* env);
-extern int register_android_view_RenderNodeAnimator(JNIEnv* env);
+extern int register_android_view_InputApplicationHandle(JNIEnv* env);
+extern int register_android_view_InputWindowHandle(JNIEnv* env);
 extern int register_android_view_Surface(JNIEnv* env);
 extern int register_android_view_SurfaceControl(JNIEnv* env);
+extern int register_android_view_SurfaceControlHdrLayerInfoListener(JNIEnv* env);
 extern int register_android_view_SurfaceSession(JNIEnv* env);
+extern int register_android_view_CompositionSamplingListener(JNIEnv* env);
 extern int register_android_view_TextureView(JNIEnv* env);
-extern int register_android_view_ThreadedRenderer(JNIEnv* env);
-extern int register_com_android_internal_view_animation_NativeInterpolatorFactoryHelper(JNIEnv *env);
+extern int register_android_view_TunnelModeEnabledListener(JNIEnv* env);
 extern int register_android_database_CursorWindow(JNIEnv* env);
 extern int register_android_database_SQLiteConnection(JNIEnv* env);
 extern int register_android_database_SQLiteGlobal(JNIEnv* env);
 extern int register_android_database_SQLiteDebug(JNIEnv* env);
-extern int register_android_nio_utils(JNIEnv* env);
+extern int register_android_database_SQLiteRawStatement(JNIEnv* env);
+extern int register_android_media_MediaMetrics(JNIEnv *env);
 extern int register_android_os_Debug(JNIEnv* env);
 extern int register_android_os_GraphicsEnvironment(JNIEnv* env);
 extern int register_android_os_HidlSupport(JNIEnv* env);
@@ -168,27 +147,28 @@ extern int register_android_os_HwBlob(JNIEnv *env);
 extern int register_android_os_HwParcel(JNIEnv *env);
 extern int register_android_os_HwRemoteBinder(JNIEnv *env);
 extern int register_android_os_NativeHandle(JNIEnv *env);
+extern int register_android_os_ServiceManager(JNIEnv *env);
+extern int register_android_os_ServiceManagerNative(JNIEnv* env);
 extern int register_android_os_MessageQueue(JNIEnv* env);
 extern int register_android_os_Parcel(JNIEnv* env);
+extern int register_android_os_PerformanceHintManager(JNIEnv* env);
 extern int register_android_os_SELinux(JNIEnv* env);
-extern int register_android_os_VintfObject(JNIEnv *env);
-extern int register_android_os_VintfRuntimeInfo(JNIEnv *env);
+extern int register_android_os_storage_StorageManager(JNIEnv* env);
 extern int register_android_os_SystemProperties(JNIEnv *env);
 extern int register_android_os_SystemClock(JNIEnv* env);
 extern int register_android_os_Trace(JNIEnv* env);
 extern int register_android_os_FileObserver(JNIEnv *env);
 extern int register_android_os_UEventObserver(JNIEnv* env);
+extern int register_android_os_HidlMemory(JNIEnv* env);
 extern int register_android_os_MemoryFile(JNIEnv* env);
 extern int register_android_os_SharedMemory(JNIEnv* env);
+extern int register_android_service_DataLoaderService(JNIEnv* env);
+extern int register_android_os_incremental_IncrementalManager(JNIEnv* env);
 extern int register_android_net_LocalSocketImpl(JNIEnv* env);
-extern int register_android_net_NetworkUtils(JNIEnv* env);
 extern int register_android_text_AndroidCharacter(JNIEnv *env);
 extern int register_android_text_Hyphenator(JNIEnv *env);
-extern int register_android_text_MeasuredParagraph(JNIEnv* env);
-extern int register_android_text_StaticLayout(JNIEnv *env);
 extern int register_android_opengl_classes(JNIEnv *env);
 extern int register_android_ddm_DdmHandleNativeHeap(JNIEnv *env);
-extern int register_android_server_NetworkManagementSocketTagger(JNIEnv* env);
 extern int register_android_backup_BackupDataInput(JNIEnv *env);
 extern int register_android_backup_BackupDataOutput(JNIEnv *env);
 extern int register_android_backup_FileBackupHelperBase(JNIEnv *env);
@@ -207,18 +187,45 @@ extern int register_android_view_InputQueue(JNIEnv* env);
 extern int register_android_view_KeyCharacterMap(JNIEnv *env);
 extern int register_android_view_KeyEvent(JNIEnv* env);
 extern int register_android_view_MotionEvent(JNIEnv* env);
+extern int register_android_view_MotionPredictor(JNIEnv* env);
 extern int register_android_view_PointerIcon(JNIEnv* env);
 extern int register_android_view_VelocityTracker(JNIEnv* env);
+extern int register_android_view_VerifiedKeyEvent(JNIEnv* env);
+extern int register_android_view_VerifiedMotionEvent(JNIEnv* env);
 extern int register_android_content_res_ObbScanner(JNIEnv* env);
 extern int register_android_content_res_Configuration(JNIEnv* env);
 extern int register_android_animation_PropertyValuesHolder(JNIEnv *env);
 extern int register_android_security_Scrypt(JNIEnv *env);
+extern int register_com_android_internal_content_F2fsUtils(JNIEnv* env);
 extern int register_com_android_internal_content_NativeLibraryHelper(JNIEnv *env);
+extern int register_com_android_internal_content_om_OverlayConfig(JNIEnv *env);
+extern int register_com_android_internal_content_om_OverlayManagerImpl(JNIEnv* env);
+extern int register_com_android_internal_net_NetworkUtilsInternal(JNIEnv* env);
 extern int register_com_android_internal_os_ClassLoaderFactory(JNIEnv* env);
+extern int register_com_android_internal_os_DebugStore(JNIEnv* env);
 extern int register_com_android_internal_os_FuseAppLoop(JNIEnv* env);
+extern int register_com_android_internal_os_KernelAllocationStats(JNIEnv* env);
+extern int register_com_android_internal_os_KernelCpuBpfTracking(JNIEnv* env);
+extern int register_com_android_internal_os_KernelCpuTotalBpfMapReader(JNIEnv* env);
+extern int register_com_android_internal_os_KernelCpuUidBpfMapReader(JNIEnv *env);
+extern int register_com_android_internal_os_KernelSingleProcessCpuThreadReader(JNIEnv* env);
+extern int register_com_android_internal_os_KernelSingleUidTimeReader(JNIEnv *env);
+extern int register_com_android_internal_os_LongArrayMultiStateCounter(JNIEnv* env);
+extern int register_com_android_internal_os_LongMultiStateCounter(JNIEnv* env);
 extern int register_com_android_internal_os_Zygote(JNIEnv *env);
+extern int register_com_android_internal_os_ZygoteCommandBuffer(JNIEnv *env);
 extern int register_com_android_internal_os_ZygoteInit(JNIEnv *env);
+extern int register_com_android_internal_security_VerityUtils(JNIEnv* env);
+extern int register_com_android_internal_util_ArrayUtils(JNIEnv* env);
 extern int register_com_android_internal_util_VirtualRefBasePtr(JNIEnv *env);
+extern int register_android_window_WindowInfosListener(JNIEnv* env);
+extern int register_android_window_ScreenCapture(JNIEnv* env);
+extern int register_jni_common(JNIEnv* env);
+extern int register_android_tracing_PerfettoDataSource(JNIEnv* env);
+extern int register_android_tracing_PerfettoDataSourceInstance(JNIEnv* env);
+extern int register_android_tracing_PerfettoProducer(JNIEnv* env);
+extern int register_android_window_InputTransferToken(JNIEnv* env);
+extern int register_android_view_WindowManagerGlobal(JNIEnv* env);
 
 // Namespace for Android Runtime flags applied during boot time.
 static const char* RUNTIME_NATIVE_BOOT_NAMESPACE = "runtime_native_boot";
@@ -232,10 +239,14 @@ static const char* kGenerationalCCRuntimeOption = "-Xgc:generational_cc";
 // Copying (CC) garbage collector.
 static const char* kNoGenerationalCCRuntimeOption = "-Xgc:nogenerational_cc";
 
+// Phenotype property name for enabling profiling the boot class path.
+static const char* PROFILE_BOOT_CLASS_PATH = "profilebootclasspath";
+
 // Feature flag name for running the JIT in Zygote experiment, b/119800099.
-static const char* ENABLE_APEX_IMAGE = "enable_apex_image";
-// Flag to pass to the runtime when using the apex image.
-static const char* kApexImageOption = "-Ximage:/system/framework/apex.art";
+// TODO: Rename the server-level flag or remove.
+static const char* ENABLE_JITZYGOTE_IMAGE = "enable_apex_image";
+// Flag to pass to the runtime when using the JIT Zygote image.
+static const char* kJitZygoteImageOption = "-Xforcejitzygote";
 
 // Feature flag name for disabling lock profiling.
 static const char* DISABLE_LOCK_PROFILING = "disable_lock_profiling";
@@ -270,10 +281,10 @@ static void com_android_internal_os_RuntimeInit_nativeSetExitWithoutCleanup(JNIE
 int register_com_android_internal_os_RuntimeInit(JNIEnv* env)
 {
     const JNINativeMethod methods[] = {
-        { "nativeFinishInit", "()V",
-            (void*) com_android_internal_os_RuntimeInit_nativeFinishInit },
-        { "nativeSetExitWithoutCleanup", "(Z)V",
-            (void*) com_android_internal_os_RuntimeInit_nativeSetExitWithoutCleanup },
+            {"nativeFinishInit", "()V",
+             (void*)com_android_internal_os_RuntimeInit_nativeFinishInit},
+            {"nativeSetExitWithoutCleanup", "(Z)V",
+             (void*)com_android_internal_os_RuntimeInit_nativeSetExitWithoutCleanup},
     };
     return jniRegisterNativeMethods(env, "com/android/internal/os/RuntimeInit",
         methods, NELEM(methods));
@@ -298,7 +309,7 @@ AndroidRuntime::AndroidRuntime(char* argBlockStart, const size_t argBlockLength)
         mArgBlockStart(argBlockStart),
         mArgBlockLength(argBlockLength)
 {
-    SkGraphics::Init();
+    init_android_graphics();
 
     // Pre-allocate enough space to hold a fair number of options.
     mOptions.setCapacity(20);
@@ -321,6 +332,8 @@ AndroidRuntime::~AndroidRuntime()
 }
 
 void AndroidRuntime::setArgv0(const char* argv0, bool setProcName) {
+    // Set the kernel's task name, for as much of the name as we can fit.
+    // The kernel's TASK_COMM_LEN minus one for the terminating NUL == 15.
     if (setProcName) {
         int len = strlen(argv0);
         if (len < 15) {
@@ -329,8 +342,14 @@ void AndroidRuntime::setArgv0(const char* argv0, bool setProcName) {
             pthread_setname_np(pthread_self(), argv0 + len - 15);
         }
     }
+
+    // Directly change the memory pointed to by argv[0].
     memset(mArgBlockStart, 0, mArgBlockLength);
     strlcpy(mArgBlockStart, argv0, mArgBlockLength);
+
+    // Let bionic know that we just did that, because __progname points
+    // into argv[0] (https://issuetracker.google.com/152893281).
+    setprogname(mArgBlockStart);
 }
 
 status_t AndroidRuntime::callMain(const String8& className, jclass clazz,
@@ -339,7 +358,7 @@ status_t AndroidRuntime::callMain(const String8& className, jclass clazz,
     JNIEnv* env;
     jmethodID methodId;
 
-    ALOGD("Calling main entry %s", className.string());
+    ALOGD("Calling main entry %s", className.c_str());
 
     env = getJNIEnv();
     if (clazz == NULL || env == NULL) {
@@ -348,7 +367,7 @@ status_t AndroidRuntime::callMain(const String8& className, jclass clazz,
 
     methodId = env->GetStaticMethodID(clazz, "main", "([Ljava/lang/String;)V");
     if (methodId == NULL) {
-        ALOGE("ERROR: could not find method %s.main(String[])\n", className.string());
+        ALOGE("ERROR: could not find method %s.main(String[])\n", className.c_str());
         return UNKNOWN_ERROR;
     }
 
@@ -364,7 +383,7 @@ status_t AndroidRuntime::callMain(const String8& className, jclass clazz,
     strArray = env->NewObjectArray(numArgs, stringClass, NULL);
 
     for (size_t i = 0; i < numArgs; i++) {
-        jstring argStr = env->NewStringUTF(args[i].string());
+        jstring argStr = env->NewStringUTF(args[i].c_str());
         env->SetObjectArrayElement(strArray, i, argStr);
     }
 
@@ -633,25 +652,37 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     char jitmaxsizeOptsBuf[sizeof("-Xjitmaxsize:")-1 + PROPERTY_VALUE_MAX];
     char jitinitialsizeOptsBuf[sizeof("-Xjitinitialsize:")-1 + PROPERTY_VALUE_MAX];
     char jitthresholdOptsBuf[sizeof("-Xjitthreshold:")-1 + PROPERTY_VALUE_MAX];
-    char useJitProfilesOptsBuf[sizeof("-Xjitsaveprofilinginfo:")-1 + PROPERTY_VALUE_MAX];
     char jitprithreadweightOptBuf[sizeof("-Xjitprithreadweight:")-1 + PROPERTY_VALUE_MAX];
     char jittransitionweightOptBuf[sizeof("-Xjittransitionweight:")-1 + PROPERTY_VALUE_MAX];
     char hotstartupsamplesOptsBuf[sizeof("-Xps-hot-startup-method-samples:")-1 + PROPERTY_VALUE_MAX];
-    char madviseRandomOptsBuf[sizeof("-XX:MadviseRandomAccess:")-1 + PROPERTY_VALUE_MAX];
+    char saveResolvedClassesDelayMsOptsBuf[
+            sizeof("-Xps-save-resolved-classes-delay-ms:")-1 + PROPERTY_VALUE_MAX];
+    char profileMinSavePeriodOptsBuf[sizeof("-Xps-min-save-period-ms:")-1 + PROPERTY_VALUE_MAX];
+    char profileMinFirstSaveOptsBuf[sizeof("-Xps-min-first-save-ms:") - 1 + PROPERTY_VALUE_MAX];
+    char profileInlineCacheThresholdOptsBuf[
+            sizeof("-Xps-inline-cache-threshold:") - 1 + PROPERTY_VALUE_MAX];
+    char madviseWillNeedFileSizeVdex[
+            sizeof("-XMadviseWillNeedVdexFileSize:")-1 + PROPERTY_VALUE_MAX];
+    char madviseWillNeedFileSizeOdex[
+            sizeof("-XMadviseWillNeedOdexFileSize:")-1 + PROPERTY_VALUE_MAX];
+    char madviseWillNeedFileSizeArt[
+            sizeof("-XMadviseWillNeedArtFileSize:")-1 + PROPERTY_VALUE_MAX];
     char gctypeOptsBuf[sizeof("-Xgc:")-1 + PROPERTY_VALUE_MAX];
     char backgroundgcOptsBuf[sizeof("-XX:BackgroundGC=")-1 + PROPERTY_VALUE_MAX];
     char heaptargetutilizationOptsBuf[sizeof("-XX:HeapTargetUtilization=")-1 + PROPERTY_VALUE_MAX];
     char foregroundHeapGrowthMultiplierOptsBuf[
             sizeof("-XX:ForegroundHeapGrowthMultiplier=")-1 + PROPERTY_VALUE_MAX];
+    char finalizerTimeoutMsOptsBuf[sizeof("-XX:FinalizerTimeoutMs=")-1 + PROPERTY_VALUE_MAX];
+    char threadSuspendTimeoutOptsBuf[sizeof("-XX:ThreadSuspendTimeout=")-1 + PROPERTY_VALUE_MAX];
     char cachePruneBuf[sizeof("-Xzygote-max-boot-retry=")-1 + PROPERTY_VALUE_MAX];
     char dex2oatXmsImageFlagsBuf[sizeof("-Xms")-1 + PROPERTY_VALUE_MAX];
     char dex2oatXmxImageFlagsBuf[sizeof("-Xmx")-1 + PROPERTY_VALUE_MAX];
-    char dex2oatXmsFlagsBuf[sizeof("-Xms")-1 + PROPERTY_VALUE_MAX];
-    char dex2oatXmxFlagsBuf[sizeof("-Xmx")-1 + PROPERTY_VALUE_MAX];
     char dex2oatCompilerFilterBuf[sizeof("--compiler-filter=")-1 + PROPERTY_VALUE_MAX];
     char dex2oatImageCompilerFilterBuf[sizeof("--compiler-filter=")-1 + PROPERTY_VALUE_MAX];
     char dex2oatThreadsBuf[sizeof("-j")-1 + PROPERTY_VALUE_MAX];
     char dex2oatThreadsImageBuf[sizeof("-j")-1 + PROPERTY_VALUE_MAX];
+    char dex2oatCpuSetBuf[sizeof("--cpu-set=")-1 + PROPERTY_VALUE_MAX];
+    char dex2oatCpuSetImageBuf[sizeof("--cpu-set=")-1 + PROPERTY_VALUE_MAX];
     char dex2oat_isa_variant_key[PROPERTY_KEY_MAX];
     char dex2oat_isa_variant[sizeof("--instruction-set-variant=") -1 + PROPERTY_VALUE_MAX];
     char dex2oat_isa_features_key[PROPERTY_KEY_MAX];
@@ -659,7 +690,9 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     char dex2oatFlagsBuf[PROPERTY_VALUE_MAX];
     char dex2oatImageFlagsBuf[PROPERTY_VALUE_MAX];
     char extraOptsBuf[PROPERTY_VALUE_MAX];
-    char voldDecryptBuf[PROPERTY_VALUE_MAX];
+    char perfettoHprofOptBuf[sizeof("-XX:PerfettoHprof=") + PROPERTY_VALUE_MAX];
+    char perfettoJavaHeapStackOptBuf[
+            sizeof("-XX:PerfettoJavaHeapStackProf=") + PROPERTY_VALUE_MAX];
     enum {
       kEMDefault,
       kEMIntPortable,
@@ -674,16 +707,49 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     char methodTraceFileBuf[sizeof("-Xmethod-trace-file:") + PROPERTY_VALUE_MAX];
     char methodTraceFileSizeBuf[sizeof("-Xmethod-trace-file-size:") + PROPERTY_VALUE_MAX];
     std::string fingerprintBuf;
+    char javaZygoteForkLoopBuf[sizeof("-XX:ForceJavaZygoteForkLoop=") + PROPERTY_VALUE_MAX];
     char jdwpProviderBuf[sizeof("-XjdwpProvider:") - 1 + PROPERTY_VALUE_MAX];
+    char opaqueJniIds[sizeof("-Xopaque-jni-ids:") - 1 + PROPERTY_VALUE_MAX];
     char bootImageBuf[sizeof("-Ximage:") - 1 + PROPERTY_VALUE_MAX];
 
-    std::string use_apex_image =
-        server_configurable_flags::GetServerConfigurableFlag(RUNTIME_NATIVE_BOOT_NAMESPACE,
-                                                             ENABLE_APEX_IMAGE,
-                                                             /*default_value=*/ "");
-    if (use_apex_image == "true") {
-        addOption(kApexImageOption);
-        ALOGI("Using Apex boot image: '%s'\n", kApexImageOption);
+    // Read if we are using the profile configuration, do this at the start since the last ART args
+    // take precedence.
+    std::string profile_boot_class_path_flag =
+            server_configurable_flags::GetServerConfigurableFlag(RUNTIME_NATIVE_BOOT_NAMESPACE,
+                                                                 PROFILE_BOOT_CLASS_PATH,
+                                                                 /*default_value=*/"");
+    bool profile_boot_class_path;
+    switch (ParseBool(profile_boot_class_path_flag)) {
+        case ParseBoolResult::kError:
+            // Default to the system property.
+            profile_boot_class_path =
+                    GetBoolProperty("dalvik.vm.profilebootclasspath", /*default_value=*/false);
+            break;
+        case ParseBoolResult::kTrue:
+            profile_boot_class_path = true;
+            break;
+        case ParseBoolResult::kFalse:
+            profile_boot_class_path = false;
+            break;
+    }
+    if (profile_boot_class_path) {
+        addOption("-Xcompiler-option");
+        addOption("--count-hotness-in-compiled-code");
+        addOption("-Xps-profile-boot-class-path");
+        addOption("-Xps-profile-aot-code");
+        addOption("-Xjitsaveprofilinginfo");
+    }
+
+    std::string use_jitzygote_image_flag =
+            server_configurable_flags::GetServerConfigurableFlag(RUNTIME_NATIVE_BOOT_NAMESPACE,
+                                                                 ENABLE_JITZYGOTE_IMAGE,
+                                                                 /*default_value=*/"");
+    // Use the APEX boot image for boot class path profiling to get JIT samples on BCP methods.
+    // Also use the APEX boot image if it's explicitly enabled via configuration flag.
+    const bool use_apex_image = profile_boot_class_path || (use_jitzygote_image_flag == "true");
+    if (use_apex_image) {
+        ALOGI("Using JIT Zygote image: '%s'\n", kJitZygoteImageOption);
+        addOption(kJitZygoteImageOption);
     } else if (parseRuntimeOption("dalvik.vm.boot-image", bootImageBuf, "-Ximage:")) {
         ALOGI("Using dalvik.vm.boot-image: '%s'\n", bootImageBuf);
     } else {
@@ -701,24 +767,20 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
         ALOGI("Leaving lock profiling enabled");
     }
 
-    bool checkJni = false;
-    property_get("dalvik.vm.checkjni", propBuf, "");
-    if (strcmp(propBuf, "true") == 0) {
-        checkJni = true;
-    } else if (strcmp(propBuf, "false") != 0) {
-        /* property is neither true nor false; fall back on kernel parameter */
-        property_get("ro.kernel.android.checkjni", propBuf, "");
-        if (propBuf[0] == '1') {
-            checkJni = true;
-        }
-    }
-    ALOGV("CheckJNI is %s\n", checkJni ? "ON" : "OFF");
+    const bool checkJni = GetBoolProperty("dalvik.vm.checkjni", false);
     if (checkJni) {
+        ALOGD("CheckJNI is ON");
+
         /* extended JNI checking */
         addOption("-Xcheck:jni");
 
         /* with -Xcheck:jni, this provides a JNI function call trace */
         //addOption("-verbose:jni");
+    }
+
+    const bool odsignVerificationSuccess = GetBoolProperty("odsign.verification.success", false);
+    if (!odsignVerificationSuccess) {
+        addOption("-Xdeny-art-apex-data-files");
     }
 
     property_get("dalvik.vm.execution-mode", propBuf, "");
@@ -749,6 +811,20 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     addOption("-verbose:gc");
     //addOption("-verbose:class");
 
+    // On Android, we always want to allow loading the PerfettoHprof plugin.
+    // Even with this option set, we will still only actually load the plugin
+    // if we are on a userdebug build or the app is debuggable or profileable.
+    // This is enforced in art/runtime/runtime.cc.
+    //
+    // We want to be able to disable this, because this does not work on host,
+    // and we do not want to enable it in tests.
+    parseRuntimeOption("dalvik.vm.perfetto_hprof", perfettoHprofOptBuf, "-XX:PerfettoHprof=",
+                       "true");
+
+    // Enable PerfettoJavaHeapStackProf in the zygote
+    parseRuntimeOption("dalvik.vm.perfetto_javaheap", perfettoJavaHeapStackOptBuf,
+                       "-XX:PerfettoJavaHeapStackProf=", "true");
+
     if (primary_zygote) {
         addOption("-Xprimaryzygote");
     }
@@ -771,7 +847,15 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     parseRuntimeOption("dalvik.vm.foreground-heap-growth-multiplier",
                        foregroundHeapGrowthMultiplierOptsBuf,
                        "-XX:ForegroundHeapGrowthMultiplier=");
-
+    /*
+     * Finalizer and thread suspend timeouts.
+     */
+    parseRuntimeOption("dalvik.vm.finalizer-timeout-ms",
+                       finalizerTimeoutMsOptsBuf,
+                       "-XX:FinalizerTimeoutMs=");
+    parseRuntimeOption("dalvik.vm.thread-suspend-timeout-ms",
+                       threadSuspendTimeoutOptsBuf,
+                       "-XX:ThreadSuspendTimeout=");
     /*
      * JIT related options.
      */
@@ -782,35 +866,48 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     parseRuntimeOption("dalvik.vm.jitpthreadpriority",
                        jitpthreadpriorityOptsBuf,
                        "-Xjitpthreadpriority:");
-    property_get("dalvik.vm.usejitprofiles", useJitProfilesOptsBuf, "");
-    if (strcmp(useJitProfilesOptsBuf, "true") == 0) {
-        addOption("-Xjitsaveprofilinginfo");
-    }
+    addOption("-Xjitsaveprofilinginfo");
 
     parseRuntimeOption("dalvik.vm.jitprithreadweight",
                        jitprithreadweightOptBuf,
                        "-Xjitprithreadweight:");
 
-    parseRuntimeOption("dalvik.vm.jittransitionweight",
-                       jittransitionweightOptBuf,
+    parseRuntimeOption("dalvik.vm.jittransitionweight", jittransitionweightOptBuf,
                        "-Xjittransitionweight:");
 
-    property_get("dalvik.vm.profilebootimage", propBuf, "");
-    if (strcmp(propBuf, "true") == 0) {
-        addOption("-Xps-profile-boot-class-path");
-        addOption("-Xps-profile-aot-code");
-    }
-
     /*
-     * Madvise related options.
+     * Use default platform configuration as limits for madvising,
+     * when no properties are specified.
      */
-    parseRuntimeOption("dalvik.vm.madvise-random", madviseRandomOptsBuf, "-XX:MadviseRandomAccess:");
+    parseRuntimeOption("dalvik.vm.madvise.vdexfile.size",
+                       madviseWillNeedFileSizeVdex,
+                       "-XMadviseWillNeedVdexFileSize:");
+
+    parseRuntimeOption("dalvik.vm.madvise.odexfile.size",
+                       madviseWillNeedFileSizeOdex,
+                       "-XMadviseWillNeedOdexFileSize:");
+
+    parseRuntimeOption("dalvik.vm.madvise.artfile.size",
+                       madviseWillNeedFileSizeArt,
+                       "-XMadviseWillNeedArtFileSize:");
 
     /*
      * Profile related options.
      */
     parseRuntimeOption("dalvik.vm.hot-startup-method-samples", hotstartupsamplesOptsBuf,
             "-Xps-hot-startup-method-samples:");
+
+    parseRuntimeOption("dalvik.vm.ps-resolved-classes-delay-ms", saveResolvedClassesDelayMsOptsBuf,
+            "-Xps-save-resolved-classes-delay-ms:");
+
+    parseRuntimeOption("dalvik.vm.ps-min-save-period-ms", profileMinSavePeriodOptsBuf,
+            "-Xps-min-save-period-ms:");
+
+    parseRuntimeOption("dalvik.vm.ps-min-first-save-ms", profileMinFirstSaveOptsBuf,
+            "-Xps-min-first-save-ms:");
+
+    parseRuntimeOption("dalvik.vm.ps-inline-cache-threshold", profileInlineCacheThresholdOptsBuf,
+            "-Xps-inline-cache-threshold:");
 
     property_get("ro.config.low_ram", propBuf, "");
     if (strcmp(propBuf, "true") == 0) {
@@ -837,6 +934,13 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     parseRuntimeOption("dalvik.vm.backgroundgctype", backgroundgcOptsBuf, "-XX:BackgroundGC=");
 
     /*
+     * Enable/disable zygote native fork loop.
+     */
+    parseRuntimeOption("dalvik.vm.force-java-zygote-fork-loop",
+                       javaZygoteForkLoopBuf,
+                       "-XX:ForceJavaZygoteForkLoop=");
+
+    /*
      * Enable debugging only for apps forked from zygote.
      */
     if (zygote) {
@@ -847,6 +951,14 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
                          jdwpProviderBuf,
                          "-XjdwpProvider:",
                          "default");
+    }
+
+    // Only pass an explicit opaque-jni-ids to apps forked from zygote
+    if (zygote) {
+      parseRuntimeOption("dalvik.vm.opaque-jni-ids",
+                        opaqueJniIds,
+                        "-Xopaque-jni-ids:",
+                        "swapable");
     }
 
     parseRuntimeOption("dalvik.vm.lockprof.threshold",
@@ -861,89 +973,40 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
         addOption("-Xint:jit");
     }
 
-    // If we are booting without the real /data, don't spend time compiling.
-    property_get("vold.decrypt", voldDecryptBuf, "");
-    bool skip_compilation = ((strcmp(voldDecryptBuf, "trigger_restart_min_framework") == 0) ||
-                             (strcmp(voldDecryptBuf, "1") == 0));
-
-    // Extra options for boot.art/boot.oat image generation.
-    parseCompilerRuntimeOption("dalvik.vm.image-dex2oat-Xms", dex2oatXmsImageFlagsBuf,
-                               "-Xms", "-Ximage-compiler-option");
-    parseCompilerRuntimeOption("dalvik.vm.image-dex2oat-Xmx", dex2oatXmxImageFlagsBuf,
-                               "-Xmx", "-Ximage-compiler-option");
-    if (skip_compilation) {
-        addOption("-Ximage-compiler-option");
-        addOption("--compiler-filter=assume-verified");
-    } else {
-        parseCompilerOption("dalvik.vm.image-dex2oat-filter", dex2oatImageCompilerFilterBuf,
-                            "--compiler-filter=", "-Ximage-compiler-option");
-    }
-
-    // If there is a boot profile, it takes precedence over the image and preloaded classes.
-    if (hasFile("/system/etc/boot-image.prof")) {
-        addOption("-Ximage-compiler-option");
-        addOption("--profile-file=/system/etc/boot-image.prof");
-        addOption("-Ximage-compiler-option");
-        addOption("--compiler-filter=speed-profile");
-    } else {
-        ALOGE("Missing boot-image.prof file, /system/etc/boot-image.prof not found: %s\n",
-              strerror(errno));
-        return -1;
-    }
-
-
-    // If there is a dirty-image-objects file, push it.
-    if (hasFile("/system/etc/dirty-image-objects")) {
-        addOption("-Ximage-compiler-option");
-        addOption("--dirty-image-objects=/system/etc/dirty-image-objects");
-    }
-
-    property_get("dalvik.vm.image-dex2oat-flags", dex2oatImageFlagsBuf, "");
-    parseExtraOpts(dex2oatImageFlagsBuf, "-Ximage-compiler-option");
-
-    // Extra options for DexClassLoader.
-    parseCompilerRuntimeOption("dalvik.vm.dex2oat-Xms", dex2oatXmsFlagsBuf,
-                               "-Xms", "-Xcompiler-option");
-    parseCompilerRuntimeOption("dalvik.vm.dex2oat-Xmx", dex2oatXmxFlagsBuf,
-                               "-Xmx", "-Xcompiler-option");
-    if (skip_compilation) {
-        addOption("-Xcompiler-option");
-        addOption("--compiler-filter=assume-verified");
-
-        // We skip compilation when a minimal runtime is brought up for decryption. In that case
-        // /data is temporarily backed by a tmpfs, which is usually small.
-        // If the system image contains prebuilts, they will be relocated into the tmpfs. In this
-        // specific situation it is acceptable to *not* relocate and run out of the prebuilts
-        // directly instead.
-        addOption("--runtime-arg");
-        addOption("-Xnorelocate");
-    } else {
-        parseCompilerOption("dalvik.vm.dex2oat-filter", dex2oatCompilerFilterBuf,
-                            "--compiler-filter=", "-Xcompiler-option");
-    }
+    // Extra options for JIT.
+    parseCompilerOption("dalvik.vm.dex2oat-filter", dex2oatCompilerFilterBuf,
+                        "--compiler-filter=", "-Xcompiler-option");
     parseCompilerOption("dalvik.vm.dex2oat-threads", dex2oatThreadsBuf, "-j", "-Xcompiler-option");
-    parseCompilerOption("dalvik.vm.image-dex2oat-threads", dex2oatThreadsImageBuf, "-j",
-                        "-Ximage-compiler-option");
-
-    // The runtime will compile a boot image, when necessary, not using installd. Thus, we need to
-    // pass the instruction-set-features/variant as an image-compiler-option.
-    // Note: it is OK to reuse the buffer, as the values are exactly the same between
-    //       * compiler-option, used for runtime compilation (DexClassLoader)
-    //       * image-compiler-option, used for boot-image compilation on device
+    parseCompilerOption("dalvik.vm.dex2oat-cpu-set", dex2oatCpuSetBuf, "--cpu-set=",
+                        "-Xcompiler-option");
 
     // Copy the variant.
     sprintf(dex2oat_isa_variant_key, "dalvik.vm.isa.%s.variant", ABI_STRING);
-    parseCompilerOption(dex2oat_isa_variant_key, dex2oat_isa_variant,
-                        "--instruction-set-variant=", "-Ximage-compiler-option");
     parseCompilerOption(dex2oat_isa_variant_key, dex2oat_isa_variant,
                         "--instruction-set-variant=", "-Xcompiler-option");
     // Copy the features.
     sprintf(dex2oat_isa_features_key, "dalvik.vm.isa.%s.features", ABI_STRING);
     parseCompilerOption(dex2oat_isa_features_key, dex2oat_isa_features,
-                        "--instruction-set-features=", "-Ximage-compiler-option");
-    parseCompilerOption(dex2oat_isa_features_key, dex2oat_isa_features,
                         "--instruction-set-features=", "-Xcompiler-option");
 
+    /*
+     * When running with debug.generate-debug-info, add --generate-debug-info to the compiler
+     * options so that both JITted code and the boot image, if it is compiled on device, will
+     * include native debugging information.
+     */
+    property_get("debug.generate-debug-info", propBuf, "");
+    bool generate_debug_info = (strcmp(propBuf, "true") == 0);
+    if (generate_debug_info) {
+        addOption("-Xcompiler-option");
+        addOption("--generate-debug-info");
+    }
+
+    // The mini-debug-info makes it possible to backtrace through compiled code.
+    bool generate_mini_debug_info = property_get_bool("dalvik.vm.minidebuginfo", 0);
+    if (generate_mini_debug_info) {
+        addOption("-Xcompiler-option");
+        addOption("--generate-mini-debug-info");
+    }
 
     property_get("dalvik.vm.dex2oat-flags", dex2oatFlagsBuf, "");
     parseExtraOpts(dex2oatFlagsBuf, "-Xcompiler-option");
@@ -951,6 +1014,57 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     /* extra options; parse this late so it overrides others */
     property_get("dalvik.vm.extra-opts", extraOptsBuf, "");
     parseExtraOpts(extraOptsBuf, NULL);
+
+    // Extra options for boot image generation.
+    parseCompilerRuntimeOption("dalvik.vm.image-dex2oat-Xms", dex2oatXmsImageFlagsBuf,
+                               "-Xms", "-Ximage-compiler-option");
+    parseCompilerRuntimeOption("dalvik.vm.image-dex2oat-Xmx", dex2oatXmxImageFlagsBuf,
+                               "-Xmx", "-Ximage-compiler-option");
+
+    parseCompilerOption("dalvik.vm.image-dex2oat-filter", dex2oatImageCompilerFilterBuf,
+                        "--compiler-filter=", "-Ximage-compiler-option");
+
+    // If there are dirty-image-objects files, push them.
+    const char* dirty_image_objects_options[] = {
+            "--dirty-image-objects=/apex/com.android.art/etc/dirty-image-objects",
+            "--dirty-image-objects=/system/etc/dirty-image-objects",
+    };
+    for (const char* option : dirty_image_objects_options) {
+        // Get the file path by finding the first '/' and check if
+        // this file exists.
+        if (hasFile(strchr(option, '/'))) {
+            addOption("-Ximage-compiler-option");
+            addOption(option);
+        }
+    }
+
+    parseCompilerOption("dalvik.vm.image-dex2oat-threads", dex2oatThreadsImageBuf, "-j",
+                        "-Ximage-compiler-option");
+    parseCompilerOption("dalvik.vm.image-dex2oat-cpu-set", dex2oatCpuSetImageBuf, "--cpu-set=",
+                        "-Ximage-compiler-option");
+
+    // The runtime may compile a boot image, when necessary, not using installd. Thus, we need
+    // to pass the instruction-set-features/variant as an image-compiler-option.
+    // Note: it is OK to reuse the buffer, as the values are exactly the same between
+    //       * compiler-option, used for runtime compilation (DexClassLoader)
+    //       * image-compiler-option, used for boot-image compilation on device
+    parseCompilerOption(dex2oat_isa_variant_key, dex2oat_isa_variant,
+                        "--instruction-set-variant=", "-Ximage-compiler-option");
+    parseCompilerOption(dex2oat_isa_features_key, dex2oat_isa_features,
+                        "--instruction-set-features=", "-Ximage-compiler-option");
+
+    if (generate_debug_info) {
+        addOption("-Ximage-compiler-option");
+        addOption("--generate-debug-info");
+    }
+
+    if (generate_mini_debug_info) {
+        addOption("-Ximage-compiler-option");
+        addOption("--generate-mini-debug-info");
+    }
+
+    property_get("dalvik.vm.image-dex2oat-flags", dex2oatImageFlagsBuf, "");
+    parseExtraOpts(dex2oatImageFlagsBuf, "-Ximage-compiler-option");
 
     /* Set the properties for locale */
     {
@@ -1008,25 +1122,6 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     // Dalvik-cache pruning counter.
     parseRuntimeOption("dalvik.vm.zygote.max-boot-retry", cachePruneBuf,
                        "-Xzygote-max-boot-retry=");
-
-    /*
-     * When running with debug.generate-debug-info, add --generate-debug-info to
-     * the compiler options so that the boot image, if it is compiled on device,
-     * will include native debugging information.
-     */
-    property_get("debug.generate-debug-info", propBuf, "");
-    if (strcmp(propBuf, "true") == 0) {
-        addOption("-Xcompiler-option");
-        addOption("--generate-debug-info");
-        addOption("-Ximage-compiler-option");
-        addOption("--generate-debug-info");
-    }
-
-    // The mini-debug-info makes it possible to backtrace through JIT code.
-    if (property_get_bool("dalvik.vm.minidebuginfo", 0)) {
-        addOption("-Xcompiler-option");
-        addOption("--generate-mini-debug-info");
-    }
 
     // If set, the property below can be used to enable core platform API violation reporting.
     property_get("persist.debug.dalvik.vm.core_platform_api_policy", propBuf, "");
@@ -1136,9 +1231,15 @@ void AndroidRuntime::start(const char* className, const Vector<String8>& options
         setenv("ANDROID_ROOT", rootDir, 1);
     }
 
-    const char* runtimeRootDir = getenv("ANDROID_RUNTIME_ROOT");
-    if (runtimeRootDir == NULL) {
-        LOG_FATAL("No runtime directory specified with ANDROID_RUNTIME_ROOT environment variable.");
+    const char* artRootDir = getenv("ANDROID_ART_ROOT");
+    if (artRootDir == NULL) {
+        LOG_FATAL("No ART directory specified with ANDROID_ART_ROOT environment variable.");
+        return;
+    }
+
+    const char* i18nRootDir = getenv("ANDROID_I18N_ROOT");
+    if (i18nRootDir == NULL) {
+        LOG_FATAL("No runtime directory specified with ANDROID_I18N_ROOT environment variable.");
         return;
     }
 
@@ -1186,7 +1287,7 @@ void AndroidRuntime::start(const char* className, const Vector<String8>& options
     env->SetObjectArrayElement(strArray, 0, classNameStr);
 
     for (size_t i = 0; i < options.size(); ++i) {
-        jstring optionsStr = env->NewStringUTF(options.itemAt(i).string());
+        jstring optionsStr = env->NewStringUTF(options.itemAt(i).c_str());
         assert(optionsStr != NULL);
         env->SetObjectArrayElement(strArray, i + 1, optionsStr);
     }
@@ -1228,17 +1329,33 @@ void AndroidRuntime::exit(int code)
 {
     if (mExitWithoutCleanup) {
         ALOGI("VM exiting with result code %d, cleanup skipped.", code);
-        ::_exit(code);
     } else {
         ALOGI("VM exiting with result code %d.", code);
         onExit(code);
-        ::exit(code);
     }
+
+#ifdef __ANDROID_CLANG_COVERAGE__
+    // When compiled with coverage, a function is registered with atexit to call
+    // `__llvm_profile_write_file` when the process exit.
+    // For Clang code coverage to work, call exit instead of _exit to run hooks
+    // registered with atexit.
+    ::exit(code);
+#else
+    ::_exit(code);
+#endif
 }
 
 void AndroidRuntime::onVmCreated(JNIEnv* env)
 {
     // If AndroidRuntime had anything to do here, we'd have done it in 'start'.
+}
+
+/*static*/ JavaVM* AndroidRuntime::getJavaVM() {
+    return AndroidRuntime::mJavaVM;
+}
+
+extern "C" JavaVM* AndroidRuntimeGetJavaVM() {
+    return AndroidRuntime::getJavaVM();
 }
 
 /*
@@ -1408,168 +1525,177 @@ static int register_jni_procs(const RegJNIRec array[], size_t count, JNIEnv* env
 }
 
 static const RegJNIRec gRegJNI[] = {
-    REG_JNI(register_com_android_internal_os_RuntimeInit),
-    REG_JNI(register_com_android_internal_os_ZygoteInit_nativeZygoteInit),
-    REG_JNI(register_android_os_SystemClock),
-    REG_JNI(register_android_util_EventLog),
-    REG_JNI(register_android_util_Log),
-    REG_JNI(register_android_util_MemoryIntArray),
-    REG_JNI(register_android_util_PathParser),
-    REG_JNI(register_android_util_StatsLog),
-    REG_JNI(register_android_util_StatsLogInternal),
-    REG_JNI(register_android_app_admin_SecurityLog),
-    REG_JNI(register_android_content_AssetManager),
-    REG_JNI(register_android_content_StringBlock),
-    REG_JNI(register_android_content_XmlBlock),
-    REG_JNI(register_android_content_res_ApkAssets),
-    REG_JNI(register_android_text_AndroidCharacter),
-    REG_JNI(register_android_text_Hyphenator),
-    REG_JNI(register_android_text_MeasuredParagraph),
-    REG_JNI(register_android_text_StaticLayout),
-    REG_JNI(register_android_view_InputDevice),
-    REG_JNI(register_android_view_KeyCharacterMap),
-    REG_JNI(register_android_os_Process),
-    REG_JNI(register_android_os_SystemProperties),
-    REG_JNI(register_android_os_Binder),
-    REG_JNI(register_android_os_Parcel),
-    REG_JNI(register_android_os_HidlSupport),
-    REG_JNI(register_android_os_HwBinder),
-    REG_JNI(register_android_os_HwBlob),
-    REG_JNI(register_android_os_HwParcel),
-    REG_JNI(register_android_os_HwRemoteBinder),
-    REG_JNI(register_android_os_NativeHandle),
-    REG_JNI(register_android_os_VintfObject),
-    REG_JNI(register_android_os_VintfRuntimeInfo),
-    REG_JNI(register_android_nio_utils),
-    REG_JNI(register_android_graphics_Canvas),
-    REG_JNI(register_android_graphics_Graphics),
-    REG_JNI(register_android_view_DisplayEventReceiver),
-    REG_JNI(register_android_view_RenderNode),
-    REG_JNI(register_android_view_RenderNodeAnimator),
-    REG_JNI(register_android_view_DisplayListCanvas),
-    REG_JNI(register_android_view_TextureLayer),
-    REG_JNI(register_android_view_ThreadedRenderer),
-    REG_JNI(register_android_view_Surface),
-    REG_JNI(register_android_view_SurfaceControl),
-    REG_JNI(register_android_view_SurfaceSession),
-    REG_JNI(register_android_view_TextureView),
-    REG_JNI(register_com_android_internal_view_animation_NativeInterpolatorFactoryHelper),
-    REG_JNI(register_com_google_android_gles_jni_EGLImpl),
-    REG_JNI(register_com_google_android_gles_jni_GLImpl),
-    REG_JNI(register_android_opengl_jni_EGL14),
-    REG_JNI(register_android_opengl_jni_EGLExt),
-    REG_JNI(register_android_opengl_jni_GLES10),
-    REG_JNI(register_android_opengl_jni_GLES10Ext),
-    REG_JNI(register_android_opengl_jni_GLES11),
-    REG_JNI(register_android_opengl_jni_GLES11Ext),
-    REG_JNI(register_android_opengl_jni_GLES20),
-    REG_JNI(register_android_opengl_jni_GLES30),
-    REG_JNI(register_android_opengl_jni_GLES31),
-    REG_JNI(register_android_opengl_jni_GLES31Ext),
-    REG_JNI(register_android_opengl_jni_GLES32),
+        REG_JNI(register_com_android_internal_os_RuntimeInit),
+        REG_JNI(register_com_android_internal_os_ZygoteInit_nativeZygoteInit),
+        REG_JNI(register_android_os_SystemClock),
+        REG_JNI(register_android_util_CharsetUtils),
+        REG_JNI(register_android_util_EventLog),
+        REG_JNI(register_android_util_Log),
+        REG_JNI(register_android_util_MemoryIntArray),
+        REG_JNI(register_android_app_admin_SecurityLog),
+        REG_JNI(register_android_content_AssetManager),
+        REG_JNI(register_android_content_StringBlock),
+        REG_JNI(register_android_content_XmlBlock),
+        REG_JNI(register_android_content_res_ApkAssets),
+        REG_JNI(register_android_content_res_ResourceTimer),
+        REG_JNI(register_android_text_AndroidCharacter),
+        REG_JNI(register_android_text_Hyphenator),
+        REG_JNI(register_android_view_InputDevice),
+        REG_JNI(register_android_view_KeyCharacterMap),
+        REG_JNI(register_android_os_Process),
+        REG_JNI(register_android_os_SystemProperties),
+        REG_JNI(register_android_os_Binder),
+        REG_JNI(register_android_os_Parcel),
+        REG_JNI(register_android_os_PerformanceHintManager),
+        REG_JNI(register_android_os_HidlMemory),
+        REG_JNI(register_android_os_HidlSupport),
+        REG_JNI(register_android_os_HwBinder),
+        REG_JNI(register_android_os_HwBlob),
+        REG_JNI(register_android_os_HwParcel),
+        REG_JNI(register_android_os_HwRemoteBinder),
+        REG_JNI(register_android_os_NativeHandle),
+        REG_JNI(register_android_os_ServiceManager),
+        REG_JNI(register_android_os_ServiceManagerNative),
+        REG_JNI(register_android_os_storage_StorageManager),
+        REG_JNI(register_android_service_DataLoaderService),
+        REG_JNI(register_android_view_DisplayEventReceiver),
+        REG_JNI(register_android_view_Surface),
+        REG_JNI(register_android_view_SurfaceControl),
+        REG_JNI(register_android_view_SurfaceControlHdrLayerInfoListener),
+        REG_JNI(register_android_view_SurfaceSession),
+        REG_JNI(register_android_view_InputApplicationHandle),
+        // This must be called after register_android_view_SurfaceControl since it has a dependency
+        // on the Java SurfaceControl object that references a native resource via static request.
+        REG_JNI(register_android_view_InputWindowHandle),
+        REG_JNI(register_android_view_CompositionSamplingListener),
+        REG_JNI(register_android_view_TextureView),
+        REG_JNI(register_android_view_TunnelModeEnabledListener),
+        REG_JNI(register_com_google_android_gles_jni_EGLImpl),
+        REG_JNI(register_com_google_android_gles_jni_GLImpl),
+        REG_JNI(register_android_opengl_jni_EGL14),
+        REG_JNI(register_android_opengl_jni_EGL15),
+        REG_JNI(register_android_opengl_jni_EGLExt),
+        REG_JNI(register_android_opengl_jni_GLES10),
+        REG_JNI(register_android_opengl_jni_GLES10Ext),
+        REG_JNI(register_android_opengl_jni_GLES11),
+        REG_JNI(register_android_opengl_jni_GLES11Ext),
+        REG_JNI(register_android_opengl_jni_GLES20),
+        REG_JNI(register_android_opengl_jni_GLES30),
+        REG_JNI(register_android_opengl_jni_GLES31),
+        REG_JNI(register_android_opengl_jni_GLES31Ext),
+        REG_JNI(register_android_opengl_jni_GLES32),
+        REG_JNI(register_android_graphics_classes),
+        REG_JNI(register_android_graphics_BLASTBufferQueue),
+        REG_JNI(register_android_graphics_GraphicBuffer),
+        REG_JNI(register_android_graphics_GraphicsStatsService),
+        REG_JNI(register_android_graphics_SurfaceTexture),
+        REG_JNI(register_android_database_CursorWindow),
+        REG_JNI(register_android_database_SQLiteConnection),
+        REG_JNI(register_android_database_SQLiteGlobal),
+        REG_JNI(register_android_database_SQLiteDebug),
+        REG_JNI(register_android_database_SQLiteRawStatement),
+        REG_JNI(register_android_os_Debug),
+        REG_JNI(register_android_os_FileObserver),
+        REG_JNI(register_android_os_GraphicsEnvironment),
+        REG_JNI(register_android_os_MessageQueue),
+        REG_JNI(register_android_os_SELinux),
+        REG_JNI(register_android_os_Trace),
+        REG_JNI(register_android_os_UEventObserver),
+        REG_JNI(register_android_net_LocalSocketImpl),
+        REG_JNI(register_android_os_MemoryFile),
+        REG_JNI(register_android_os_SharedMemory),
+        REG_JNI(register_android_os_incremental_IncrementalManager),
+        REG_JNI(register_com_android_internal_content_om_OverlayConfig),
+        REG_JNI(register_com_android_internal_content_om_OverlayManagerImpl),
+        REG_JNI(register_com_android_internal_net_NetworkUtilsInternal),
+        REG_JNI(register_com_android_internal_os_ClassLoaderFactory),
+        REG_JNI(register_com_android_internal_os_DebugStore),
+        REG_JNI(register_com_android_internal_os_LongArrayMultiStateCounter),
+        REG_JNI(register_com_android_internal_os_LongMultiStateCounter),
+        REG_JNI(register_com_android_internal_os_Zygote),
+        REG_JNI(register_com_android_internal_os_ZygoteCommandBuffer),
+        REG_JNI(register_com_android_internal_os_ZygoteInit),
+        REG_JNI(register_com_android_internal_security_VerityUtils),
+        REG_JNI(register_com_android_internal_util_ArrayUtils),
+        REG_JNI(register_com_android_internal_util_VirtualRefBasePtr),
+        REG_JNI(register_android_hardware_Camera),
+        REG_JNI(register_android_hardware_camera2_CameraMetadata),
+        REG_JNI(register_android_hardware_camera2_DngCreator),
+        REG_JNI(register_android_hardware_camera2_impl_CameraExtensionJpegProcessor),
+        REG_JNI(register_android_hardware_camera2_utils_SurfaceUtils),
+        REG_JNI(register_android_hardware_display_DisplayManagerGlobal),
+        REG_JNI(register_android_hardware_HardwareBuffer),
+        REG_JNI(register_android_hardware_OverlayProperties),
+        REG_JNI(register_android_hardware_SensorManager),
+        REG_JNI(register_android_hardware_SerialPort),
+        REG_JNI(register_android_hardware_SyncFence),
+        REG_JNI(register_android_hardware_UsbDevice),
+        REG_JNI(register_android_hardware_UsbDeviceConnection),
+        REG_JNI(register_android_hardware_UsbRequest),
+        REG_JNI(register_android_hardware_location_ActivityRecognitionHardware),
+        REG_JNI(register_android_media_AudioDeviceAttributes),
+        REG_JNI(register_android_media_AudioEffectDescriptor),
+        REG_JNI(register_android_media_AudioSystem),
+        REG_JNI(register_android_media_AudioRecord),
+        REG_JNI(register_android_media_AudioTrack),
+        REG_JNI(register_android_media_AudioAttributes),
+        REG_JNI(register_android_media_AudioProductStrategies),
+        REG_JNI(register_android_media_AudioVolumeGroups),
+        REG_JNI(register_android_media_AudioVolumeGroupChangeHandler),
+        REG_JNI(register_android_media_MediaMetrics),
+        REG_JNI(register_android_media_MicrophoneInfo),
+        REG_JNI(register_android_media_RemoteDisplay),
+        REG_JNI(register_android_media_ToneGenerator),
+        REG_JNI(register_android_media_audio_common_AidlConversion),
+        REG_JNI(register_android_media_midi),
 
-    REG_JNI(register_android_graphics_Bitmap),
-    REG_JNI(register_android_graphics_BitmapFactory),
-    REG_JNI(register_android_graphics_BitmapRegionDecoder),
-    REG_JNI(register_android_graphics_ByteBufferStreamAdaptor),
-    REG_JNI(register_android_graphics_Camera),
-    REG_JNI(register_android_graphics_CreateJavaOutputStreamAdaptor),
-    REG_JNI(register_android_graphics_CanvasProperty),
-    REG_JNI(register_android_graphics_ColorFilter),
-    REG_JNI(register_android_graphics_DrawFilter),
-    REG_JNI(register_android_graphics_FontFamily),
-    REG_JNI(register_android_graphics_GraphicBuffer),
-    REG_JNI(register_android_graphics_ImageDecoder),
-    REG_JNI(register_android_graphics_drawable_AnimatedImageDrawable),
-    REG_JNI(register_android_graphics_Interpolator),
-    REG_JNI(register_android_graphics_MaskFilter),
-    REG_JNI(register_android_graphics_Matrix),
-    REG_JNI(register_android_graphics_Movie),
-    REG_JNI(register_android_graphics_NinePatch),
-    REG_JNI(register_android_graphics_Paint),
-    REG_JNI(register_android_graphics_Path),
-    REG_JNI(register_android_graphics_PathMeasure),
-    REG_JNI(register_android_graphics_PathEffect),
-    REG_JNI(register_android_graphics_Picture),
-    REG_JNI(register_android_graphics_Region),
-    REG_JNI(register_android_graphics_Shader),
-    REG_JNI(register_android_graphics_SurfaceTexture),
-    REG_JNI(register_android_graphics_Typeface),
-    REG_JNI(register_android_graphics_YuvImage),
-    REG_JNI(register_android_graphics_drawable_AnimatedVectorDrawable),
-    REG_JNI(register_android_graphics_drawable_VectorDrawable),
-    REG_JNI(register_android_graphics_pdf_PdfDocument),
-    REG_JNI(register_android_graphics_pdf_PdfEditor),
-    REG_JNI(register_android_graphics_pdf_PdfRenderer),
+        REG_JNI(register_android_opengl_classes),
+        REG_JNI(register_android_ddm_DdmHandleNativeHeap),
+        REG_JNI(register_android_backup_BackupDataInput),
+        REG_JNI(register_android_backup_BackupDataOutput),
+        REG_JNI(register_android_backup_FileBackupHelperBase),
+        REG_JNI(register_android_backup_BackupHelperDispatcher),
+        REG_JNI(register_android_app_backup_FullBackup),
+        REG_JNI(register_android_app_Activity),
+        REG_JNI(register_android_app_ActivityThread),
+        REG_JNI(register_android_app_NativeActivity),
+        REG_JNI(register_android_util_jar_StrictJarFile),
+        REG_JNI(register_android_view_InputChannel),
+        REG_JNI(register_android_view_InputEventReceiver),
+        REG_JNI(register_android_view_InputEventSender),
+        REG_JNI(register_android_view_InputQueue),
+        REG_JNI(register_android_view_KeyEvent),
+        REG_JNI(register_android_view_MotionEvent),
+        REG_JNI(register_android_view_MotionPredictor),
+        REG_JNI(register_android_view_PointerIcon),
+        REG_JNI(register_android_view_VelocityTracker),
+        REG_JNI(register_android_view_VerifiedKeyEvent),
+        REG_JNI(register_android_view_VerifiedMotionEvent),
 
-    REG_JNI(register_android_database_CursorWindow),
-    REG_JNI(register_android_database_SQLiteConnection),
-    REG_JNI(register_android_database_SQLiteGlobal),
-    REG_JNI(register_android_database_SQLiteDebug),
-    REG_JNI(register_android_os_Debug),
-    REG_JNI(register_android_os_FileObserver),
-    REG_JNI(register_android_os_GraphicsEnvironment),
-    REG_JNI(register_android_os_MessageQueue),
-    REG_JNI(register_android_os_SELinux),
-    REG_JNI(register_android_os_Trace),
-    REG_JNI(register_android_os_UEventObserver),
-    REG_JNI(register_android_net_LocalSocketImpl),
-    REG_JNI(register_android_net_NetworkUtils),
-    REG_JNI(register_android_os_MemoryFile),
-    REG_JNI(register_android_os_SharedMemory),
-    REG_JNI(register_com_android_internal_os_ClassLoaderFactory),
-    REG_JNI(register_com_android_internal_os_Zygote),
-    REG_JNI(register_com_android_internal_os_ZygoteInit),
-    REG_JNI(register_com_android_internal_util_VirtualRefBasePtr),
-    REG_JNI(register_android_hardware_Camera),
-    REG_JNI(register_android_hardware_camera2_CameraMetadata),
-    REG_JNI(register_android_hardware_camera2_legacy_LegacyCameraDevice),
-    REG_JNI(register_android_hardware_camera2_legacy_PerfMeasurement),
-    REG_JNI(register_android_hardware_camera2_DngCreator),
-    REG_JNI(register_android_hardware_HardwareBuffer),
-    REG_JNI(register_android_hardware_SensorManager),
-    REG_JNI(register_android_hardware_SerialPort),
-    REG_JNI(register_android_hardware_SoundTrigger),
-    REG_JNI(register_android_hardware_UsbDevice),
-    REG_JNI(register_android_hardware_UsbDeviceConnection),
-    REG_JNI(register_android_hardware_UsbRequest),
-    REG_JNI(register_android_hardware_location_ActivityRecognitionHardware),
-    REG_JNI(register_android_media_AudioRecord),
-    REG_JNI(register_android_media_AudioSystem),
-    REG_JNI(register_android_media_AudioTrack),
-    REG_JNI(register_android_media_JetPlayer),
-    REG_JNI(register_android_media_MicrophoneInfo),
-    REG_JNI(register_android_media_RemoteDisplay),
-    REG_JNI(register_android_media_ToneGenerator),
+        REG_JNI(register_android_content_res_ObbScanner),
+        REG_JNI(register_android_content_res_Configuration),
 
-    REG_JNI(register_android_opengl_classes),
-    REG_JNI(register_android_server_NetworkManagementSocketTagger),
-    REG_JNI(register_android_ddm_DdmHandleNativeHeap),
-    REG_JNI(register_android_backup_BackupDataInput),
-    REG_JNI(register_android_backup_BackupDataOutput),
-    REG_JNI(register_android_backup_FileBackupHelperBase),
-    REG_JNI(register_android_backup_BackupHelperDispatcher),
-    REG_JNI(register_android_app_backup_FullBackup),
-    REG_JNI(register_android_app_Activity),
-    REG_JNI(register_android_app_ActivityThread),
-    REG_JNI(register_android_app_NativeActivity),
-    REG_JNI(register_android_util_jar_StrictJarFile),
-    REG_JNI(register_android_view_InputChannel),
-    REG_JNI(register_android_view_InputEventReceiver),
-    REG_JNI(register_android_view_InputEventSender),
-    REG_JNI(register_android_view_InputQueue),
-    REG_JNI(register_android_view_KeyEvent),
-    REG_JNI(register_android_view_MotionEvent),
-    REG_JNI(register_android_view_PointerIcon),
-    REG_JNI(register_android_view_VelocityTracker),
+        REG_JNI(register_android_animation_PropertyValuesHolder),
+        REG_JNI(register_android_security_Scrypt),
+        REG_JNI(register_com_android_internal_content_F2fsUtils),
+        REG_JNI(register_com_android_internal_content_NativeLibraryHelper),
+        REG_JNI(register_com_android_internal_os_FuseAppLoop),
+        REG_JNI(register_com_android_internal_os_KernelAllocationStats),
+        REG_JNI(register_com_android_internal_os_KernelCpuBpfTracking),
+        REG_JNI(register_com_android_internal_os_KernelCpuTotalBpfMapReader),
+        REG_JNI(register_com_android_internal_os_KernelCpuUidBpfMapReader),
+        REG_JNI(register_com_android_internal_os_KernelSingleProcessCpuThreadReader),
+        REG_JNI(register_com_android_internal_os_KernelSingleUidTimeReader),
 
-    REG_JNI(register_android_content_res_ObbScanner),
-    REG_JNI(register_android_content_res_Configuration),
+        REG_JNI(register_android_window_WindowInfosListener),
+        REG_JNI(register_android_window_ScreenCapture),
+        REG_JNI(register_jni_common),
 
-    REG_JNI(register_android_animation_PropertyValuesHolder),
-    REG_JNI(register_android_security_Scrypt),
-    REG_JNI(register_com_android_internal_content_NativeLibraryHelper),
-    REG_JNI(register_com_android_internal_os_FuseAppLoop),
+        REG_JNI(register_android_tracing_PerfettoDataSource),
+        REG_JNI(register_android_tracing_PerfettoDataSourceInstance),
+        REG_JNI(register_android_tracing_PerfettoProducer),
+        REG_JNI(register_android_window_InputTransferToken),
+        REG_JNI(register_android_view_WindowManagerGlobal),
 };
 
 /*

@@ -16,29 +16,35 @@
 #ifndef FRAMEINFO_H_
 #define FRAMEINFO_H_
 
-#include "utils/Macros.h"
-
 #include <cutils/compiler.h>
+#include <memory.h>
 #include <utils/Timers.h>
 
-#include <memory.h>
+#include <array>
+#include <optional>
 #include <string>
+
+#include "SkippedFrameInfo.h"
+#include "utils/Macros.h"
 
 namespace android {
 namespace uirenderer {
 
-#define UI_THREAD_FRAME_INFO_SIZE 9
+static constexpr size_t UI_THREAD_FRAME_INFO_SIZE = 12;
 
 enum class FrameInfoIndex {
     Flags = 0,
+    FrameTimelineVsyncId,
     IntendedVsync,
     Vsync,
-    OldestInputEvent,
-    NewestInputEvent,
+    InputEventId,
     HandleInputStart,
     AnimationStart,
     PerformTraversalsStart,
     DrawStart,
+    FrameDeadline,
+    FrameStartTime,
+    FrameInterval,
     // End of UI frame info
 
     SyncQueued,
@@ -51,29 +57,47 @@ enum class FrameInfoIndex {
     DequeueBufferDuration,
     QueueBufferDuration,
 
+    GpuCompleted,
+    SwapBuffersCompleted,
+    DisplayPresentTime,
+    CommandSubmissionCompleted,
+
     // Must be the last value!
     // Also must be kept in sync with FrameMetrics.java#FRAME_STATS_COUNT
     NumIndexes
 };
 
-extern const std::string FrameInfoNames[];
+extern const std::array<const char*, static_cast<int>(FrameInfoIndex::NumIndexes)> FrameInfoNames;
 
 namespace FrameInfoFlags {
 enum {
-    WindowLayoutChanged = 1 << 0,
+    WindowVisibilityChanged = 1 << 0,
     RTAnimation = 1 << 1,
     SurfaceCanvas = 1 << 2,
     SkippedFrame = 1 << 3,
 };
 };
 
-class ANDROID_API UiFrameInfoBuilder {
+class UiFrameInfoBuilder {
 public:
+    static constexpr int64_t INVALID_VSYNC_ID = -1;
+    static constexpr int64_t UNKNOWN_DEADLINE = std::numeric_limits<int64_t>::max();
+    static constexpr int64_t UNKNOWN_FRAME_INTERVAL = -1;
+
+
     explicit UiFrameInfoBuilder(int64_t* buffer) : mBuffer(buffer) {
         memset(mBuffer, 0, UI_THREAD_FRAME_INFO_SIZE * sizeof(int64_t));
+        set(FrameInfoIndex::FrameTimelineVsyncId) = INVALID_VSYNC_ID;
+        // The struct is zeroed by memset above. That also sets FrameInfoIndex::InputEventId to
+        // equal android::os::IInputConstants::INVALID_INPUT_EVENT_ID == 0.
+        // Therefore, we can skip setting the value for InputEventId here. If the value for
+        // INVALID_INPUT_EVENT_ID changes, this code would have to be updated, as well.
+        set(FrameInfoIndex::FrameDeadline) = std::numeric_limits<int64_t>::max();
     }
 
-    UiFrameInfoBuilder& setVsync(nsecs_t vsyncTime, nsecs_t intendedVsync) {
+    UiFrameInfoBuilder& setVsync(nsecs_t vsyncTime, nsecs_t intendedVsync,
+                                 int64_t vsyncId, int64_t frameDeadline, nsecs_t frameInterval) {
+        set(FrameInfoIndex::FrameTimelineVsyncId) = vsyncId;
         set(FrameInfoIndex::Vsync) = vsyncTime;
         set(FrameInfoIndex::IntendedVsync) = intendedVsync;
         // Pretend the other fields are all at vsync, too, so that naive
@@ -82,6 +106,9 @@ public:
         set(FrameInfoIndex::AnimationStart) = vsyncTime;
         set(FrameInfoIndex::PerformTraversalsStart) = vsyncTime;
         set(FrameInfoIndex::DrawStart) = vsyncTime;
+        set(FrameInfoIndex::FrameStartTime) = vsyncTime;
+        set(FrameInfoIndex::FrameDeadline) = frameDeadline;
+        set(FrameInfoIndex::FrameInterval) = frameInterval;
         return *this;
     }
 
@@ -100,15 +127,19 @@ class FrameInfo {
 public:
     void importUiThreadInfo(int64_t* info);
 
-    void markSyncStart() { set(FrameInfoIndex::SyncStart) = systemTime(CLOCK_MONOTONIC); }
+    void markSyncStart() { set(FrameInfoIndex::SyncStart) = systemTime(SYSTEM_TIME_MONOTONIC); }
 
     void markIssueDrawCommandsStart() {
-        set(FrameInfoIndex::IssueDrawCommandsStart) = systemTime(CLOCK_MONOTONIC);
+        set(FrameInfoIndex::IssueDrawCommandsStart) = systemTime(SYSTEM_TIME_MONOTONIC);
     }
 
-    void markSwapBuffers() { set(FrameInfoIndex::SwapBuffers) = systemTime(CLOCK_MONOTONIC); }
+    void markSwapBuffers() { set(FrameInfoIndex::SwapBuffers) = systemTime(SYSTEM_TIME_MONOTONIC); }
 
-    void markFrameCompleted() { set(FrameInfoIndex::FrameCompleted) = systemTime(CLOCK_MONOTONIC); }
+    void markSwapBuffersCompleted() {
+        set(FrameInfoIndex::SwapBuffersCompleted) = systemTime(SYSTEM_TIME_MONOTONIC);
+    }
+
+    void markFrameCompleted() { set(FrameInfoIndex::FrameCompleted) = systemTime(SYSTEM_TIME_MONOTONIC); }
 
     void addFlag(int frameInfoFlag) {
         set(FrameInfoIndex::Flags) |= static_cast<uint64_t>(frameInfoFlag);
@@ -143,6 +174,13 @@ public:
         return duration(FrameInfoIndex::IntendedVsync, FrameInfoIndex::FrameCompleted);
     }
 
+    inline int64_t gpuDrawTime() const {
+        // GPU start time is approximated to the moment before swapBuffer is invoked.
+        // We could add an EGLSyncKHR fence at the beginning of the frame, but that is an overhead.
+        int64_t endTime = get(FrameInfoIndex::GpuCompleted);
+        return endTime > 0 ? endTime - get(FrameInfoIndex::SwapBuffers) : -1;
+    }
+
     inline int64_t& set(FrameInfoIndex index) { return mFrameInfo[static_cast<int>(index)]; }
 
     inline int64_t get(FrameInfoIndex index) const {
@@ -150,8 +188,14 @@ public:
         return mFrameInfo[static_cast<int>(index)];
     }
 
+    void setSkippedFrameReason(SkippedFrameReason reason);
+    inline std::optional<SkippedFrameReason> getSkippedFrameReason() const {
+        return mSkippedFrameReason;
+    }
+
 private:
     int64_t mFrameInfo[static_cast<int>(FrameInfoIndex::NumIndexes)];
+    std::optional<SkippedFrameReason> mSkippedFrameReason;
 };
 
 } /* namespace uirenderer */

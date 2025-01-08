@@ -17,8 +17,10 @@
 package com.android.server.hdmi;
 
 import android.hardware.hdmi.HdmiDeviceInfo;
+
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 
 /**
  * Buffer storage to keep incoming messages for later processing. Used to
@@ -64,7 +66,7 @@ final class DelayedMessageBuffer {
         }
     }
 
-    private void removeActiveSource() {
+    protected void removeActiveSource() {
         // Uses iterator to remove elements while looping through the list.
         for (Iterator<HdmiCecMessage> iter = mBuffer.iterator(); iter.hasNext(); ) {
             HdmiCecMessage message = iter.next();
@@ -83,9 +85,19 @@ final class DelayedMessageBuffer {
         return false;
     }
 
+    List<HdmiCecMessage> getBufferedMessagesWithOpcode(int opcode) {
+        List<HdmiCecMessage> messages = new ArrayList<>();
+        for (HdmiCecMessage message : mBuffer) {
+            if (message.getOpcode() == opcode) {
+                messages.add(message);
+            }
+        }
+        return messages;
+    }
+
     void processAllMessages() {
         // Use the copied buffer.
-        ArrayList<HdmiCecMessage> copiedBuffer = new ArrayList<HdmiCecMessage>(mBuffer);
+        ArrayList<HdmiCecMessage> copiedBuffer = new ArrayList<>(mBuffer);
         mBuffer.clear();
         for (HdmiCecMessage message : copiedBuffer) {
             mDevice.onMessage(message);
@@ -104,7 +116,7 @@ final class DelayedMessageBuffer {
      *        are associated with
      */
     void processMessagesForDevice(int address) {
-        ArrayList<HdmiCecMessage> copiedBuffer = new ArrayList<HdmiCecMessage>(mBuffer);
+        ArrayList<HdmiCecMessage> copiedBuffer = new ArrayList<>(mBuffer);
         mBuffer.clear();
         HdmiLogger.debug("Checking message for address:" + address);
         for (HdmiCecMessage message : copiedBuffer) {
@@ -134,7 +146,7 @@ final class DelayedMessageBuffer {
      * @param address logical address of the device to be the active source
      */
     void processActiveSource(int address) {
-        ArrayList<HdmiCecMessage> copiedBuffer = new ArrayList<HdmiCecMessage>(mBuffer);
+        ArrayList<HdmiCecMessage> copiedBuffer = new ArrayList<>(mBuffer);
         mBuffer.clear();
         for (HdmiCecMessage message : copiedBuffer) {
             if (message.getOpcode() == Constants.MESSAGE_ACTIVE_SOURCE

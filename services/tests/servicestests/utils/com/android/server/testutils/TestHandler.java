@@ -55,18 +55,24 @@ public class TestHandler extends Handler {
     // Boxing is ok here - both msg ids and their pending counts tend to be well below 128
     private final Map<Integer, Integer> mPendingMsgTypeCounts = new ArrayMap<>();
     private final LongSupplier mClock;
+    private int  mMessageCount = 0;
 
     public TestHandler(Callback callback) {
         this(callback, DEFAULT_CLOCK);
     }
 
     public TestHandler(Callback callback, LongSupplier clock) {
-        super(Looper.getMainLooper(), callback);
+        this(Looper.getMainLooper(), callback, clock);
+    }
+
+    public TestHandler(Looper looper, Callback callback, LongSupplier clock) {
+        super(looper, callback);
         mClock = clock;
     }
 
     @Override
     public boolean sendMessageAtTime(Message msg, long uptimeMillis) {
+        ++mMessageCount;
         mPendingMsgTypeCounts.put(msg.what,
                 mPendingMsgTypeCounts.getOrDefault(msg.what, 0) + 1);
 
@@ -76,9 +82,9 @@ public class TestHandler extends Handler {
             uptimeMillis = uptimeMillis - SystemClock.uptimeMillis() + mClock.getAsLong();
         }
 
-        // post a dummy queue entry to keep track of message removal
+        // post a sentinel queue entry to keep track of message removal
         return super.sendMessageAtTime(msg, Long.MAX_VALUE)
-                && mMessages.add(new MsgInfo(Message.obtain(msg), uptimeMillis));
+                && mMessages.add(new MsgInfo(Message.obtain(msg), uptimeMillis, mMessageCount));
     }
 
     /** @see TestHandler */
@@ -99,6 +105,13 @@ public class TestHandler extends Handler {
         while ((msg = mMessages.poll()) != null) {
             dispatch(msg);
         }
+    }
+
+    /**
+     * Deletes all messages in queue.
+     */
+    public void clear() {
+        mMessages.clear();
     }
 
     public PriorityQueue<MsgInfo> getPendingMessages() {
@@ -139,28 +152,32 @@ public class TestHandler extends Handler {
         }
     }
 
-    private class MsgInfo implements Comparable<MsgInfo> {
+    public class MsgInfo implements Comparable<MsgInfo> {
         public final Message message;
         public final long sendTime;
+        public final int mMessageOrder;
         public final RuntimeException postPoint;
 
-        private MsgInfo(Message message, long sendTime) {
+        private MsgInfo(Message message, long sendTime, int messageOrder) {
             this.message = message;
             this.sendTime = sendTime;
             this.postPoint = new RuntimeException("Message originated from here:");
+            mMessageOrder = messageOrder;
         }
 
         @Override
         public int compareTo(MsgInfo o) {
-            return (int) (sendTime - o.sendTime);
+            final int result = Long.compare(sendTime, o.sendTime);
+            return result != 0 ? result : Integer.compare(mMessageOrder, o.mMessageOrder);
         }
 
         @Override
         public String toString() {
             return "MsgInfo{" +
-                    "message=" + messageToString(message) +
-                    ", sendTime=" + sendTime +
-                    '}';
+                    "message =" + messageToString(message)
+                    + ", sendTime =" + sendTime
+                    + ", mMessageOrder =" + mMessageOrder
+                    + '}';
         }
     }
 }

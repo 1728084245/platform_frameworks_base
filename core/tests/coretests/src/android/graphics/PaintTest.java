@@ -16,11 +16,21 @@
 
 package android.graphics;
 
+import static com.google.common.truth.Truth.assertThat;
+
 import static org.junit.Assert.assertNotEquals;
 
-import android.graphics.Paint;
+import android.platform.test.annotations.RequiresFlagsEnabled;
+import android.platform.test.flag.junit.CheckFlagsRule;
+import android.platform.test.flag.junit.DeviceFlagsValueProvider;
 import android.test.InstrumentationTestCase;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.text.TextUtils;
+
+import androidx.test.filters.SmallTest;
+
+import com.android.text.flags.Flags;
+
+import org.junit.Rule;
 
 import java.util.Arrays;
 import java.util.HashSet;
@@ -29,6 +39,9 @@ import java.util.HashSet;
  * PaintTest tests {@link Paint}.
  */
 public class PaintTest extends InstrumentationTestCase {
+    @Rule
+    public final CheckFlagsRule mCheckFlagsRule = DeviceFlagsValueProvider.createCheckFlagsRule();
+
     private static final String FONT_PATH = "fonts/HintedAdvanceWidthTest-Regular.ttf";
 
     static void assertEquals(String message, float[] expected, float[] actual) {
@@ -186,44 +199,28 @@ public class PaintTest extends InstrumentationTestCase {
         Paint p = new Paint();
 
         final int count = end - start;
-        final float[][] advanceArrays = new float[4][count];
-
-        final float advance = p.getTextRunAdvances(str, start, end, contextStart, contextEnd,
-                isRtl, advanceArrays[0], 0);
-
+        final int contextCount = contextEnd - contextStart;
+        final float[][] advanceArrays = new float[2][count];
         char chars[] = str.toCharArray();
-        final float advance_c = p.getTextRunAdvances(chars, start, count, contextStart,
-                contextEnd - contextStart, isRtl, advanceArrays[1], 0);
-        assertEquals(advance, advance_c, 1.0f);
-
+        final float advance = p.getTextRunAdvances(chars, start, count,
+                contextStart, contextCount, isRtl, advanceArrays[0], 0);
         for (int c = 1; c < count; ++c) {
-            final float firstPartAdvance = p.getTextRunAdvances(str, start, start + c,
-                    contextStart, contextEnd, isRtl, advanceArrays[2], 0);
-            final float secondPartAdvance = p.getTextRunAdvances(str, start + c, end,
-                    contextStart, contextEnd, isRtl, advanceArrays[2], c);
+            final float firstPartAdvance = p.getTextRunAdvances(chars, start, c,
+                    contextStart, contextCount, isRtl, advanceArrays[1], 0);
+            final float secondPartAdvance = p.getTextRunAdvances(chars, start + c, count - c,
+                    contextStart, contextCount, isRtl, advanceArrays[1], c);
             assertEquals(advance, firstPartAdvance + secondPartAdvance, 1.0f);
 
-
-            final float firstPartAdvance_c = p.getTextRunAdvances(chars, start, c,
-                    contextStart, contextEnd - contextStart, isRtl, advanceArrays[3], 0);
-            final float secondPartAdvance_c = p.getTextRunAdvances(chars, start + c,
-                    count - c, contextStart, contextEnd - contextStart, isRtl,
-                    advanceArrays[3], c);
-            assertEquals(advance, firstPartAdvance_c + secondPartAdvance_c, 1.0f);
-            assertEquals(firstPartAdvance, firstPartAdvance_c, 1.0f);
-            assertEquals(secondPartAdvance, secondPartAdvance_c, 1.0f);
-
-            for (int i = 1; i < advanceArrays.length; i++) {
-                for (int j = 0; j < count; j++) {
-                    assertEquals(advanceArrays[0][j], advanceArrays[i][j], 1.0f);
-                }
+            for (int j = 0; j < count; j++) {
+                assertEquals(advanceArrays[0][j], advanceArrays[1][j], 1.0f);
             }
+
 
             // Compare results with measureText, getRunAdvance, and getTextWidths.
             if (compareWithOtherMethods && start == contextStart && end == contextEnd) {
                 assertEquals(advance, p.measureText(str, start, end), 1.0f);
                 assertEquals(advance, p.getRunAdvance(
-                        str, start, end, contextStart, contextEnd, isRtl, end), 1.0f);
+                        chars, start, count, contextStart, contextCount, isRtl, end), 1.0f);
 
                 final float[] widths = new float[count];
                 p.getTextWidths(str, start, end, widths);
@@ -236,19 +233,7 @@ public class PaintTest extends InstrumentationTestCase {
 
     public void testGetTextRunAdvances_invalid() {
         Paint p = new Paint();
-        String text = "test";
-
-        try {
-            p.getTextRunAdvances((String)null, 0, 0, 0, 0, false, null, 0);
-            fail("Should throw an IllegalArgumentException.");
-        } catch (IllegalArgumentException e) {
-        }
-
-        try {
-            p.getTextRunAdvances((CharSequence)null, 0, 0, 0, 0, false, null, 0);
-            fail("Should throw an IllegalArgumentException.");
-        } catch (IllegalArgumentException e) {
-        }
+        char[] text = "test".toCharArray();
 
         try {
             p.getTextRunAdvances((char[])null, 0, 0, 0, 0, false, null, 0);
@@ -257,50 +242,43 @@ public class PaintTest extends InstrumentationTestCase {
         }
 
         try {
-            p.getTextRunAdvances(text, 0, text.length(), 0, text.length(), false,
-                    new float[text.length() - 1], 0);
+            p.getTextRunAdvances(text, 0, text.length, 0, text.length, false,
+                    new float[text.length - 1], 0);
             fail("Should throw an IndexOutOfBoundsException.");
         } catch (IndexOutOfBoundsException e) {
         }
 
         try {
-            p.getTextRunAdvances(text, 0, text.length(), 0, text.length(), false,
-                    new float[text.length()], 1);
+            p.getTextRunAdvances(text, 0, text.length, 0, text.length, false,
+                    new float[text.length], 1);
             fail("Should throw an IndexOutOfBoundsException.");
         } catch (IndexOutOfBoundsException e) {
         }
 
         // 0 > contextStart
         try {
-            p.getTextRunAdvances(text, 0, text.length(), -1, text.length(), false, null, 0);
+            p.getTextRunAdvances(text, 0, text.length, -1, text.length, false, null, 0);
             fail("Should throw an IndexOutOfBoundsException.");
         } catch (IndexOutOfBoundsException e) {
         }
 
         // contextStart > start
         try {
-            p.getTextRunAdvances(text, 0, text.length(), 1, text.length(), false, null, 0);
-            fail("Should throw an IndexOutOfBoundsException.");
-        } catch (IndexOutOfBoundsException e) {
-        }
-
-        // start > end
-        try {
-            p.getTextRunAdvances(text, 1, 0, 0, text.length(), false, null, 0);
+            p.getTextRunAdvances(text, 0, text.length, 1, text.length, false, null, 0);
             fail("Should throw an IndexOutOfBoundsException.");
         } catch (IndexOutOfBoundsException e) {
         }
 
         // end > contextEnd
         try {
-            p.getTextRunAdvances(text, 0, text.length(), 0, text.length() - 1, false, null, 0);
+            p.getTextRunAdvances(text, 0, text.length, 0, text.length - 1, false, null, 0);
             fail("Should throw an IndexOutOfBoundsException.");
         } catch (IndexOutOfBoundsException e) {
         }
 
         // contextEnd > text.length
         try {
-            p.getTextRunAdvances(text, 0, text.length(), 0, text.length() + 1, false, null, 0);
+            p.getTextRunAdvances(text, 0, text.length, 0, text.length + 1, false, null, 0);
             fail("Should throw an IndexOutOfBoundsException.");
         } catch (IndexOutOfBoundsException e) {
         }
@@ -396,5 +374,74 @@ public class PaintTest extends InstrumentationTestCase {
         //    × 100 (text size)
         //    = 30
         assertEquals(30.0f, p.getUnderlineThickness(), 0.5f);
+    }
+
+    private int getClusterCount(Paint p, String text) {
+        Paint.RunInfo runInfo = new Paint.RunInfo();
+        p.getRunCharacterAdvance(text, 0, text.length(), 0, text.length(), false, 0, null, 0, null,
+                runInfo);
+        int ccByString = runInfo.getClusterCount();
+        runInfo.setClusterCount(0);
+        char[] buf = new char[text.length()];
+        TextUtils.getChars(text, 0, text.length(), buf, 0);
+        p.getRunCharacterAdvance(buf, 0, buf.length, 0, buf.length, false, 0, null, 0, null,
+                runInfo);
+        int ccByChars = runInfo.getClusterCount();
+        assertEquals(ccByChars, ccByString);
+        return ccByChars;
+    }
+
+    public void testCluster() {
+        final Paint p = new Paint();
+        p.setTextSize(100);
+
+        // Regular String
+        assertEquals(1, getClusterCount(p, "A"));
+        assertEquals(2, getClusterCount(p, "AB"));
+
+        // Ligature is in the same cluster
+        assertEquals(1, getClusterCount(p, "fi"));  // Ligature
+        p.setFontFeatureSettings("'liga' off");
+        assertEquals(2, getClusterCount(p, "fi"));  // Ligature is disabled
+        p.setFontFeatureSettings("");
+
+        // Combining character
+        assertEquals(1, getClusterCount(p, "\u0061\u0300"));  // A + COMBINING GRAVE ACCENT
+
+        // BiDi
+        final String rtlStr = "\u05D0\u05D1\u05D2";
+        final String ltrStr = "abc";
+        assertEquals(3, getClusterCount(p, rtlStr));
+        assertEquals(6, getClusterCount(p, rtlStr + ltrStr));
+        assertEquals(9, getClusterCount(p, ltrStr + rtlStr + ltrStr));
+    }
+
+    @RequiresFlagsEnabled(Flags.FLAG_TYPEFACE_CACHE_FOR_VAR_SETTINGS)
+    public void testDerivedFromSameTypeface() {
+        final Paint p = new Paint();
+
+        p.setTypeface(Typeface.SANS_SERIF);
+        assertThat(p.setFontVariationSettings("'wght' 450")).isTrue();
+        Typeface first = p.getTypeface();
+
+        p.setTypeface(Typeface.SANS_SERIF);
+        assertThat(p.setFontVariationSettings("'wght' 480")).isTrue();
+        Typeface second = p.getTypeface();
+
+        assertThat(first.getDerivedFrom()).isSameInstanceAs(second.getDerivedFrom());
+    }
+
+    @RequiresFlagsEnabled(Flags.FLAG_TYPEFACE_CACHE_FOR_VAR_SETTINGS)
+    public void testDerivedFromChained() {
+        final Paint p = new Paint();
+
+        p.setTypeface(Typeface.SANS_SERIF);
+        assertThat(p.setFontVariationSettings("'wght' 450")).isTrue();
+        Typeface first = p.getTypeface();
+
+        assertThat(p.setFontVariationSettings("'wght' 480")).isTrue();
+        Typeface second = p.getTypeface();
+
+        assertThat(first.getDerivedFrom()).isSameInstanceAs(second.getDerivedFrom());
     }
 }

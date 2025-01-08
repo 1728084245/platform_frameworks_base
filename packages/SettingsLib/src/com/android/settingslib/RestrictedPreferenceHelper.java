@@ -16,37 +16,61 @@
 
 package com.android.settingslib;
 
+import static android.app.admin.DevicePolicyResources.Strings.Settings.CONTROLLED_BY_ADMIN_SUMMARY;
+
+import static com.android.settingslib.RestrictedLockUtils.EnforcedAdmin;
+
+import android.app.admin.DevicePolicyManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.TypedArray;
-import android.graphics.drawable.Drawable;
+import android.os.Build;
 import android.os.UserHandle;
-import androidx.preference.Preference;
-import androidx.preference.PreferenceViewHolder;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.TypedValue;
-import android.view.View;
 import android.widget.TextView;
 
-import static com.android.settingslib.RestrictedLockUtils.EnforcedAdmin;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
+import androidx.annotation.VisibleForTesting;
+import androidx.preference.Preference;
+import androidx.preference.PreferenceViewHolder;
 
 /**
  * Helper class for managing settings preferences that can be disabled
  * by device admins via user restrictions.
  */
 public class RestrictedPreferenceHelper {
+    private static final String TAG = "RestrictedPreferenceHelper";
+
     private final Context mContext;
     private final Preference mPreference;
+    String packageName;
+
+    /**
+     * @deprecated TODO(b/308921175): This will be deleted with the
+     * {@link android.security.Flags#extendEcmToAllSettings} feature flag. Do not use for any new
+     * code.
+     */
+    int uid;
 
     private boolean mDisabledByAdmin;
-    private EnforcedAdmin mEnforcedAdmin;
+    @VisibleForTesting
+    EnforcedAdmin mEnforcedAdmin;
     private String mAttrUserRestriction = null;
-    private boolean mUseAdminDisabledSummary = false;
+    private boolean mDisabledSummary = false;
+
+    private boolean mDisabledByEcm;
+    private Intent mDisabledByEcmIntent = null;
 
     public RestrictedPreferenceHelper(Context context, Preference preference,
-            AttributeSet attrs) {
+            AttributeSet attrs, String packageName, int uid) {
         mContext = context;
         mPreference = preference;
+        this.packageName = packageName;
+        this.uid = uid;
 
         if (attrs != null) {
             final TypedArray attributes = context.obtainStyledAttributes(attrs,
@@ -63,7 +87,7 @@ public class RestrictedPreferenceHelper {
             }
             mAttrUserRestriction = data == null ? null : data.toString();
             // If the system has set the user restriction, then we shouldn't add the padlock.
-            if (RestrictedLockUtils.hasBaseUserRestriction(mContext, mAttrUserRestriction,
+            if (RestrictedLockUtilsInternal.hasBaseUserRestriction(mContext, mAttrUserRestriction,
                     UserHandle.myUserId())) {
                 mAttrUserRestriction = null;
                 return;
@@ -72,27 +96,36 @@ public class RestrictedPreferenceHelper {
             final TypedValue useAdminDisabledSummary =
                     attributes.peekValue(R.styleable.RestrictedPreference_useAdminDisabledSummary);
             if (useAdminDisabledSummary != null) {
-                mUseAdminDisabledSummary =
+                mDisabledSummary =
                         (useAdminDisabledSummary.type == TypedValue.TYPE_INT_BOOLEAN
                                 && useAdminDisabledSummary.data != 0);
             }
         }
     }
 
+    public RestrictedPreferenceHelper(Context context, Preference preference,
+            AttributeSet attrs) {
+        this(context, preference, attrs, null, android.os.Process.INVALID_UID);
+    }
+
     /**
      * Modify PreferenceViewHolder to add padlock if restriction is disabled.
      */
     public void onBindViewHolder(PreferenceViewHolder holder) {
-        if (mDisabledByAdmin) {
+        if (mDisabledByAdmin || mDisabledByEcm) {
             holder.itemView.setEnabled(true);
         }
-        if (mUseAdminDisabledSummary) {
+        if (mDisabledSummary) {
             final TextView summaryView = (TextView) holder.findViewById(android.R.id.summary);
             if (summaryView != null) {
-                final CharSequence disabledText = summaryView.getContext().getText(
-                        R.string.disabled_by_admin_summary_text);
+                final CharSequence disabledText =
+                        (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                                ? getDisabledByAdminUpdatableString()
+                                : mContext.getString(R.string.disabled_by_admin_summary_text);
                 if (mDisabledByAdmin) {
                     summaryView.setText(disabledText);
+                } else if (mDisabledByEcm) {
+                    summaryView.setText(R.string.disabled_by_app_ops_text);
                 } else if (TextUtils.equals(disabledText, summaryView.getText())) {
                     // It's previously set to disabled text, clear it.
                     summaryView.setText(null);
@@ -101,8 +134,15 @@ public class RestrictedPreferenceHelper {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private String getDisabledByAdminUpdatableString() {
+        return mContext.getSystemService(DevicePolicyManager.class).getResources().getString(
+                CONTROLLED_BY_ADMIN_SUMMARY,
+                () -> mContext.getString(R.string.disabled_by_admin_summary_text));
+    }
+
     public void useAdminDisabledSummary(boolean useSummary) {
-        mUseAdminDisabledSummary = useSummary;
+        mDisabledSummary = useSummary;
     }
 
     /**
@@ -110,10 +150,22 @@ public class RestrictedPreferenceHelper {
      *
      * @return true if the method handled the click.
      */
+    @SuppressWarnings("NewApi")
     public boolean performClick() {
         if (mDisabledByAdmin) {
             RestrictedLockUtils.sendShowAdminSupportDetailsIntent(mContext, mEnforcedAdmin);
             return true;
+        }
+        if (mDisabledByEcm) {
+            if (android.permission.flags.Flags.enhancedConfirmationModeApisEnabled()
+                    && android.security.Flags.extendEcmToAllSettings()) {
+                mContext.startActivity(mDisabledByEcmIntent);
+                return true;
+            } else {
+                RestrictedLockUtilsInternal.sendShowRestrictedSettingDialogIntent(mContext,
+                        packageName, uid);
+                return true;
+            }
         }
         return false;
     }
@@ -134,31 +186,126 @@ public class RestrictedPreferenceHelper {
      * @param userId user to check the restriction for.
      */
     public void checkRestrictionAndSetDisabled(String userRestriction, int userId) {
-        EnforcedAdmin admin = RestrictedLockUtils.checkIfRestrictionEnforced(mContext,
+        EnforcedAdmin admin = RestrictedLockUtilsInternal.checkIfRestrictionEnforced(mContext,
                 userRestriction, userId);
         setDisabledByAdmin(admin);
     }
 
     /**
+     * Checks if the given setting is subject to Enhanced Confirmation Mode restrictions for this
+     * package. Marks the preference as disabled if so.
+     * @param settingIdentifier The key identifying the setting
+     * @param packageName the package to check the settingIdentifier for
+     */
+    public void checkEcmRestrictionAndSetDisabled(@NonNull String settingIdentifier,
+            @NonNull String packageName) {
+        updatePackageDetails(packageName, android.os.Process.INVALID_UID);
+        Intent intent = RestrictedLockUtilsInternal.checkIfRequiresEnhancedConfirmation(
+                mContext, settingIdentifier, packageName);
+        setDisabledByEcm(intent);
+    }
+
+    /**
+     * @return EnforcedAdmin if we have been passed the restriction in the xml.
+     */
+    public EnforcedAdmin checkRestrictionEnforced() {
+        if (mAttrUserRestriction == null) {
+            return null;
+        }
+        return RestrictedLockUtilsInternal.checkIfRestrictionEnforced(mContext,
+                mAttrUserRestriction, UserHandle.myUserId());
+    }
+
+    /**
      * Disable this preference based on the enforce admin.
      *
-     * @param EnforcedAdmin Details of the admin who enforced the restriction. If it
-     * is {@code null}, then this preference will be enabled. Otherwise, it will be disabled.
+     * @param admin details of the admin who enforced the restriction. If it is
+     * {@code null}, then this preference will be enabled. Otherwise, it will be disabled.
+     * Only gray out the preference which is not {@link RestrictedTopLevelPreference}.
      * @return true if the disabled state was changed.
      */
     public boolean setDisabledByAdmin(EnforcedAdmin admin) {
-        final boolean disabled = (admin != null ? true : false);
-        mEnforcedAdmin = admin;
+        boolean disabled = false;
+        mEnforcedAdmin = null;
+        if (admin != null) {
+            disabled = true;
+            // Copy the received instance to prevent pass be reference being overwritten.
+            mEnforcedAdmin = new EnforcedAdmin(admin);
+        }
+
         boolean changed = false;
         if (mDisabledByAdmin != disabled) {
             mDisabledByAdmin = disabled;
             changed = true;
+            updateDisabledState();
         }
-        mPreference.setEnabled(!disabled);
+
+        return changed;
+    }
+
+    /**
+     * Disable the preference based on the passed in Intent
+     * @param disabledIntent The intent which is started when the user clicks the disabled
+     * preference. If it is {@code null}, then this preference will be enabled. Otherwise, it will
+     * be disabled.
+     * @return true if the disabled state was changed.
+     */
+    public boolean setDisabledByEcm(@Nullable Intent disabledIntent) {
+        boolean disabled = disabledIntent != null;
+        boolean changed = false;
+        if (mDisabledByEcm != disabled) {
+            mDisabledByEcmIntent = disabledIntent;
+            mDisabledByEcm = disabled;
+            changed = true;
+            updateDisabledState();
+        }
+
         return changed;
     }
 
     public boolean isDisabledByAdmin() {
         return mDisabledByAdmin;
+    }
+
+    public boolean isDisabledByEcm() {
+        return mDisabledByEcm;
+    }
+
+    public void updatePackageDetails(String packageName, int uid) {
+        this.packageName = packageName;
+        this.uid = uid;
+    }
+
+    private void updateDisabledState() {
+        boolean isEnabled = !(mDisabledByAdmin || mDisabledByEcm);
+        if (!(mPreference instanceof RestrictedTopLevelPreference)) {
+            mPreference.setEnabled(isEnabled);
+        }
+
+        if (mPreference instanceof PrimarySwitchPreference) {
+            ((PrimarySwitchPreference) mPreference).setSwitchEnabled(isEnabled);
+        }
+
+        if (!isEnabled && mDisabledByEcm) {
+            mPreference.setSummary(R.string.disabled_by_app_ops_text);
+        }
+    }
+
+
+    /**
+     * @deprecated TODO(b/308921175): This will be deleted with the
+     * {@link android.security.Flags#extendEcmToAllSettings} feature flag. Do not use for any new
+     * code.
+     */
+    @Deprecated
+    public boolean setDisabledByAppOps(boolean disabled) {
+        boolean changed = false;
+        if (mDisabledByEcm != disabled) {
+            mDisabledByEcm = disabled;
+            changed = true;
+            updateDisabledState();
+        }
+
+        return changed;
     }
 }

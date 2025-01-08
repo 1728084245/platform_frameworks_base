@@ -16,7 +16,8 @@
 
 package android.util;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+
 import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -25,6 +26,7 @@ import java.io.OutputStream;
  * An OutputStream that does Base64 encoding on the data written to
  * it, writing the resulting data to another OutputStream.
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public class Base64OutputStream extends FilterOutputStream {
     private final Base64.Coder coder;
     private final int flags;
@@ -119,8 +121,10 @@ public class Base64OutputStream extends FilterOutputStream {
                 out.flush();
             }
         } catch (IOException e) {
-            if (thrown != null) {
+            if (thrown == null) {
                 thrown = e;
+            } else {
+                thrown.addSuppressed(e);
             }
         }
 

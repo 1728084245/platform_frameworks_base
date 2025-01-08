@@ -16,7 +16,8 @@
 
 package android.os.storage;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.os.Build;
 
 /**
  * Used for receiving notifications from the StorageManager
@@ -24,6 +25,11 @@ import android.annotation.UnsupportedAppUsage;
  * @hide
  */
 public class StorageEventListener {
+
+    @UnsupportedAppUsage
+    public StorageEventListener() {
+    }
+
     /**
      * Called when the detection state of a USB Mass Storage host has changed.
      * @param connected true if the USB mass storage is connected.
@@ -42,23 +48,23 @@ public class StorageEventListener {
     public void onStorageStateChanged(String path, String oldState, String newState) {
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void onVolumeStateChanged(VolumeInfo vol, int oldState, int newState) {
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void onVolumeRecordChanged(VolumeRecord rec) {
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void onVolumeForgotten(String fsUuid) {
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void onDiskScanned(DiskInfo disk, int volumeCount) {
     }
 
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void onDiskDestroyed(DiskInfo disk) {
     }
 }

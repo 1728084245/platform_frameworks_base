@@ -16,18 +16,24 @@
 
 package com.android.settingslib.utils;
 
+import static junit.framework.Assert.assertEquals;
+
 import android.net.NetworkPolicy;
 import android.net.NetworkPolicyManager;
+import android.net.NetworkStats;
 import android.net.NetworkTemplate;
-import android.support.test.InstrumentationRegistry;
-import android.support.test.filters.SmallTest;
-import android.support.test.runner.AndroidJUnit4;
+
+import androidx.test.InstrumentationRegistry;
+import androidx.test.filters.SmallTest;
+import androidx.test.runner.AndroidJUnit4;
+
 import com.android.settingslib.NetworkPolicyEditor;
+
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import static junit.framework.Assert.assertEquals;
+import java.util.Set;
 
 @RunWith(AndroidJUnit4.class)
 @SmallTest
@@ -41,7 +47,9 @@ public class NetworkPolicyEditorTest {
 
     @Before
     public void setUp() {
-        mNetworkTemplate = NetworkTemplate.buildTemplateMobileAll("123456789123456");
+        mNetworkTemplate = new NetworkTemplate.Builder(NetworkTemplate.MATCH_CARRIER)
+                .setMeteredness(NetworkStats.METERED_YES)
+                .setSubscriberIds(Set.of("123456789123456")).build();
         NetworkPolicyManager policyManager = NetworkPolicyManager.from(InstrumentationRegistry
                 .getContext());
         mNetworkPolicyEditor = new NetworkPolicyEditor(policyManager);

@@ -34,12 +34,15 @@ static struct {
     jclass clazz;
 
     jfieldID displayId;
+    jfieldID isActive;
     jfieldID orientation;
     jfieldID logicalFrame;
     jfieldID physicalFrame;
     jfieldID deviceWidth;
     jfieldID deviceHeight;
     jfieldID uniqueId;
+    jfieldID physicalPort;
+    jfieldID type;
 } gDisplayViewportClassInfo;
 
 static struct {
@@ -53,16 +56,31 @@ static struct {
 
 status_t android_hardware_display_DisplayViewport_toNative(JNIEnv* env, jobject viewportObj,
         DisplayViewport* viewport) {
-    viewport->displayId = env->GetIntField(viewportObj, gDisplayViewportClassInfo.displayId);
-    viewport->orientation = env->GetIntField(viewportObj, gDisplayViewportClassInfo.orientation);
+    static const jclass intClass = FindClassOrDie(env, "java/lang/Integer");
+    static const jmethodID byteValue = env->GetMethodID(intClass, "byteValue", "()B");
+
+    viewport->displayId = ui::LogicalDisplayId{
+            env->GetIntField(viewportObj, gDisplayViewportClassInfo.displayId)};
+    viewport->isActive = env->GetBooleanField(viewportObj, gDisplayViewportClassInfo.isActive);
+    jint orientation = env->GetIntField(viewportObj, gDisplayViewportClassInfo.orientation);
+    viewport->orientation = static_cast<ui::Rotation>(orientation);
     viewport->deviceWidth = env->GetIntField(viewportObj, gDisplayViewportClassInfo.deviceWidth);
     viewport->deviceHeight = env->GetIntField(viewportObj, gDisplayViewportClassInfo.deviceHeight);
 
     jstring uniqueId =
             jstring(env->GetObjectField(viewportObj, gDisplayViewportClassInfo.uniqueId));
     if (uniqueId != nullptr) {
-        viewport->uniqueId.setTo(ScopedUtfChars(env, uniqueId).c_str());
+        viewport->uniqueId = ScopedUtfChars(env, uniqueId).c_str();
     }
+
+    viewport->physicalPort = std::nullopt;
+    jobject physicalPort = env->GetObjectField(viewportObj, gDisplayViewportClassInfo.physicalPort);
+    if (physicalPort != nullptr) {
+        viewport->physicalPort = std::make_optional(env->CallByteMethod(physicalPort, byteValue));
+    }
+
+    viewport->type = static_cast<ViewportType>(env->GetIntField(viewportObj,
+                gDisplayViewportClassInfo.type));
 
     jobject logicalFrameObj =
             env->GetObjectField(viewportObj, gDisplayViewportClassInfo.logicalFrame);
@@ -90,6 +108,9 @@ int register_android_hardware_display_DisplayViewport(JNIEnv* env) {
     gDisplayViewportClassInfo.displayId = GetFieldIDOrDie(env,
             gDisplayViewportClassInfo.clazz, "displayId", "I");
 
+    gDisplayViewportClassInfo.isActive =
+            GetFieldIDOrDie(env, gDisplayViewportClassInfo.clazz, "isActive", "Z");
+
     gDisplayViewportClassInfo.orientation = GetFieldIDOrDie(env,
             gDisplayViewportClassInfo.clazz, "orientation", "I");
 
@@ -107,6 +128,12 @@ int register_android_hardware_display_DisplayViewport(JNIEnv* env) {
 
     gDisplayViewportClassInfo.uniqueId = GetFieldIDOrDie(env,
             gDisplayViewportClassInfo.clazz, "uniqueId", "Ljava/lang/String;");
+
+    gDisplayViewportClassInfo.physicalPort = GetFieldIDOrDie(env, gDisplayViewportClassInfo.clazz,
+                                                             "physicalPort", "Ljava/lang/Integer;");
+
+    gDisplayViewportClassInfo.type = GetFieldIDOrDie(env,
+            gDisplayViewportClassInfo.clazz, "type", "I");
 
     clazz = FindClassOrDie(env, "android/graphics/Rect");
     gRectClassInfo.left = GetFieldIDOrDie(env, clazz, "left", "I");

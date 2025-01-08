@@ -1,5 +1,0 @@
-android.net.ConnectivityThread$Singleton
-android.os.AsyncTask
-android.os.FileObserver
-android.widget.Magnifier
-sun.nio.fs.UnixChannelFactory

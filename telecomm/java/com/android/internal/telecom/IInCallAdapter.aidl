@@ -18,7 +18,9 @@ package com.android.internal.telecom;
 
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.ResultReceiver;
 import android.telecom.PhoneAccountHandle;
+import android.telecom.CallEndpoint;
 
 /**
  * Internal remote callback interface for in-call services.
@@ -34,6 +36,12 @@ oneway interface IInCallAdapter {
 
     void rejectCall(String callId, boolean rejectWithMessage, String textMessage);
 
+    void rejectCallWithReason(String callId, int rejectReason);
+
+    void transferCall(String callId, in Uri targetNumber, boolean isConfirmationRequired);
+
+    void consultativeTransfer(String callId, String otherCallId);
+
     void disconnectCall(String callId);
 
     void holdCall(String callId);
@@ -43,6 +51,12 @@ oneway interface IInCallAdapter {
     void mute(boolean shouldMute);
 
     void setAudioRoute(int route, String bluetoothAddress);
+
+    void requestCallEndpointChange(in CallEndpoint endpoint, in ResultReceiver callback);
+
+    void enterBackgroundAudioProcessing(String callId);
+
+    void exitBackgroundAudioProcessing(String callId, boolean shouldRing);
 
     void playDtmfTone(String callId, char digit);
 
@@ -60,6 +74,8 @@ oneway interface IInCallAdapter {
     void mergeConference(String callId);
 
     void swapConference(String callId);
+
+    void addConferenceParticipants(String callId, in List<Uri> participants);
 
     void turnOnProximitySensor();
 

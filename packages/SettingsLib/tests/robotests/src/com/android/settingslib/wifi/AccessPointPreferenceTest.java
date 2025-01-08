@@ -16,27 +16,31 @@
 package com.android.settingslib.wifi;
 
 import static com.google.common.truth.Truth.assertThat;
+
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.content.Context;
 import android.graphics.drawable.ColorDrawable;
+import android.net.wifi.WifiManager;
 
-import com.android.settingslib.SettingsLibRobolectricTestRunner;
+import androidx.test.core.app.ApplicationProvider;
 
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 
-@RunWith(SettingsLibRobolectricTestRunner.class)
+@RunWith(RobolectricTestRunner.class)
 public class AccessPointPreferenceTest {
 
-    private Context mContext = RuntimeEnvironment.application;
+    private Context mContext;
 
     @Mock
     private AccessPoint mockAccessPoint;
@@ -53,6 +57,8 @@ public class AccessPointPreferenceTest {
     @Before
     public void setUp() {
         MockitoAnnotations.initMocks(this);
+        mContext = spy(ApplicationProvider.getApplicationContext());
+        when(mContext.getSystemService(Context.WIFI_SERVICE)).thenReturn(mock(WifiManager.class));
 
         when(mockIconInjector.getIcon(anyInt())).thenReturn(new ColorDrawable());
     }
@@ -72,7 +78,7 @@ public class AccessPointPreferenceTest {
 
         assertThat(AccessPointPreference.buildContentDescription(
                 RuntimeEnvironment.application, pref, ap))
-                .isEqualTo("ssid,connected,Wifi signal full.,Secure network");
+                .isEqualTo("ssid,connected,Wifi disconnected.,Secure network");
     }
 
     @Test
@@ -98,7 +104,7 @@ public class AccessPointPreferenceTest {
                 .build();
         final AccessPointPreference preference = mock(AccessPointPreference.class);
 
-        AccessPointPreference.setTitle(preference, ap, false /* savedNetwork */);
+        AccessPointPreference.setTitle(preference, ap);
         verify(preference).setTitle(ssid);
     }
 }

@@ -17,10 +17,10 @@
 
 package com.android.systemui;
 
-import android.animation.Animator;
-import android.animation.AnimatorListenerAdapter;
-import android.animation.ObjectAnimator;
+import static com.android.internal.jank.InteractionJankMonitor.CUJ_NOTIFICATION_SHADE_ROW_EXPAND;
+
 import android.content.Context;
+import android.util.FloatProperty;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
@@ -31,11 +31,18 @@ import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewConfiguration;
 
+import androidx.annotation.NonNull;
+import androidx.core.animation.Animator;
+import androidx.core.animation.AnimatorListenerAdapter;
+import androidx.core.animation.ObjectAnimator;
+
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.systemui.statusbar.ExpandableNotificationRow;
-import com.android.systemui.statusbar.ExpandableView;
-import com.android.systemui.statusbar.FlingAnimationUtils;
+import com.android.internal.jank.InteractionJankMonitor;
+import com.android.systemui.res.R;
+import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
+import com.android.systemui.statusbar.notification.row.ExpandableView;
 import com.android.systemui.statusbar.policy.ScrollAdapter;
+import com.android.wm.shell.animation.FlingAnimationUtils;
 
 public class ExpandHelper implements Gefingerpoken {
     public interface Callback {
@@ -66,6 +73,19 @@ public class ExpandHelper implements Gefingerpoken {
     // 2f: maximum brightness is stretching a 1U to 3U, or a 4U to 6U
     private static final float STRETCH_INTERVAL = 2f;
 
+    private static final FloatProperty<ViewScaler> VIEW_SCALER_HEIGHT_PROPERTY =
+            new FloatProperty<ViewScaler>("ViewScalerHeight") {
+        @Override
+        public void setValue(ViewScaler object, float value) {
+            object.setHeight(value);
+        }
+
+        @Override
+        public Float get(ViewScaler object) {
+            return object.getHeight();
+        }
+    };
+
     @SuppressWarnings("unused")
     private Context mContext;
 
@@ -86,7 +106,8 @@ public class ExpandHelper implements Gefingerpoken {
     private float mInitialTouchSpan;
     private float mLastFocusY;
     private float mLastSpanY;
-    private int mTouchSlop;
+    private final int mTouchSlop;
+    private final float mSlopMultiplier;
     private float mLastMotionY;
     private float mPullGestureMinXSpan;
     private Callback mCallback;
@@ -143,6 +164,7 @@ public class ExpandHelper implements Gefingerpoken {
         public void setView(ExpandableView v) {
             mView = v;
         }
+
         public void setHeight(float h) {
             if (DEBUG_SCALE) Log.v(TAG, "SetHeight: setting to " + h);
             mView.setActualHeight((int) h);
@@ -161,8 +183,8 @@ public class ExpandHelper implements Gefingerpoken {
      *
      * @param context application context
      * @param callback the container that holds the items to be manipulated
-     * @param small the smallest allowable size for the manuipulated items.
-     * @param large the largest allowable size for the manuipulated items.
+     * @param small the smallest allowable size for the manipulated items.
+     * @param large the largest allowable size for the manipulated items.
      */
     public ExpandHelper(Context context, Callback callback, int small, int large) {
         mSmallSize = small;
@@ -172,14 +194,16 @@ public class ExpandHelper implements Gefingerpoken {
         mCallback = callback;
         mScaler = new ViewScaler();
         mGravity = Gravity.TOP;
-        mScaleAnimation = ObjectAnimator.ofFloat(mScaler, "height", 0f);
+        mScaleAnimation = ObjectAnimator.ofFloat(mScaler, VIEW_SCALER_HEIGHT_PROPERTY, 0f);
         mPullGestureMinXSpan = mContext.getResources().getDimension(R.dimen.pull_span_min);
 
         final ViewConfiguration configuration = ViewConfiguration.get(mContext);
         mTouchSlop = configuration.getScaledTouchSlop();
+        mSlopMultiplier = configuration.getAmbiguousGestureMultiplier();
 
         mSGD = new ScaleGestureDetector(context, mScaleGestureListener);
-        mFlingAnimationUtils = new FlingAnimationUtils(context, EXPAND_DURATION);
+        mFlingAnimationUtils = new FlingAnimationUtils(mContext.getResources().getDisplayMetrics(),
+                EXPAND_DURATION);
     }
 
     @VisibleForTesting
@@ -257,6 +281,13 @@ public class ExpandHelper implements Gefingerpoken {
         mScrollAdapter = adapter;
     }
 
+    private float getTouchSlop(MotionEvent event) {
+        // Adjust the touch slop if another gesture may be being performed.
+        return event.getClassification() == MotionEvent.CLASSIFICATION_AMBIGUOUS_GESTURE
+                ? mTouchSlop * mSlopMultiplier
+                : mTouchSlop;
+    }
+
     @Override
     public boolean onInterceptTouchEvent(MotionEvent ev) {
         if (!isEnabled()) {
@@ -302,7 +333,7 @@ public class ExpandHelper implements Gefingerpoken {
                 if (mWatchingForPull) {
                     final float yDiff = ev.getRawY() - mInitialTouchY;
                     final float xDiff = ev.getRawX() - mInitialTouchX;
-                    if (yDiff > mTouchSlop && yDiff > Math.abs(xDiff)) {
+                    if (yDiff > getTouchSlop(ev) && yDiff > Math.abs(xDiff)) {
                         if (DEBUG) Log.v(TAG, "got venetian gesture (dy=" + yDiff + "px)");
                         mWatchingForPull = false;
                         if (mResizedView != null && !isFullyExpanded(mResizedView)) {
@@ -430,7 +461,7 @@ public class ExpandHelper implements Gefingerpoken {
                 if (mWatchingForPull) {
                     final float yDiff = ev.getRawY() - mInitialTouchY;
                     final float xDiff = ev.getRawX() - mInitialTouchX;
-                    if (yDiff > mTouchSlop && yDiff > Math.abs(xDiff)) {
+                    if (yDiff > getTouchSlop(ev) && yDiff > Math.abs(xDiff)) {
                         if (DEBUG) Log.v(TAG, "got venetian gesture (dy=" + yDiff + "px)");
                         mWatchingForPull = false;
                         if (mResizedView != null && !isFullyExpanded(mResizedView)) {
@@ -534,7 +565,13 @@ public class ExpandHelper implements Gefingerpoken {
         }
         if (DEBUG) Log.d(TAG, "got mOldHeight: " + mOldHeight +
                     " mNaturalHeight: " + mNaturalHeight);
+        InteractionJankMonitor.getInstance().begin(v, CUJ_NOTIFICATION_SHADE_ROW_EXPAND);
         return true;
+    }
+
+    /** Finish the current expand motion without accounting for velocity. */
+    public void finishExpanding() {
+        finishExpanding(false, 0);
     }
 
     /**
@@ -587,7 +624,7 @@ public class ExpandHelper implements Gefingerpoken {
                 public boolean mCancelled;
 
                 @Override
-                public void onAnimationEnd(Animator animation) {
+                public void onAnimationEnd(@NonNull Animator animation) {
                     if (!mCancelled) {
                         mCallback.setUserExpandedChild(scaledView, expand);
                         if (!mExpanding) {
@@ -598,10 +635,13 @@ public class ExpandHelper implements Gefingerpoken {
                     }
                     mCallback.setUserLockedChild(scaledView, false);
                     mScaleAnimation.removeListener(this);
+                    if (wasClosed) {
+                        InteractionJankMonitor.getInstance().end(CUJ_NOTIFICATION_SHADE_ROW_EXPAND);
+                    }
                 }
 
                 @Override
-                public void onAnimationCancel(Animator animation) {
+                public void onAnimationCancel(@NonNull Animator animation) {
                     mCancelled = true;
                 }
             });
@@ -615,6 +655,9 @@ public class ExpandHelper implements Gefingerpoken {
             mCallback.setUserExpandedChild(mResizedView, nowExpanded);
             mCallback.setUserLockedChild(mResizedView, false);
             mScaler.setView(null);
+            if (wasClosed) {
+                InteractionJankMonitor.getInstance().end(CUJ_NOTIFICATION_SHADE_ROW_EXPAND);
+            }
         }
 
         mExpanding = false;

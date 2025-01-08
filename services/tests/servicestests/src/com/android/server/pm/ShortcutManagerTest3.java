@@ -17,17 +17,23 @@ package com.android.server.pm;
 
 import static com.android.server.pm.shortcutmanagertest.ShortcutManagerTestUtils.assertWith;
 import static com.android.server.pm.shortcutmanagertest.ShortcutManagerTestUtils.list;
+import static com.android.server.pm.shortcutmanagertest.ShortcutManagerTestUtils.set;
 
 import android.content.ComponentName;
 import android.content.pm.ShortcutInfo;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.platform.test.annotations.Presubmit;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.frameworks.servicestests.R;
 import com.android.server.pm.ShortcutService.ConfigConstants;
 
+import java.util.Set;
+
 /**
  * Tests related to shortcut rank auto-adjustment.
  */
+@Presubmit
 @SmallTest
 public class ShortcutManagerTest3 extends BaseShortcutManagerTest {
 
@@ -48,6 +54,10 @@ public class ShortcutManagerTest3 extends BaseShortcutManagerTest {
 
     private ShortcutInfo shortcut(String id, ComponentName activity) {
         return makeShortcutWithActivityAndRank(id, activity, ShortcutInfo.RANK_NOT_SET);
+    }
+
+    private ShortcutInfo shortcut(String id, Set<String> categories) {
+        return makeShortcutWithCategory(id, categories);
     }
 
     @Override
@@ -502,4 +512,30 @@ public class ShortcutManagerTest3 extends BaseShortcutManagerTest {
         runTestWithManifestShortcuts(() -> testDisableShortcuts_noManifestShortcuts());
     }
 
+    public void testGetSharingShortcutCount() {
+        addManifestShortcutResource(
+                new ComponentName(CALLING_PACKAGE_1, ShortcutActivity.class.getName()),
+                R.xml.shortcut_share_targets);
+        updatePackageVersion(CALLING_PACKAGE_1, 1);
+        mService.mPackageMonitor.onReceive(getTestContext(),
+                genPackageAddIntent(CALLING_PACKAGE_1, USER_0));
+
+        // There are two valid <share-target> definitions in the test manifest with two different
+        // categories: {"com.test.category.CATEGORY1", "com.test.category.CATEGORY2"} and
+        // {"com.test.category.CATEGORY5", "com.test.category.CATEGORY6"}.
+        //
+        // Note that a shortcut is a match, only if it has ALL of the categories of at least one
+        // of the share-target definitions from the manifest.
+
+        mManager.addDynamicShortcuts(list(
+                shortcut("s1", set("com.test.category.CATEGORY1", "com.test.category.CATEGORY2")),
+                shortcut("s2", set("com.test.category.CATEGORY5")),
+                shortcut("s3", set("com.test.category.CATEGORY5", "com.test.category.CATEGORY6")),
+                shortcut("s4", set("com.test.category.CATEGORY1", "com.test.category.CATEGORY2",
+                        "com.test.category.CATEGORY5", "com.test.category.CATEGORY6")),
+                shortcut("s5", A1)
+        ));
+
+        assertEquals(3, getCallerSharingShortcutCount());
+    }
 }

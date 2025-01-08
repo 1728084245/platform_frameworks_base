@@ -23,20 +23,25 @@
 #include <gui/Surface.h>
 #include <gui/SurfaceComposerClient.h>
 #include <gui/SurfaceControl.h>
-#include <ui/DisplayInfo.h>
+#include <ui/DisplayMode.h>
+#include <ui/StaticDisplayInfo.h>
 #include <utils/Looper.h>
 
 #include <atomic>
 #include <thread>
 
+#define dp(x) ((x) * android::uirenderer::test::getDisplayInfo().density)
+
 namespace android {
 namespace uirenderer {
 namespace test {
 
-extern DisplayInfo gDisplay;
-#define dp(x) ((x)*android::uirenderer::test::gDisplay.density)
+const ui::StaticDisplayInfo& getDisplayInfo();
+const ui::DisplayMode& getActiveDisplayMode();
 
-DisplayInfo getBuiltInDisplay();
+inline const ui::Size& getActiveDisplayResolution() {
+    return getActiveDisplayMode().resolution;
+}
 
 class TestContext {
 public:

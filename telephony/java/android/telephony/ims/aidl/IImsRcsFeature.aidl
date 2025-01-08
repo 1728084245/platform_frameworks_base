@@ -16,10 +16,36 @@
 
 package android.telephony.ims.aidl;
 
+import android.net.Uri;
+import android.telephony.ims.RcsContactUceCapability;
+import android.telephony.ims.aidl.ICapabilityExchangeEventListener;
+import android.telephony.ims.aidl.IImsCapabilityCallback;
+import android.telephony.ims.aidl.IOptionsResponseCallback;
+import android.telephony.ims.aidl.IPublishResponseCallback;
+import android.telephony.ims.aidl.ISubscribeResponseCallback;
+import android.telephony.ims.feature.CapabilityChangeRequest;
+
+import java.util.List;
+
 /**
  * See RcsFeature for more information.
  * {@hide}
  */
 interface IImsRcsFeature {
-    //Empty Default Implementation
+    // Not oneway because we need to verify this completes before doing anything else.
+    int queryCapabilityStatus();
+    // Inherited from ImsFeature
+    int getFeatureState();
+    oneway void addCapabilityCallback(IImsCapabilityCallback c);
+    oneway void removeCapabilityCallback(IImsCapabilityCallback c);
+    oneway void changeCapabilitiesConfiguration(in CapabilityChangeRequest r,
+            IImsCapabilityCallback c);
+    oneway void queryCapabilityConfiguration(int capability, int radioTech,
+            IImsCapabilityCallback c);
+    // RcsCapabilityExchangeImplBase specific api
+    oneway void setCapabilityExchangeEventListener(ICapabilityExchangeEventListener listener);
+    oneway void publishCapabilities(in String pidfXml, IPublishResponseCallback cb);
+    oneway void subscribeForCapabilities(in List<Uri> uris, ISubscribeResponseCallback cb);
+    oneway void sendOptionsCapabilityRequest(in Uri contactUri,
+            in List<String> myCapabilities, IOptionsResponseCallback cb);
 }

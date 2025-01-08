@@ -19,13 +19,14 @@
 
 #include <iostream>
 #include <list>
+#include <set>
 #include <sstream>
 
-#include "Diagnostics.h"
 #include "NameMangler.h"
 #include "Resource.h"
 #include "ResourceValues.h"
-#include "Source.h"
+#include "androidfw/IDiagnostics.h"
+#include "androidfw/Source.h"
 
 namespace aapt {
 
@@ -44,12 +45,13 @@ struct IAaptContext {
 
   virtual PackageType GetPackageType() = 0;
   virtual SymbolTable* GetExternalSymbols() = 0;
-  virtual IDiagnostics* GetDiagnostics() = 0;
+  virtual android::IDiagnostics* GetDiagnostics() = 0;
   virtual const std::string& GetCompilationPackage() = 0;
   virtual uint8_t GetPackageId() = 0;
   virtual NameMangler* GetNameMangler() = 0;
   virtual bool IsVerbose() = 0;
   virtual int GetMinSdkVersion() = 0;
+  virtual const std::set<std::string>& GetSplitNameDependencies() = 0;
 };
 
 struct IResourceTableConsumer {

@@ -28,8 +28,6 @@ import android.hardware.broadcastradio.V2_0.MetadataKey;
 import android.hardware.broadcastradio.V2_0.ProgramFilter;
 import android.hardware.broadcastradio.V2_0.ProgramIdentifier;
 import android.hardware.broadcastradio.V2_0.ProgramInfo;
-import android.hardware.broadcastradio.V2_0.ProgramInfoFlags;
-import android.hardware.broadcastradio.V2_0.ProgramListChunk;
 import android.hardware.broadcastradio.V2_0.Properties;
 import android.hardware.broadcastradio.V2_0.Result;
 import android.hardware.broadcastradio.V2_0.VendorKeyValue;
@@ -37,43 +35,70 @@ import android.hardware.radio.ProgramList;
 import android.hardware.radio.ProgramSelector;
 import android.hardware.radio.RadioManager;
 import android.hardware.radio.RadioMetadata;
+import android.hardware.radio.RadioTuner;
 import android.os.ParcelableException;
-import android.util.Slog;
+import android.util.ArrayMap;
+import android.util.ArraySet;
+import android.util.SparseArray;
+
+import com.android.server.utils.Slogf;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-class Convert {
+final class Convert {
+
     private static final String TAG = "BcRadio2Srv.convert";
 
+    private Convert() {
+        throw new UnsupportedOperationException("Convert class is noninstantiable");
+    }
+
     static void throwOnError(String action, int result) {
+        String errorString = action + ": " + Result.toString(result);
         switch (result) {
             case Result.OK:
                 return;
             case Result.UNKNOWN_ERROR:
-                throw new ParcelableException(new RuntimeException(action + ": UNKNOWN_ERROR"));
             case Result.INTERNAL_ERROR:
-                throw new ParcelableException(new RuntimeException(action + ": INTERNAL_ERROR"));
-            case Result.INVALID_ARGUMENTS:
-                throw new IllegalArgumentException(action + ": INVALID_ARGUMENTS");
-            case Result.INVALID_STATE:
-                throw new IllegalStateException(action + ": INVALID_STATE");
-            case Result.NOT_SUPPORTED:
-                throw new UnsupportedOperationException(action + ": NOT_SUPPORTED");
             case Result.TIMEOUT:
-                throw new ParcelableException(new RuntimeException(action + ": TIMEOUT"));
+                throw new ParcelableException(new RuntimeException(errorString));
+            case Result.INVALID_ARGUMENTS:
+                throw new IllegalArgumentException(errorString);
+            case Result.INVALID_STATE:
+                throw new IllegalStateException(errorString);
+            case Result.NOT_SUPPORTED:
+                throw new UnsupportedOperationException(errorString);
             default:
                 throw new ParcelableException(new RuntimeException(
                         action + ": unknown error (" + result + ")"));
+        }
+    }
+
+    @RadioTuner.TunerResultType
+    static int halResultToTunerResult(int result) {
+        switch (result) {
+            case Result.OK:
+                return RadioTuner.TUNER_RESULT_OK;
+            case Result.INTERNAL_ERROR:
+                return RadioTuner.TUNER_RESULT_INTERNAL_ERROR;
+            case Result.INVALID_ARGUMENTS:
+                return RadioTuner.TUNER_RESULT_INVALID_ARGUMENTS;
+            case Result.INVALID_STATE:
+                return RadioTuner.TUNER_RESULT_INVALID_STATE;
+            case Result.NOT_SUPPORTED:
+                return RadioTuner.TUNER_RESULT_NOT_SUPPORTED;
+            case Result.TIMEOUT:
+                return RadioTuner.TUNER_RESULT_TIMEOUT;
+            case Result.UNKNOWN_ERROR:
+            default:
+                return RadioTuner.TUNER_RESULT_UNKNOWN_ERROR;
         }
     }
 
@@ -87,7 +112,7 @@ class Convert {
             elem.key = entry.getKey();
             elem.value = entry.getValue();
             if (elem.key == null || elem.value == null) {
-                Slog.w(TAG, "VendorKeyValue contains null pointers");
+                Slogf.w(TAG, "VendorKeyValue contains null pointers");
                 continue;
             }
             list.add(elem);
@@ -96,20 +121,21 @@ class Convert {
         return list;
     }
 
-    static @NonNull Map<String, String>
-    vendorInfoFromHal(@Nullable List<VendorKeyValue> info) {
-        if (info == null) return Collections.emptyMap();
-
-        Map<String, String> map = new HashMap<>();
-        for (VendorKeyValue kvp : info) {
-            if (kvp.key == null || kvp.value == null) {
-                Slog.w(TAG, "VendorKeyValue contains null pointers");
-                continue;
-            }
-            map.put(kvp.key, kvp.value);
+    static @NonNull Map<String, String> vendorInfoFromHal(@Nullable List<VendorKeyValue> info) {
+        Map<String, String> vendorInfoMap = new ArrayMap<>();
+        if (info == null) {
+            return vendorInfoMap;
         }
 
-        return map;
+        for (VendorKeyValue kvp : info) {
+            if (kvp.key == null || kvp.value == null) {
+                Slogf.w(TAG, "VendorKeyValue contains null pointers");
+                continue;
+            }
+            vendorInfoMap.put(kvp.key, kvp.value);
+        }
+
+        return vendorInfoMap;
     }
 
     private static @ProgramSelector.ProgramType int identifierTypeToProgramType(
@@ -126,6 +152,7 @@ class Convert {
             case ProgramSelector.IDENTIFIER_TYPE_DAB_ENSEMBLE:
             case ProgramSelector.IDENTIFIER_TYPE_DAB_SCID:
             case ProgramSelector.IDENTIFIER_TYPE_DAB_FREQUENCY:
+            case ProgramSelector.IDENTIFIER_TYPE_DAB_DMB_SID_EXT:
                 return ProgramSelector.PROGRAM_TYPE_DAB;
             case ProgramSelector.IDENTIFIER_TYPE_DRMO_SERVICE_ID:
             case ProgramSelector.IDENTIFIER_TYPE_DRMO_FREQUENCY:
@@ -143,7 +170,7 @@ class Convert {
 
     private static @NonNull int[]
     identifierTypesToProgramTypes(@NonNull int[] idTypes) {
-        Set<Integer> pTypes = new HashSet<>();
+        Set<Integer> pTypes = new ArraySet<>();
 
         for (int idType : idTypes) {
             int pType = identifierTypeToProgramType(idType);
@@ -171,13 +198,13 @@ class Convert {
         int len = config.ranges.size();
         List<RadioManager.BandDescriptor> bands = new ArrayList<>(len);
 
-        // Just a dummy value.
+        // Just a placeholder value.
         int region = RadioManager.REGION_ITU_1;
 
         for (AmFmBandRange range : config.ranges) {
             FrequencyBand bandType = Utils.getBand(range.lowerBound);
             if (bandType == FrequencyBand.UNKNOWN) {
-                Slog.e(TAG, "Unknown frequency band at " + range.lowerBound + "kHz");
+                Slogf.e(TAG, "Unknown frequency band at " + range.lowerBound + "kHz");
                 continue;
             }
             if (bandType == FrequencyBand.FM) {
@@ -275,8 +302,15 @@ class Convert {
         return hwSel;
     }
 
-    static @NonNull ProgramSelector programSelectorFromHal(
+    private static boolean isEmpty(
             @NonNull android.hardware.broadcastradio.V2_0.ProgramSelector sel) {
+        return sel.primaryId.type == 0 && sel.primaryId.value == 0 && sel.secondaryIds.isEmpty();
+    }
+
+    static @Nullable ProgramSelector programSelectorFromHal(
+            @NonNull android.hardware.broadcastradio.V2_0.ProgramSelector sel) {
+        if (isEmpty(sel)) return null;
+
         ProgramSelector.Identifier[] secondaryIds = sel.secondaryIds.stream().
                 map(Convert::programIdentifierFromHal).map(Objects::requireNonNull).
                 toArray(ProgramSelector.Identifier[]::new);
@@ -284,7 +318,7 @@ class Convert {
         return new ProgramSelector(
                 identifierTypeToProgramType(sel.primaryId.type),
                 Objects.requireNonNull(programIdentifierFromHal(sel.primaryId)),
-                secondaryIds, null);
+                secondaryIds, /* vendorIds= */ null);
     }
 
     private enum MetadataType {
@@ -300,40 +334,40 @@ class Convert {
         }
     }
 
-    private static final Map<Integer, MetadataDef> metadataKeys;
+    private static final SparseArray<MetadataDef> METADATA_KEYS;
     static {
-        metadataKeys = new HashMap<>();
-        metadataKeys.put(MetadataKey.RDS_PS, new MetadataDef(
+        METADATA_KEYS = new SparseArray<>();
+        METADATA_KEYS.put(MetadataKey.RDS_PS, new MetadataDef(
                 MetadataType.STRING, RadioMetadata.METADATA_KEY_RDS_PS));
-        metadataKeys.put(MetadataKey.RDS_PTY, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.RDS_PTY, new MetadataDef(
                 MetadataType.INT, RadioMetadata.METADATA_KEY_RDS_PTY));
-        metadataKeys.put(MetadataKey.RBDS_PTY, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.RBDS_PTY, new MetadataDef(
                 MetadataType.INT, RadioMetadata.METADATA_KEY_RBDS_PTY));
-        metadataKeys.put(MetadataKey.RDS_RT, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.RDS_RT, new MetadataDef(
                 MetadataType.STRING, RadioMetadata.METADATA_KEY_RDS_RT));
-        metadataKeys.put(MetadataKey.SONG_TITLE, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.SONG_TITLE, new MetadataDef(
                 MetadataType.STRING, RadioMetadata.METADATA_KEY_TITLE));
-        metadataKeys.put(MetadataKey.SONG_ARTIST, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.SONG_ARTIST, new MetadataDef(
                 MetadataType.STRING, RadioMetadata.METADATA_KEY_ARTIST));
-        metadataKeys.put(MetadataKey.SONG_ALBUM, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.SONG_ALBUM, new MetadataDef(
                 MetadataType.STRING, RadioMetadata.METADATA_KEY_ALBUM));
-        metadataKeys.put(MetadataKey.STATION_ICON, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.STATION_ICON, new MetadataDef(
                 MetadataType.INT, RadioMetadata.METADATA_KEY_ICON));
-        metadataKeys.put(MetadataKey.ALBUM_ART, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.ALBUM_ART, new MetadataDef(
                 MetadataType.INT, RadioMetadata.METADATA_KEY_ART));
-        metadataKeys.put(MetadataKey.PROGRAM_NAME, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.PROGRAM_NAME, new MetadataDef(
                 MetadataType.STRING, RadioMetadata.METADATA_KEY_PROGRAM_NAME));
-        metadataKeys.put(MetadataKey.DAB_ENSEMBLE_NAME, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.DAB_ENSEMBLE_NAME, new MetadataDef(
                 MetadataType.STRING, RadioMetadata.METADATA_KEY_DAB_ENSEMBLE_NAME));
-        metadataKeys.put(MetadataKey.DAB_ENSEMBLE_NAME_SHORT, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.DAB_ENSEMBLE_NAME_SHORT, new MetadataDef(
                 MetadataType.STRING, RadioMetadata.METADATA_KEY_DAB_ENSEMBLE_NAME_SHORT));
-        metadataKeys.put(MetadataKey.DAB_SERVICE_NAME, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.DAB_SERVICE_NAME, new MetadataDef(
                 MetadataType.STRING, RadioMetadata.METADATA_KEY_DAB_SERVICE_NAME));
-        metadataKeys.put(MetadataKey.DAB_SERVICE_NAME_SHORT, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.DAB_SERVICE_NAME_SHORT, new MetadataDef(
                 MetadataType.STRING, RadioMetadata.METADATA_KEY_DAB_SERVICE_NAME_SHORT));
-        metadataKeys.put(MetadataKey.DAB_COMPONENT_NAME, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.DAB_COMPONENT_NAME, new MetadataDef(
                 MetadataType.STRING, RadioMetadata.METADATA_KEY_DAB_COMPONENT_NAME));
-        metadataKeys.put(MetadataKey.DAB_COMPONENT_NAME_SHORT, new MetadataDef(
+        METADATA_KEYS.put(MetadataKey.DAB_COMPONENT_NAME_SHORT, new MetadataDef(
                 MetadataType.STRING, RadioMetadata.METADATA_KEY_DAB_COMPONENT_NAME_SHORT));
     }
 
@@ -341,9 +375,9 @@ class Convert {
         RadioMetadata.Builder builder = new RadioMetadata.Builder();
 
         for (Metadata entry : meta) {
-            MetadataDef keyDef = metadataKeys.get(entry.key);
+            MetadataDef keyDef = METADATA_KEYS.get(entry.key);
             if (keyDef == null) {
-                Slog.i(TAG, "Ignored unknown metadata entry: " + MetadataKey.toString(entry.key));
+                Slogf.i(TAG, "Ignored unknown metadata entry: " + MetadataKey.toString(entry.key));
                 continue;
             }
             if (keyDef.type == MetadataType.STRING) {
@@ -364,7 +398,7 @@ class Convert {
                 collect(Collectors.toList());
 
         return new RadioManager.ProgramInfo(
-                programSelectorFromHal(info.selector),
+                Objects.requireNonNull(programSelectorFromHal(info.selector)),
                 programIdentifierFromHal(info.logicallyTunedTo),
                 programIdentifierFromHal(info.physicallyTunedTo),
                 relatedContent,
@@ -389,20 +423,10 @@ class Convert {
         return hwFilter;
     }
 
-    static @NonNull ProgramList.Chunk programListChunkFromHal(@NonNull ProgramListChunk chunk) {
-        Set<RadioManager.ProgramInfo> modified = chunk.modified.stream().
-                map(info -> programInfoFromHal(info)).collect(Collectors.toSet());
-        Set<ProgramSelector.Identifier> removed = chunk.removed.stream().
-                map(id -> Objects.requireNonNull(programIdentifierFromHal(id))).
-                collect(Collectors.toSet());
-
-        return new ProgramList.Chunk(chunk.purge, chunk.complete, modified, removed);
-    }
-
     public static @NonNull android.hardware.radio.Announcement announcementFromHal(
             @NonNull Announcement hwAnnouncement) {
         return new android.hardware.radio.Announcement(
-            programSelectorFromHal(hwAnnouncement.selector),
+            Objects.requireNonNull(programSelectorFromHal(hwAnnouncement.selector)),
             hwAnnouncement.type,
             vendorInfoFromHal(hwAnnouncement.vendorInfo)
         );

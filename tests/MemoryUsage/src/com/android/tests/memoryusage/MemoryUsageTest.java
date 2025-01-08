@@ -18,7 +18,9 @@ package com.android.tests.memoryusage;
 import android.app.ActivityManager;
 import android.app.ActivityManager.ProcessErrorStateInfo;
 import android.app.ActivityManager.RunningAppProcessInfo;
+import android.app.ActivityTaskManager;
 import android.app.IActivityManager;
+import android.app.IActivityTaskManager;
 import android.app.UiAutomation;
 import android.content.Context;
 import android.content.Intent;
@@ -27,6 +29,7 @@ import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.pm.ResolveInfo;
 import android.os.Bundle;
 import android.os.Debug.MemoryInfo;
+import android.os.RemoteCallback;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.test.InstrumentationTestCase;
@@ -38,6 +41,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * This test is intended to measure the amount of memory applications use when
@@ -66,6 +70,7 @@ public class MemoryUsageTest extends InstrumentationTestCase {
     private Map<String, String> mNameToResultKey;
     private Set<String> mPersistentProcesses;
     private IActivityManager mAm;
+    private IActivityTaskManager mAtm;
 
     @Override
     protected void setUp() throws Exception {
@@ -84,6 +89,7 @@ public class MemoryUsageTest extends InstrumentationTestCase {
                 (MemoryUsageInstrumentation) getInstrumentation();
         Bundle args = instrumentation.getBundle();
         mAm = ActivityManager.getService();
+        mAtm = ActivityTaskManager.getService();
 
         createMappings();
         parseArgs(args);
@@ -309,15 +315,19 @@ public class MemoryUsageTest extends InstrumentationTestCase {
 
         public void run() {
             try {
-                String mimeType = mLaunchIntent.getType();
-                if (mimeType == null && mLaunchIntent.getData() != null
+                AtomicReference<String> mimeType = new AtomicReference<>(mLaunchIntent.getType());
+                if (mimeType.get() == null && mLaunchIntent.getData() != null
                         && "content".equals(mLaunchIntent.getData().getScheme())) {
-                    mimeType = mAm.getProviderMimeType(mLaunchIntent.getData(),
-                            UserHandle.USER_CURRENT);
+                    mAm.getMimeTypeFilterAsync(mLaunchIntent.getData(), UserHandle.USER_CURRENT,
+                            new RemoteCallback(result -> {
+                                mimeType.set(result.getPairValue());
+                            }));
                 }
 
-                mAm.startActivityAndWait(null, null, mLaunchIntent, mimeType,
-                        null, null, 0, mLaunchIntent.getFlags(), null, null,
+                mAtm.startActivityAndWait(null,
+                        getInstrumentation().getContext().getBasePackageName(),
+                        getInstrumentation().getContext().getAttributionTag(), mLaunchIntent,
+                        mimeType.get(), null, null, 0, mLaunchIntent.getFlags(), null, null,
                         UserHandle.USER_CURRENT_OR_SELF);
             } catch (RemoteException e) {
                 Log.w(TAG, "Error launching app", e);

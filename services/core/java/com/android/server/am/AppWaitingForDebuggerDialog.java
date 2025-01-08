@@ -16,6 +16,8 @@
 
 package com.android.server.am;
 
+import static android.view.WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS;
+
 import android.content.Context;
 import android.content.DialogInterface;
 import android.os.Handler;
@@ -54,11 +56,14 @@ final class AppWaitingForDebuggerDialog extends BaseErrorDialog {
         setButton(DialogInterface.BUTTON_POSITIVE, "Force Close", mHandler.obtainMessage(1, app));
         setTitle("Waiting For Debugger");
         WindowManager.LayoutParams attrs = getWindow().getAttributes();
+        attrs.privateFlags |= SYSTEM_FLAG_SHOW_FOR_ALL_USERS;
         attrs.setTitle("Waiting For Debugger: " + app.info.processName);
         getWindow().setAttributes(attrs);
     }
-    
-    public void onStop() {
+
+    @Override
+    protected void closeDialog() {
+        /* Do nothing */
     }
 
     private final Handler mHandler = new Handler() {
@@ -66,7 +71,7 @@ final class AppWaitingForDebuggerDialog extends BaseErrorDialog {
             switch (msg.what) {
                 case 1:
                     // Kill the application.
-                    mService.killAppAtUsersRequest(mProc, AppWaitingForDebuggerDialog.this);
+                    mService.killAppAtUsersRequest(mProc);
                     break;
             }
         }

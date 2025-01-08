@@ -16,12 +16,12 @@
 
 package android.renderscript;
 
-import java.io.File;
-import java.io.InputStream;
-
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.res.AssetManager;
 import android.content.res.Resources;
+
+import java.io.File;
+import java.io.InputStream;
 
 /**
  * @hide
@@ -36,6 +36,7 @@ import android.content.res.Resources;
  * index entries for all the objects stored inside it.
  *
  **/
+@Deprecated
 public class FileA3D extends BaseObj {
 
     /**

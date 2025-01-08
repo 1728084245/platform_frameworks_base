@@ -17,7 +17,7 @@
 package android.widget;
 
 import android.annotation.StringRes;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -232,6 +232,8 @@ public class ActivityChooserView extends ViewGroup implements ActivityChooserMod
 
         TypedArray attributesArray = context.obtainStyledAttributes(attrs,
                 R.styleable.ActivityChooserView, defStyleAttr, defStyleRes);
+        saveAttributeDataForStyleable(context, R.styleable.ActivityChooserView, attrs,
+                attributesArray, defStyleAttr, defStyleRes);
 
         mInitialActivityCount = attributesArray.getInt(
                 R.styleable.ActivityChooserView_initialActivityCount,

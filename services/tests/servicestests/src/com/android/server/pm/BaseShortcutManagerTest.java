@@ -24,8 +24,10 @@ import static com.android.server.pm.shortcutmanagertest.ShortcutManagerTestUtils
 import static com.android.server.pm.shortcutmanagertest.ShortcutManagerTestUtils.set;
 
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyInt;
+import static org.mockito.Matchers.anyLong;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -42,14 +44,20 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.ActivityManagerInternal;
 import android.app.IUidObserver;
+import android.app.PendingIntent;
+import android.app.Person;
+import android.app.admin.DevicePolicyManager;
+import android.app.role.OnRoleHoldersChangedListener;
 import android.app.usage.UsageStatsManagerInternal;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.IIntentSender;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.IntentSender;
+import android.content.LocusId;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.ILauncherApps;
@@ -58,14 +66,16 @@ import android.content.pm.LauncherApps.ShortcutQuery;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManagerInternal;
-import android.content.pm.PackageParser;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
 import android.content.pm.ShortcutServiceInternal;
 import android.content.pm.Signature;
+import android.content.pm.SigningDetails;
 import android.content.pm.SigningInfo;
 import android.content.pm.UserInfo;
+import android.content.pm.UserPackage;
+import android.content.pm.UserProperties;
 import android.content.res.Resources;
 import android.content.res.XmlResourceParser;
 import android.graphics.drawable.Icon;
@@ -79,18 +89,19 @@ import android.os.Process;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.os.UserManager;
-import android.os.UserManagerInternal;
 import android.test.InstrumentationTestCase;
 import android.test.mock.MockContext;
 import android.util.ArrayMap;
 import android.util.Log;
 import android.util.Pair;
 
-import com.android.internal.util.Preconditions;
+import com.android.internal.infra.AndroidFuture;
 import com.android.server.LocalServices;
 import com.android.server.SystemService;
 import com.android.server.pm.LauncherAppsService.LauncherAppsImpl;
-import com.android.server.pm.ShortcutUser.PackageWithUser;
+import com.android.server.uri.UriGrantsManagerInternal;
+import com.android.server.uri.UriPermissionOwner;
+import com.android.server.wm.ActivityTaskManagerInternal;
 
 import org.junit.Assert;
 import org.mockito.ArgumentCaptor;
@@ -104,15 +115,15 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
-import java.security.cert.CertificateEncodingException;
-import java.security.cert.CertificateException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
@@ -143,8 +154,21 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
             switch (name) {
                 case Context.USER_SERVICE:
                     return mMockUserManager;
+                case Context.DEVICE_POLICY_SERVICE:
+                    return mMockDevicePolicyManager;
+                case Context.APP_SEARCH_SERVICE:
+                case Context.ROLE_SERVICE:
+                case Context.APP_OPS_SERVICE:
+                    // RoleManager is final and cannot be mocked, so we only override the inject
+                    // accessor methods in ShortcutService.
+                    return getTestContext().getSystemService(name);
             }
-            throw new UnsupportedOperationException();
+            throw new UnsupportedOperationException("Couldn't find system service: " + name);
+        }
+
+        @Override
+        public String getOpPackageName() {
+            return getTestContext().getOpPackageName();
         }
 
         @Override
@@ -160,6 +184,19 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         @Override
         public Resources getResources() {
             return getTestContext().getResources();
+        }
+
+        @Override
+        public Context createContextAsUser(UserHandle user, int flags) {
+            when(mMockPackageManager.getUserId()).thenReturn(user.getIdentifier());
+            return this;
+        }
+
+        @Override
+        public Context createPackageContextAsUser(String packageName, int flags, UserHandle user)
+                throws PackageManager.NameNotFoundException {
+            // ignore.
+            return this;
         }
 
         @Override
@@ -206,6 +243,15 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         }
 
         @Override
+        public Context createContextAsUser(UserHandle user, int flags) {
+            super.createContextAsUser(user, flags);
+            final ServiceContext ctx = spy(new ServiceContext());
+            when(ctx.getUser()).thenReturn(user);
+            when(ctx.getUserId()).thenReturn(user.getIdentifier());
+            return ctx;
+        }
+
+        @Override
         public int getUserId() {
             return UserHandle.USER_SYSTEM;
         }
@@ -221,6 +267,11 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
 
         public void sendIntentSender(IntentSender intent) {
             // Placeholder for spying.
+        }
+
+        @Override
+        public String getPackageName() {
+            return SYSTEM_PACKAGE_NAME;
         }
     }
 
@@ -342,10 +393,24 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         }
 
         @Override
-        ComponentName getDefaultLauncher(@UserIdInt int userId) {
-            final ComponentName activity = mDefaultLauncher.get(userId);
-            if (activity != null) {
-                return activity;
+        void injectRegisterRoleHoldersListener(OnRoleHoldersChangedListener listener) {
+            // Do nothing.
+        }
+
+        @Override
+        String injectGetHomeRoleHolderAsUser(@UserIdInt int userId) {
+            final String packageName = mHomeRoleHolderAsUser.get(userId);
+            if (packageName != null) {
+                return packageName;
+            }
+            return super.injectGetHomeRoleHolderAsUser(userId);
+        }
+
+        @Override
+        String getDefaultLauncher(@UserIdInt int userId) {
+            final String packageName = mDefaultLauncher.get(userId);
+            if (packageName != null) {
+                return packageName;
             }
             return super.getDefaultLauncher(userId);
         }
@@ -448,6 +513,11 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         }
 
         @Override
+        void injectPostToHandlerDebounced(@NonNull final Object token, @NonNull final Runnable r) {
+            runOnHandler(r);
+        }
+
+        @Override
         void injectEnforceCallingPermission(String permission, String message) {
             if (!mCallerPermissions.contains(permission)) {
                 throw new SecurityException("Missing permission: " + permission);
@@ -472,6 +542,11 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         @Override
         boolean injectHasAccessShortcutsPermission(int callingPid, int callingUid) {
             return mInjectCheckAccessShortcutsPermission;
+        }
+
+        @Override
+        ComponentName injectChooserActivity() {
+            return mInjectedChooserActivity;
         }
 
         @Override
@@ -521,7 +596,7 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         }
 
         @Override
-        public void verifyCallingPackage(String callingPackage) {
+        public void verifyCallingPackage(String callingPackage, int callerUid) {
             // SKIP
         }
 
@@ -551,6 +626,22 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         @Override
         void injectRestoreCallingIdentity(long token) {
             mInjectedCallingUid = (int) token;
+        }
+
+        @Override
+        boolean injectHasAccessShortcutsPermission(int callingPid, int callingUid) {
+            return mInjectCheckAccessShortcutsPermission;
+        }
+
+        @Override
+        boolean injectHasInteractAcrossUsersFullPermission(int callingPid, int callingUid) {
+            return false;
+        }
+
+        @Override
+        PendingIntent injectCreatePendingIntent(int requestCode, @NonNull Intent[] intents,
+                int flags, Bundle options, String ownerPackage, int ownerUserId) {
+            return new PendingIntent(mock(IIntentSender.class));
         }
     }
 
@@ -599,20 +690,28 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
 
     protected int mInjectedCallingUid;
     protected String mInjectedClientPackage;
+    protected ComponentName mInjectedChooserActivity;
 
     protected Map<String, PackageInfo> mInjectedPackages;
 
-    protected Set<PackageWithUser> mUninstalledPackages;
-    protected Set<PackageWithUser> mDisabledPackages;
-    protected Set<PackageWithUser> mEphemeralPackages;
+    protected Set<UserPackage> mUninstalledPackages;
+    protected Set<UserPackage> mDisabledPackages;
+    protected Set<UserPackage> mEphemeralPackages;
     protected Set<String> mSystemPackages;
 
     protected PackageManager mMockPackageManager;
     protected PackageManagerInternal mMockPackageManagerInternal;
     protected UserManager mMockUserManager;
+    protected DevicePolicyManager mMockDevicePolicyManager;
     protected UserManagerInternal mMockUserManagerInternal;
     protected UsageStatsManagerInternal mMockUsageStatsManagerInternal;
     protected ActivityManagerInternal mMockActivityManagerInternal;
+    protected ActivityTaskManagerInternal mMockActivityTaskManagerInternal;
+    protected UriGrantsManagerInternal mMockUriGrantsManagerInternal;
+
+    protected UriPermissionOwner mUriPermissionOwner;
+
+    protected static final String SYSTEM_PACKAGE_NAME = "android";
 
     protected static final String CALLING_PACKAGE_1 = "com.android.test.1";
     protected static final int CALLING_UID_1 = 10001;
@@ -637,6 +736,9 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
 
     protected static final String LAUNCHER_4 = "com.android.launcher.4";
     protected static final int LAUNCHER_UID_4 = 10014;
+
+    protected static final String CHOOSER_ACTIVITY_PACKAGE = "com.android.intentresolver";
+    protected static final int CHOOSER_ACTIVITY_UID = 10015;
 
     protected static final int USER_0 = UserHandle.USER_SYSTEM;
     protected static final int USER_10 = 10;
@@ -675,12 +777,21 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
             new UserInfo(USER_P1, "userP1",
                     UserInfo.FLAG_INITIALIZED | UserInfo.FLAG_MANAGED_PROFILE), 0);
 
+    protected static final UserProperties USER_PROPERTIES_0 =
+            new UserProperties.Builder().setItemsRestrictedOnHomeScreen(false).build();
+
+    protected static final UserProperties USER_PROPERTIES_10 =
+            new UserProperties.Builder().setItemsRestrictedOnHomeScreen(false).build();
+
+    protected static final UserProperties USER_PROPERTIES_11 =
+            new UserProperties.Builder().setItemsRestrictedOnHomeScreen(true).build();
+
     protected BiPredicate<String, Integer> mDefaultLauncherChecker =
             (callingPackage, userId) ->
             LAUNCHER_1.equals(callingPackage) || LAUNCHER_2.equals(callingPackage)
             || LAUNCHER_3.equals(callingPackage) || LAUNCHER_4.equals(callingPackage);
 
-    private final Map<Integer, ComponentName> mDefaultLauncher = new ArrayMap<>();
+    private final Map<Integer, String> mDefaultLauncher = new ArrayMap<>();
 
     protected BiPredicate<ComponentName, Integer> mMainActivityChecker =
             (activity, userId) -> true;
@@ -698,6 +809,8 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
 
     protected static final long INTERVAL = 10000;
 
+    // This doesn't need to match the max shortcuts limit in the framework, and tests should either
+    // use this or set their own limit for testing, without assuming any particular max value.
     protected static final int MAX_SHORTCUTS = 10;
 
     protected static final int MAX_UPDATES_PER_INTERVAL = 3;
@@ -714,6 +827,7 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
             = new HashMap<>();
 
     protected final Map<Integer, UserInfo> mUserInfos = new HashMap<>();
+    protected final Map<Integer, UserProperties> mUserProperties = new HashMap<>();
     protected final Map<Integer, Boolean> mRunningUsers = new HashMap<>();
     protected final Map<Integer, Boolean> mUnlockedUsers = new HashMap<>();
 
@@ -730,6 +844,8 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
     protected boolean mInjectCheckAccessShortcutsPermission = false;
 
     protected boolean mInjectHasUnlimitedShortcutsApiCallsPermission = false;
+
+    private final Map<Integer, String> mHomeRoleHolderAsUser = new ArrayMap<>();
 
     static {
         QUERY_ALL.setQueryFlags(
@@ -749,9 +865,12 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         mMockPackageManager = mock(PackageManager.class);
         mMockPackageManagerInternal = mock(PackageManagerInternal.class);
         mMockUserManager = mock(UserManager.class);
+        mMockDevicePolicyManager = mock(DevicePolicyManager.class);
         mMockUserManagerInternal = mock(UserManagerInternal.class);
         mMockUsageStatsManagerInternal = mock(UsageStatsManagerInternal.class);
         mMockActivityManagerInternal = mock(ActivityManagerInternal.class);
+        mMockActivityTaskManagerInternal = mock(ActivityTaskManagerInternal.class);
+        mMockUriGrantsManagerInternal = mock(UriGrantsManagerInternal.class);
 
         LocalServices.removeServiceForTest(PackageManagerInternal.class);
         LocalServices.addService(PackageManagerInternal.class, mMockPackageManagerInternal);
@@ -759,8 +878,14 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         LocalServices.addService(UsageStatsManagerInternal.class, mMockUsageStatsManagerInternal);
         LocalServices.removeServiceForTest(ActivityManagerInternal.class);
         LocalServices.addService(ActivityManagerInternal.class, mMockActivityManagerInternal);
+        LocalServices.removeServiceForTest(ActivityTaskManagerInternal.class);
+        LocalServices.addService(ActivityTaskManagerInternal.class, mMockActivityTaskManagerInternal);
         LocalServices.removeServiceForTest(UserManagerInternal.class);
         LocalServices.addService(UserManagerInternal.class, mMockUserManagerInternal);
+        LocalServices.removeServiceForTest(UriGrantsManagerInternal.class);
+        LocalServices.addService(UriGrantsManagerInternal.class, mMockUriGrantsManagerInternal);
+
+        mUriPermissionOwner = new UriPermissionOwner(mMockUriGrantsManagerInternal, TAG);
 
         // Prepare injection values.
 
@@ -797,6 +922,9 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         mUserInfos.put(USER_11, USER_INFO_11);
         mUserInfos.put(USER_P0, USER_INFO_P0);
         mUserInfos.put(USER_P1, USER_INFO_P1);
+        mUserProperties.put(USER_0, USER_PROPERTIES_0);
+        mUserProperties.put(USER_10, USER_PROPERTIES_10);
+        mUserProperties.put(USER_11, USER_PROPERTIES_11);
 
         when(mMockUserManagerInternal.isUserUnlockingOrUnlocked(anyInt()))
                 .thenAnswer(inv -> {
@@ -845,6 +973,15 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
                 inv -> mUserInfos.get((Integer) inv.getArguments()[0])));
         when(mMockActivityManagerInternal.getUidProcessState(anyInt())).thenReturn(
                 ActivityManager.PROCESS_STATE_CACHED_EMPTY);
+        when(mMockUserManagerInternal.getUserProperties(anyInt()))
+                .thenAnswer(inv -> {
+                    final int userId = (Integer) inv.getArguments()[0];
+                    final UserProperties userProperties = mUserProperties.get(userId);
+                    if (userProperties == null) {
+                        return new UserProperties.Builder().build();
+                    }
+                    return userProperties;
+                });
 
         // User 0 and P0 are always running
         mRunningUsers.put(USER_0, true);
@@ -906,7 +1043,7 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
             assertEquals(Process.SYSTEM_UID, mInjectedCallingUid);
 
             final String packageName = (String) pmInvocation.getArguments()[0];
-            final int userId = (Integer) pmInvocation.getArguments()[1];
+            final int userId =  mMockPackageManager.getUserId();
 
             final Resources res = mock(Resources.class);
 
@@ -938,7 +1075,7 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
                 return Integer.parseInt(entryName.substring(1)) + ressIdOffset;
             }).when(res).getIdentifier(anyStringOrNull(), anyStringOrNull(), anyStringOrNull());
             return res;
-        }).when(mMockPackageManager).getResourcesForApplicationAsUser(anyString(), anyInt());
+        }).when(mMockPackageManager).getResourcesForApplication(anyString());
     }
 
     protected static UserInfo withProfileGroupId(UserInfo in, int groupId) {
@@ -957,6 +1094,10 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
 
     protected Context getTestContext() {
         return getInstrumentation().getContext();
+    }
+
+    protected Context getClientContext() {
+        return mClientContext;
     }
 
     protected ShortcutManager getManager() {
@@ -1044,10 +1185,9 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         pi.applicationInfo.setVersionCode(version);
         pi.signatures = null;
         pi.signingInfo = new SigningInfo(
-                new PackageParser.SigningDetails(
+                new SigningDetails(
                         genSignatures(signatures),
-                        PackageParser.SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
-                        null,
+                        SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3,
                         null,
                         null));
         return pi;
@@ -1084,28 +1224,28 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         if (ENABLE_DUMP) {
             Log.v(TAG, "Uninstall package " + packageName + " / " + userId);
         }
-        mUninstalledPackages.add(PackageWithUser.of(userId, packageName));
+        mUninstalledPackages.add(UserPackage.of(userId, packageName));
     }
 
     protected void installPackage(int userId, String packageName) {
         if (ENABLE_DUMP) {
             Log.v(TAG, "Install package " + packageName + " / " + userId);
         }
-        mUninstalledPackages.remove(PackageWithUser.of(userId, packageName));
+        mUninstalledPackages.remove(UserPackage.of(userId, packageName));
     }
 
     protected void disablePackage(int userId, String packageName) {
         if (ENABLE_DUMP) {
             Log.v(TAG, "Disable package " + packageName + " / " + userId);
         }
-        mDisabledPackages.add(PackageWithUser.of(userId, packageName));
+        mDisabledPackages.add(UserPackage.of(userId, packageName));
     }
 
     protected void enablePackage(int userId, String packageName) {
         if (ENABLE_DUMP) {
             Log.v(TAG, "Enable package " + packageName + " / " + userId);
         }
-        mDisabledPackages.remove(PackageWithUser.of(userId, packageName));
+        mDisabledPackages.remove(UserPackage.of(userId, packageName));
     }
 
     PackageInfo getInjectedPackageInfo(String packageName, @UserIdInt int userId,
@@ -1123,17 +1263,17 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         ret.applicationInfo.uid = UserHandle.getUid(userId, pi.applicationInfo.uid);
         ret.applicationInfo.packageName = pi.packageName;
 
-        if (mUninstalledPackages.contains(PackageWithUser.of(userId, packageName))) {
+        if (mUninstalledPackages.contains(UserPackage.of(userId, packageName))) {
             ret.applicationInfo.flags &= ~ApplicationInfo.FLAG_INSTALLED;
         }
-        if (mEphemeralPackages.contains(PackageWithUser.of(userId, packageName))) {
+        if (mEphemeralPackages.contains(UserPackage.of(userId, packageName))) {
             ret.applicationInfo.privateFlags |= ApplicationInfo.PRIVATE_FLAG_INSTANT;
         }
         if (mSystemPackages.contains(packageName)) {
             ret.applicationInfo.flags |= ApplicationInfo.FLAG_SYSTEM;
         }
         ret.applicationInfo.enabled =
-                !mDisabledPackages.contains(PackageWithUser.of(userId, packageName));
+                !mDisabledPackages.contains(UserPackage.of(userId, packageName));
 
         if (getSignatures) {
             ret.signatures = null;
@@ -1229,7 +1369,7 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
     protected void setCaller(String packageName, int userId) {
         mInjectedClientPackage = packageName;
         mInjectedCallingUid =
-                Preconditions.checkNotNull(getInjectedPackageInfo(packageName, userId, false),
+                Objects.requireNonNull(getInjectedPackageInfo(packageName, userId, false),
                         "Unknown package").applicationInfo.uid;
 
         // Set up LauncherApps for this caller.
@@ -1251,7 +1391,7 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
     /**
      * This controls {@link ShortcutService#hasShortcutHostPermission}, but
      * not {@link ShortcutService#getDefaultLauncher(int)}.  To control the later, use
-     * {@link #setDefaultLauncher(int, ComponentName)}.
+     * {@link #setDefaultLauncher(int, String)}.
      */
     protected void setDefaultLauncherChecker(BiPredicate<String, Integer> p) {
         mDefaultLauncherChecker = p;
@@ -1261,13 +1401,13 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
      * Set the default launcher.  This will update {@link #mDefaultLauncherChecker} set by
      * {@link #setDefaultLauncherChecker} too.
      */
-    protected void setDefaultLauncher(int userId, ComponentName launcherActivity) {
-        mDefaultLauncher.put(userId, launcherActivity);
+    protected void setDefaultLauncher(int userId, String launcherPackage) {
+        mDefaultLauncher.put(userId, launcherPackage);
 
         final BiPredicate<String, Integer> oldChecker = mDefaultLauncherChecker;
         mDefaultLauncherChecker = (checkPackageName, checkUserId) -> {
-            if ((checkUserId == userId) && (launcherActivity !=  null)) {
-                return launcherActivity.getPackageName().equals(checkPackageName);
+            if ((checkUserId == userId) && (launcherPackage !=  null)) {
+                return launcherPackage.equals(checkPackageName);
             }
             return oldChecker.test(checkPackageName, checkUserId);
         };
@@ -1402,6 +1542,20 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         return makeShortcut(
                 id, "Title-" + id, /* activity =*/ null, /* icon =*/ null,
                 makeIntent(Intent.ACTION_VIEW, ShortcutActivity.class), /* rank =*/ 0);
+    }
+
+    /**
+     * Make a hidden shortcut with an ID.
+     */
+    protected ShortcutInfo makeShortcutExcludedFromLauncher(String id) {
+        final ShortcutInfo.Builder  b = new ShortcutInfo.Builder(mClientContext, id)
+                .setActivity(new ComponentName(mClientContext.getPackageName(), "main"))
+                .setShortLabel("Title-" + id)
+                .setIntent(makeIntent(Intent.ACTION_VIEW, ShortcutActivity.class))
+                .setExcludedFromSurfaces(ShortcutInfo.SURFACE_LAUNCHER);
+        final ShortcutInfo s = b.build();
+        s.setTimestamp(mInjectedCurrentTimeMillis);
+        return s;
     }
 
     @Deprecated // Title was renamed to short label.
@@ -1572,6 +1726,54 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
     }
 
     /**
+     * Make a shortcut with an ID and Category.
+     */
+    protected ShortcutInfo makeShortcutWithCategory(String id, Set<String> categories) {
+        final ShortcutInfo.Builder  b = new ShortcutInfo.Builder(mClientContext, id)
+                .setActivity(new ComponentName(mClientContext.getPackageName(), "main"))
+                .setShortLabel("title-" + id)
+                .setIntent(makeIntent(Intent.ACTION_VIEW, ShortcutActivity.class))
+                .setCategories(categories);
+        final ShortcutInfo s = b.build();
+
+        s.setTimestamp(mInjectedCurrentTimeMillis); // HACK
+
+        return s;
+    }
+
+    /**
+     * Make a shortcut with an ID and a locus ID.
+     */
+    protected ShortcutInfo makeShortcutWithLocusId(String id, LocusId locusId) {
+        final ShortcutInfo.Builder  b = new ShortcutInfo.Builder(mClientContext, id)
+                .setActivity(new ComponentName(mClientContext.getPackageName(), "main"))
+                .setShortLabel("title-" + id)
+                .setIntent(makeIntent(Intent.ACTION_VIEW, ShortcutActivity.class))
+                .setLocusId(locusId);
+        final ShortcutInfo s = b.build();
+
+        s.setTimestamp(mInjectedCurrentTimeMillis); // HACK
+
+        return s;
+    }
+
+    /**
+     * Make a long lived shortcut with an ID.
+     */
+    protected ShortcutInfo makeLongLivedShortcut(String id) {
+        final ShortcutInfo.Builder  b = new ShortcutInfo.Builder(mClientContext, id)
+                .setActivity(new ComponentName(mClientContext.getPackageName(), "main"))
+                .setShortLabel("title-" + id)
+                .setIntent(makeIntent(Intent.ACTION_VIEW, ShortcutActivity.class))
+                .setLongLived(true);
+        final ShortcutInfo s = b.build();
+
+        s.setTimestamp(mInjectedCurrentTimeMillis); // HACK
+
+        return s;
+    }
+
+    /**
      * Make an intent.
      */
     protected Intent makeIntent(String action, Class<?> clazz, Object... bundleKeysAndValues) {
@@ -1579,6 +1781,21 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         intent.setComponent(makeComponent(clazz));
         intent.replaceExtras(makeBundle(bundleKeysAndValues));
         return intent;
+    }
+
+    /**
+     * Make a Person.
+     */
+    protected Person makePerson(CharSequence name, String key, String uri) {
+        final Person.Builder builder = new Person.Builder();
+        return builder.setName(name).setKey(key).setUri(uri).build();
+    }
+
+    /**
+     * Make a LocusId.
+     */
+    protected LocusId makeLocusId(String id) {
+        return new LocusId(id);
     }
 
     /**
@@ -1631,6 +1848,11 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         return mService.getPackageShortcutForTest(packageName, shortcutId, userId);
     }
 
+    protected void updatePackageShortcut(String packageName, String shortcutId, int userId,
+            Consumer<ShortcutInfo> cb) {
+        mService.updatePackageShortcutForTest(packageName, shortcutId, userId, cb);
+    }
+
     protected void assertShortcutExists(String packageName, String shortcutId, int userId) {
         assertTrue(getPackageShortcut(packageName, shortcutId, userId) != null);
     }
@@ -1641,12 +1863,13 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
 
     protected Intent[] launchShortcutAndGetIntentsInner(Runnable shortcutStarter,
             @NonNull String packageName, @NonNull String shortcutId, int userId) {
-        reset(mMockActivityManagerInternal);
+        reset(mMockActivityTaskManagerInternal);
         shortcutStarter.run();
 
         final ArgumentCaptor<Intent[]> intentsCaptor = ArgumentCaptor.forClass(Intent[].class);
-        verify(mMockActivityManagerInternal).startActivitiesAsPackage(
+        verify(mMockActivityTaskManagerInternal).startActivitiesAsPackage(
                 eq(packageName),
+                isNull(),
                 eq(userId),
                 intentsCaptor.capture(),
                 anyOrNull(Bundle.class));
@@ -1695,7 +1918,7 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
 
     protected void assertShortcutNotLaunched(@NonNull String packageName,
             @NonNull String shortcutId, int userId) {
-        reset(mMockActivityManagerInternal);
+        reset(mMockActivityTaskManagerInternal);
         try {
             mLauncherApps.startShortcut(packageName, shortcutId, null, null,
                     UserHandle.of(userId));
@@ -1703,8 +1926,9 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         } catch (ActivityNotFoundException expected) {
         }
         // This shouldn't have been called.
-        verify(mMockActivityManagerInternal, times(0)).startActivitiesAsPackage(
+        verify(mMockActivityTaskManagerInternal, times(0)).startActivitiesAsPackage(
                 anyString(),
+                isNull(),
                 anyInt(),
                 any(Intent[].class),
                 anyOrNull(Bundle.class));
@@ -1716,6 +1940,18 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         try {
             mLauncherApps.startShortcut(packageName, shortcutId, null, null,
                     UserHandle.of(userId));
+        } catch (Exception e) {
+            thrown = e;
+        }
+        assertNotNull("Exception was not thrown", thrown);
+        assertEquals("Exception type different", expectedException, thrown.getClass());
+    }
+
+    protected void assertThrown(@NonNull final Class<?> expectedException,
+            @NonNull final Runnable fn) {
+        Exception thrown = null;
+        try {
+            fn.run();
         } catch (Exception e) {
             thrown = e;
         }
@@ -1789,6 +2025,38 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
     }
 
     /**
+     * @return all share targets stored internally for the caller.
+     */
+    protected List<ShareTargetInfo> getCallerShareTargets() {
+        final ShortcutPackage p = mService.getPackageShortcutForTest(
+                getCallingPackage(), getCallingUserId());
+        return p == null ? null : p.getAllShareTargetsForTest();
+    }
+
+    protected void resetPersistedShortcuts() {
+        final ShortcutPackage p = mService.getPackageShortcutForTest(
+                getCallingPackage(), getCallingUserId());
+        p.removeAllShortcutsAsync();
+    }
+
+    protected void getPersistedShortcut(AndroidFuture<List<ShortcutInfo>> cb) {
+        final ShortcutPackage p = mService.getPackageShortcutForTest(
+                getCallingPackage(), getCallingUserId());
+        p.getTopShortcutsFromPersistence(cb);
+    }
+
+    /**
+     * @return the number of shortcuts stored internally for the caller that can be used as a share
+     * target in the ShareSheet. Such shortcuts have a matching category with at least one of the
+     * defined ShareTargets from the app's Xml resource.
+     */
+    protected int getCallerSharingShortcutCount() {
+        final ShortcutPackage p = mService.getPackageShortcutForTest(
+                getCallingPackage(), getCallingUserId());
+        return p == null ? 0 : p.getSharingShortcutCount();
+    }
+
+    /**
      * @return all shortcuts owned by caller that are actually visible via ShortcutManager.
      * See also {@link #getCallerShortcuts}.
      */
@@ -1802,6 +2070,10 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
 
     protected ShortcutInfo getCallerShortcut(String shortcutId) {
         return getPackageShortcut(getCallingPackage(), shortcutId, getCallingUserId());
+    }
+
+    protected void updateCallerShortcut(String shortcutId, Consumer<ShortcutInfo> cb) {
+        updatePackageShortcut(getCallingPackage(), shortcutId, getCallingUserId(), cb);
     }
 
     protected List<ShortcutInfo> getLauncherShortcuts(String launcher, int userId, int queryFlags) {
@@ -1820,8 +2092,7 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
 
     protected List<ShortcutInfo> getShortcutAsLauncher(int targetUserId) {
         final ShortcutQuery q = new ShortcutQuery();
-        q.setQueryFlags(ShortcutQuery.FLAG_MATCH_DYNAMIC | ShortcutQuery.FLAG_MATCH_DYNAMIC
-                | ShortcutQuery.FLAG_MATCH_PINNED);
+        q.setQueryFlags(ShortcutQuery.FLAG_MATCH_DYNAMIC | ShortcutQuery.FLAG_MATCH_PINNED);
         return mLauncherApps.getShortcuts(q, UserHandle.of(targetUserId));
     }
 
@@ -1899,16 +2170,17 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
     protected static ShortcutQuery buildQuery(long changedSince,
             String packageName, ComponentName componentName,
             /* @ShortcutQuery.QueryFlags */ int flags) {
-        return buildQuery(changedSince, packageName, null, componentName, flags);
+        return buildQuery(changedSince, packageName, null, null, componentName, flags);
     }
 
     protected static ShortcutQuery buildQuery(long changedSince,
-            String packageName, List<String> shortcutIds, ComponentName componentName,
-            /* @ShortcutQuery.QueryFlags */ int flags) {
+            String packageName, List<String> shortcutIds, List<LocusId> locusIds,
+            ComponentName componentName, /* @ShortcutQuery.QueryFlags */ int flags) {
         final ShortcutQuery q = new ShortcutQuery();
         q.setChangedSince(changedSince);
         q.setPackage(packageName);
         q.setShortcutIds(shortcutIds);
+        q.setLocusIds(locusIds);
         q.setActivity(componentName);
         q.setQueryFlags(flags);
         return q;
@@ -2083,6 +2355,7 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         for (ShortcutInfo s : actualShortcuts) {
             assertTrue("ID " + s.getId() + " not have icon res ID", s.hasIconResource());
             assertFalse("ID " + s.getId() + " shouldn't have icon FD", s.hasIconFile());
+            assertFalse("ID " + s.getId() + " shouldn't have icon URI", s.hasIconUri());
         }
         return actualShortcuts;
     }
@@ -2092,6 +2365,17 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         for (ShortcutInfo s : actualShortcuts) {
             assertFalse("ID " + s.getId() + " shouldn't have icon res ID", s.hasIconResource());
             assertTrue("ID " + s.getId() + " not have icon FD", s.hasIconFile());
+            assertFalse("ID " + s.getId() + " shouldn't have icon URI", s.hasIconUri());
+        }
+        return actualShortcuts;
+    }
+
+    public static List<ShortcutInfo> assertAllHaveIconUri(
+            List<ShortcutInfo> actualShortcuts) {
+        for (ShortcutInfo s : actualShortcuts) {
+            assertFalse("ID " + s.getId() + " shouldn't have icon res ID", s.hasIconResource());
+            assertFalse("ID " + s.getId() + " shouldn't have have icon FD", s.hasIconFile());
+            assertTrue("ID " + s.getId() + " not have icon URI", s.hasIconUri());
         }
         return actualShortcuts;
     }
@@ -2127,12 +2411,25 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         return sb.toString();
     }
 
+    protected void prepareGetRoleHoldersAsUser(String homeRoleHolder, int userId) {
+        mHomeRoleHolderAsUser.put(userId, homeRoleHolder);
+        mService.handleOnDefaultLauncherChanged(userId);
+    }
+
+    // Used for get-default-launcher command which is deprecated. Will remove later.
     protected void prepareGetHomeActivitiesAsUser(ComponentName preferred,
             List<ResolveInfo> candidates, int userId) {
         doAnswer(inv -> {
             ((List) inv.getArguments()[0]).addAll(candidates);
             return preferred;
         }).when(mMockPackageManagerInternal).getHomeActivitiesAsUser(any(List.class), eq(userId));
+    }
+
+    protected void prepareIntentActivities(ComponentName cn) {
+        when(mMockPackageManagerInternal.queryIntentActivities(
+                anyOrNull(Intent.class), anyStringOrNull(), anyLong(), anyInt(), anyInt()))
+                .thenReturn(Collections.singletonList(
+                        ri(cn.getPackageName(), cn.getClassName(), false, 0)));
     }
 
     protected static ComponentName cn(String packageName, String name) {
@@ -2166,7 +2463,8 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
     protected void makeUidForeground(int uid) {
         try {
             mService.mUidObserver.onUidStateChanged(
-                    uid, ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE, 0);
+                    uid, ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE, 0,
+                    ActivityManager.PROCESS_CAPABILITY_NONE);
         } catch (RemoteException e) {
             e.rethrowAsRuntimeException();
         }
@@ -2179,7 +2477,8 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
     protected void makeUidBackground(int uid) {
         try {
             mService.mUidObserver.onUidStateChanged(
-                    uid, ActivityManager.PROCESS_STATE_TOP_SLEEPING, 0);
+                    uid, ActivityManager.PROCESS_STATE_TOP_SLEEPING, 0,
+                    ActivityManager.PROCESS_CAPABILITY_NONE);
         } catch (RemoteException e) {
             e.rethrowAsRuntimeException();
         }

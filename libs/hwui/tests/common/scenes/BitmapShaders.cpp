@@ -14,7 +14,18 @@
  * limitations under the License.
  */
 
-#include <SkImagePriv.h>
+#include <SkBitmap.h>
+#include <SkBlendMode.h>
+#include <SkCanvas.h>
+#include <SkImage.h>
+#include <SkImageInfo.h>
+#include <SkPaint.h>
+#include <SkRect.h>
+#include <SkRefCnt.h>
+#include <SkSamplingOptions.h>
+#include <SkShader.h>
+#include <SkTileMode.h>
+#include "hwui/Paint.h"
 #include "TestSceneBase.h"
 #include "tests/common/BitmapAllocationTestUtils.h"
 #include "utils/Color.h"
@@ -43,18 +54,16 @@ public:
                     skCanvas.drawRect(SkRect::MakeXYWH(100, 100, 100, 100), skPaint);
                 });
 
-        SkPaint paint;
-        sk_sp<SkColorFilter> colorFilter;
-        sk_sp<SkImage> image = hwuiBitmap->makeImage(&colorFilter);
+        SkSamplingOptions sampling;
+        Paint paint;
+        sk_sp<SkImage> image = hwuiBitmap->makeImage();
         sk_sp<SkShader> repeatShader =
-                image->makeShader(SkShader::TileMode::kRepeat_TileMode,
-                                  SkShader::TileMode::kRepeat_TileMode, nullptr);
+                image->makeShader(SkTileMode::kRepeat, SkTileMode::kRepeat, sampling);
         paint.setShader(std::move(repeatShader));
         canvas.drawRoundRect(0, 0, 500, 500, 50.0f, 50.0f, paint);
 
         sk_sp<SkShader> mirrorShader =
-                image->makeShader(SkShader::TileMode::kMirror_TileMode,
-                                  SkShader::TileMode::kMirror_TileMode, nullptr);
+                image->makeShader(SkTileMode::kMirror, SkTileMode::kMirror, sampling);
         paint.setShader(std::move(mirrorShader));
         canvas.drawRoundRect(0, 600, 500, 1100, 50.0f, 50.0f, paint);
     }

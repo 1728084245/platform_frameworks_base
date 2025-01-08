@@ -27,7 +27,8 @@
 
         <service
                 android:name="android.print.test.services.FirstPrintService"
-                android:permission="android.permission.BIND_PRINT_SERVICE">
+                android:permission="android.permission.BIND_PRINT_SERVICE"
+                android:exported="true">
 
             <intent-filter>
                 <action android:name="android.printservice.PrintService" />
@@ -54,7 +55,7 @@
     </application>
 
     <!-- This runs in its own process, hence it instruments itself -->
-    <instrumentation android:name="android.support.test.runner.AndroidJUnitRunner"
+    <instrumentation android:name="androidx.test.runner.AndroidJUnitRunner"
             android:targetPackage="com.android.printspooler.outofprocess.tests"
             android:label="PrintSpooler Out of Process Test Cases">
     </instrumentation>

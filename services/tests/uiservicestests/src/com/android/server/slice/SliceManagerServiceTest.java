@@ -18,6 +18,7 @@ import static android.content.ContentProvider.maybeAddUserId;
 import static android.content.pm.PackageManager.PERMISSION_DENIED;
 import static android.content.pm.PackageManager.PERMISSION_GRANTED;
 
+import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -50,6 +51,7 @@ import com.android.server.UiServiceTestCase;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -59,7 +61,7 @@ import org.junit.runner.RunWith;
 public class SliceManagerServiceTest extends UiServiceTestCase {
 
     private static final String AUTH = "com.android.services.uitests";
-    private static final Uri TEST_URI = maybeAddUserId(Uri.parse("content://" + AUTH + "/path"), 0);
+    private static final Uri TEST_URI = Uri.parse("content://" + AUTH + "/path");
 
     private static final SliceSpec[] EMPTY_SPECS = new SliceSpec[]{
     };
@@ -70,11 +72,10 @@ public class SliceManagerServiceTest extends UiServiceTestCase {
     private TestableContext mContextSpy;
 
     @Before
-    public void setup() {
+    public void setUp() {
         LocalServices.addService(UsageStatsManagerInternal.class,
                 mock(UsageStatsManagerInternal.class));
         mContext.addMockSystemService(AppOpsManager.class, mock(AppOpsManager.class));
-        mContext.getTestablePermissions().setPermission(TEST_URI, PERMISSION_GRANTED);
 
         mContextSpy = spy(mContext);
         mService = spy(new SliceManagerService(mContextSpy, TestableLooper.get(this).getLooper()));
@@ -87,17 +88,21 @@ public class SliceManagerServiceTest extends UiServiceTestCase {
         LocalServices.removeServiceForTest(UsageStatsManagerInternal.class);
     }
 
+    @Ignore("b/253871109")
     @Test
     public void testAddPinCreatesPinned() throws RemoteException {
+        grantSlicePermission();
         doReturn("pkg").when(mService).getDefaultHome(anyInt());
 
         mService.pinSlice("pkg", TEST_URI, EMPTY_SPECS, mToken);
         mService.pinSlice("pkg", TEST_URI, EMPTY_SPECS, mToken);
-        verify(mService, times(1)).createPinnedSlice(eq(TEST_URI), anyString());
+        verify(mService, times(1)).createPinnedSlice(eq(maybeAddUserId(TEST_URI, 0)), anyString());
     }
 
+    @Ignore("b/253871109")
     @Test
     public void testRemovePinDestroysPinned() throws RemoteException {
+        grantSlicePermission();
         doReturn("pkg").when(mService).getDefaultHome(anyInt());
 
         mService.pinSlice("pkg", TEST_URI, EMPTY_SPECS, mToken);
@@ -107,6 +112,7 @@ public class SliceManagerServiceTest extends UiServiceTestCase {
         verify(mCreatedSliceState, never()).destroy();
     }
 
+    @Ignore("b/253871109")
     @Test
     public void testCheckAutoGrantPermissions() throws RemoteException {
         String[] testPerms = new String[] {
@@ -119,11 +125,36 @@ public class SliceManagerServiceTest extends UiServiceTestCase {
                 .thenReturn(PERMISSION_DENIED);
         when(mContextSpy.checkPermission("perm2", Process.myPid(), Process.myUid()))
                 .thenReturn(PERMISSION_GRANTED);
-        mService.checkSlicePermission(TEST_URI, mContext.getPackageName(), Process.myPid(),
-                Process.myUid(), testPerms);
+        mService.checkSlicePermission(TEST_URI, mContext.getPackageName(),
+                Process.myPid(), Process.myUid(), testPerms);
 
         verify(mContextSpy).checkPermission(eq("perm1"), eq(Process.myPid()), eq(Process.myUid()));
         verify(mContextSpy).checkPermission(eq("perm2"), eq(Process.myPid()), eq(Process.myUid()));
     }
 
+    @Ignore("b/253871109")
+    @Test(expected = IllegalStateException.class)
+    public void testNoPinThrow() throws Exception {
+        grantSlicePermission();
+        mService.getPinnedSpecs(TEST_URI, "pkg");
+    }
+
+    @Ignore("b/253871109")
+    @Test
+    public void testGetPinnedSpecs() throws Exception {
+        grantSlicePermission();
+        SliceSpec[] specs = new SliceSpec[] {
+            new SliceSpec("Something", 1) };
+        mService.pinSlice("pkg", TEST_URI, specs, mToken);
+
+        when(mCreatedSliceState.getSpecs()).thenReturn(specs);
+        assertEquals(specs, mService.getPinnedSpecs(TEST_URI, "pkg"));
+    }
+
+    private void grantSlicePermission() {
+        doReturn(PERMISSION_GRANTED).when(mService).checkSlicePermission(
+                eq(TEST_URI), anyString(), anyInt(), anyInt(), any());
+        doReturn(PERMISSION_GRANTED).when(mService).checkAccess(
+                anyString(), eq(TEST_URI), anyInt(), anyInt());
+    }
 }

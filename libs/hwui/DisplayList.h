@@ -16,148 +16,318 @@
 
 #pragma once
 
-#include <SkCamera.h>
-#include <SkDrawable.h>
-#include <SkMatrix.h>
+#include "pipeline/skia/SkiaDisplayList.h"
+#include "canvas/CanvasOpBuffer.h"
 
-#include <private/hwui/DrawGlInfo.h>
-
-#include <utils/KeyedVector.h>
-#include <utils/LinearAllocator.h>
-#include <utils/RefBase.h>
-#include <utils/SortedVector.h>
-#include <utils/String8.h>
-
-#include <cutils/compiler.h>
-
-#include <androidfw/ResourceTypes.h>
-
-#include "CanvasProperty.h"
-#include "Debug.h"
-#include "GlFunctorLifecycleListener.h"
-#include "Matrix.h"
-#include "RenderProperties.h"
-#include "TreeInfo.h"
-#include "hwui/Bitmap.h"
-
-#include <vector>
-
-class SkBitmap;
-class SkPaint;
-class SkPath;
-class SkRegion;
+#include <memory>
+#include <variant>
 
 namespace android {
 namespace uirenderer {
-
-class Rect;
-class Layer;
-
-struct RecordedOp;
-struct RenderNodeOp;
-
-typedef RecordedOp BaseOpType;
-typedef RenderNodeOp NodeOpType;
 
 namespace VectorDrawable {
 class Tree;
 };
 typedef uirenderer::VectorDrawable::Tree VectorDrawableRoot;
 
-struct FunctorContainer {
-    Functor* functor;
-    GlFunctorLifecycleListener* listener;
+class SkiaDisplayListWrapper {
+public:
+    // Constructs an empty (invalid) DisplayList
+    explicit SkiaDisplayListWrapper() {}
+
+    // Constructs a DisplayList from a SkiaDisplayList
+    explicit SkiaDisplayListWrapper(std::unique_ptr<skiapipeline::SkiaDisplayList> impl)
+        : mImpl(std::move(impl)) {}
+
+    // Move support
+    SkiaDisplayListWrapper(SkiaDisplayListWrapper&& other) : mImpl(std::move(other.mImpl)) {}
+    SkiaDisplayListWrapper& operator=(SkiaDisplayListWrapper&& other) {
+        mImpl = std::move(other.mImpl);
+        return *this;
+    }
+
+    // No copy support
+    SkiaDisplayListWrapper(const SkiaDisplayListWrapper& other) = delete;
+    SkiaDisplayListWrapper& operator=(const SkiaDisplayListWrapper&) = delete;
+
+    void updateChildren(std::function<void(RenderNode*)> updateFn) {
+        mImpl->updateChildren(std::move(updateFn));
+    }
+
+    void visit(std::function<void(const RenderNode&)> func) const { mImpl->visit(std::move(func)); }
+
+    [[nodiscard]] explicit operator bool() const {
+        return mImpl.get() != nullptr;
+    }
+
+    // If true this DisplayList contains a backing content, even if that content is empty
+    // If false, there this DisplayList is in an "empty" state
+    [[nodiscard]] bool isValid() const {
+        return mImpl.get() != nullptr;
+    }
+
+    [[nodiscard]] bool isEmpty() const {
+        return !hasContent();
+    }
+
+    [[nodiscard]] bool hasContent() const {
+        return mImpl && !(mImpl->isEmpty());
+    }
+
+    [[nodiscard]] bool hasHolePunches() const {
+        return mImpl && mImpl->hasHolePunches();
+    }
+
+    [[nodiscard]] bool containsProjectionReceiver() const {
+        return mImpl && mImpl->containsProjectionReceiver();
+    }
+
+    [[nodiscard]] skiapipeline::SkiaDisplayList* asSkiaDl() {
+        return mImpl.get();
+    }
+
+    [[nodiscard]] const skiapipeline::SkiaDisplayList* asSkiaDl() const {
+        return mImpl.get();
+    }
+
+    [[nodiscard]] bool hasVectorDrawables() const {
+        return mImpl && mImpl->hasVectorDrawables();
+    }
+
+    void clear(RenderNode* owningNode = nullptr) {
+        if (mImpl && owningNode && mImpl->reuseDisplayList(owningNode)) {
+            // TODO: This is a bit sketchy to have a unique_ptr temporarily owned twice
+            // Do something to cleanup reuseDisplayList passing itself to the RenderNode
+            mImpl.release();
+        } else {
+            mImpl = nullptr;
+        }
+    }
+
+    [[nodiscard]] size_t getUsedSize() const {
+        return mImpl ? mImpl->getUsedSize() : 0;
+    }
+
+    [[nodiscard]] size_t getAllocatedSize() const {
+        return mImpl ? mImpl->getAllocatedSize() : 0;
+    }
+
+    void output(std::ostream& output, uint32_t level) const {
+        if (mImpl) {
+            mImpl->output(output, level);
+        }
+    }
+
+    [[nodiscard]] bool hasFunctor() const {
+        return mImpl && mImpl->hasFunctor();
+    }
+
+    bool prepareListAndChildren(
+            TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer,
+            std::function<void(RenderNode*, TreeObserver&, TreeInfo&, bool)> childFn) {
+        return mImpl && mImpl->prepareListAndChildren(
+                observer, info, functorsNeedLayer, std::move(childFn));
+    }
+
+    void syncContents(const WebViewSyncData& data) {
+        if (mImpl) {
+            mImpl->syncContents(data);
+        }
+    }
+
+    void onRemovedFromTree() {
+        if (mImpl) {
+            mImpl->onRemovedFromTree();
+        }
+    }
+
+    [[nodiscard]] bool hasText() const {
+        return mImpl && mImpl->hasText();
+    }
+
+    [[nodiscard]] bool hasFill() const { return mImpl && mImpl->hasFill(); }
+
+    void applyColorTransform(ColorTransform transform) {
+        if (mImpl) {
+            mImpl->applyColorTransform(transform);
+        }
+    }
+
+private:
+    std::unique_ptr<skiapipeline::SkiaDisplayList> mImpl;
 };
+
 
 /**
  * Data structure that holds the list of commands used in display list stream
  */
-class DisplayList {
-    friend class RecordingCanvas;
+//using DisplayList = skiapipeline::SkiaDisplayList;
+class MultiDisplayList {
+private:
+    using SkiaDisplayList = skiapipeline::SkiaDisplayList;
 
-public:
-    struct Chunk {
-        // range of included ops in DisplayList::ops()
-        size_t beginOpIndex;
-        size_t endOpIndex;
-
-        // range of included children in DisplayList::children()
-        size_t beginChildIndex;
-        size_t endChildIndex;
-
-        // whether children with non-zero Z in the chunk should be reordered
-        bool reorderChildren;
-
-        // clip at the beginning of a reorder section, applied to reordered children
-        const ClipBase* reorderClip;
+    struct EmptyList {
+        bool hasText() const { return false; }
+        void updateChildren(std::function<void(RenderNode*)> updateFn) {}
+        bool isEmpty() const { return true; }
+        bool containsProjectionReceiver() const { return false; }
+        bool hasVectorDrawables() const { return false; }
+        size_t getUsedSize() const { return 0; }
+        size_t getAllocatedSize() const { return 0; }
+        void output(std::ostream& output, uint32_t level) const { }
+        bool hasFunctor() const { return false; }
+        bool prepareListAndChildren(
+                TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer,
+                std::function<void(RenderNode*, TreeObserver&, TreeInfo&, bool)> childFn) {
+            return false;
+        }
+        void syncContents(const WebViewSyncData& data) { }
+        void onRemovedFromTree() { }
+        void applyColorTransform(ColorTransform transform) { }
     };
 
-    DisplayList();
-    virtual ~DisplayList();
+    std::variant<EmptyList, std::unique_ptr<SkiaDisplayList>, CanvasOpBuffer> mImpls;
 
-    // index of DisplayListOp restore, after which projected descendants should be drawn
-    int projectionReceiveIndex;
+    template <typename T>
+    static constexpr T& get(T& t) { return t; }
+    template <typename T>
+    static constexpr const T& get(const T& t) { return t; }
 
-    const LsaVector<Chunk>& getChunks() const { return chunks; }
-    const LsaVector<BaseOpType*>& getOps() const { return ops; }
+    template <typename T>
+    static constexpr T& get(std::unique_ptr<T>& t) { return *t; }
+    template <typename T>
+    static constexpr const T& get(const std::unique_ptr<T>& t) { return *t; }
 
-    const LsaVector<NodeOpType*>& getChildren() const { return children; }
-
-    const LsaVector<sk_sp<Bitmap>>& getBitmapResources() const { return bitmapResources; }
-
-    size_t addChild(NodeOpType* childOp);
-
-    void ref(VirtualLightRefBase* prop) { referenceHolders.push_back(prop); }
-
-    size_t getUsedSize() { return allocator.usedSize(); }
-
-    virtual bool isEmpty() const { return ops.empty(); }
-    virtual bool hasFunctor() const { return !functors.empty(); }
-    virtual bool hasVectorDrawables() const { return !vectorDrawables.empty(); }
-    virtual bool isSkiaDL() const { return false; }
-    virtual bool reuseDisplayList(RenderNode* node, renderthread::CanvasContext* context) {
-        return false;
+    template <typename T>
+    auto apply(T&& t) {
+        return std::visit([&t](auto& it) -> auto {
+            return t(get(it));
+        }, mImpls);
     }
 
-    virtual void syncContents();
-    virtual void updateChildren(std::function<void(RenderNode*)> updateFn);
-    virtual bool prepareListAndChildren(
+    template <typename T>
+    auto apply(T&& t) const {
+        return std::visit([&t](const auto& it) -> auto {
+            return t(get(it));
+        }, mImpls);
+    }
+
+public:
+    // Constructs an empty (invalid) DisplayList
+    explicit MultiDisplayList() {}
+
+    // Constructs a DisplayList from a SkiaDisplayList
+    explicit MultiDisplayList(std::unique_ptr<SkiaDisplayList> impl)
+        : mImpls(std::move(impl)) {}
+
+    explicit MultiDisplayList(CanvasOpBuffer&& opBuffer) : mImpls(std::move(opBuffer)) {}
+
+    // Move support
+    MultiDisplayList(MultiDisplayList&& other) : mImpls(std::move(other.mImpls)) {}
+    MultiDisplayList& operator=(MultiDisplayList&& other) {
+        mImpls = std::move(other.mImpls);
+        return *this;
+    }
+
+    // No copy support
+    MultiDisplayList(const MultiDisplayList& other) = delete;
+    MultiDisplayList& operator=(const MultiDisplayList&) = delete;
+
+    void updateChildren(std::function<void(RenderNode*)> updateFn) {
+        apply([&](auto& it) { it.updateChildren(std::move(updateFn)); });
+    }
+
+    [[nodiscard]] explicit operator bool() const {
+        return isValid();
+    }
+
+    // If true this DisplayList contains a backing content, even if that content is empty
+    // If false, there this DisplayList is in an "empty" state
+    [[nodiscard]] bool isValid() const {
+        return mImpls.index() != 0;
+    }
+
+    [[nodiscard]] bool isEmpty() const {
+        return apply([](const auto& it) -> auto { return it.isEmpty(); });
+    }
+
+    [[nodiscard]] bool hasContent() const {
+        return !isEmpty();
+    }
+
+    [[nodiscard]] bool containsProjectionReceiver() const {
+        return apply([](const auto& it) -> auto { return it.containsProjectionReceiver(); });
+    }
+
+    [[nodiscard]] SkiaDisplayList* asSkiaDl() {
+        return std::get<1>(mImpls).get();
+    }
+
+    [[nodiscard]] const SkiaDisplayList* asSkiaDl() const {
+        return std::get<1>(mImpls).get();
+    }
+
+    [[nodiscard]] bool hasVectorDrawables() const {
+        return apply([](const auto& it) -> auto { return it.hasVectorDrawables(); });
+    }
+
+    void clear(RenderNode* owningNode = nullptr) {
+        if (owningNode && mImpls.index() == 1) {
+            auto& skiaDl = std::get<1>(mImpls);
+            if (skiaDl->reuseDisplayList(owningNode)) {
+                skiaDl.release();
+            }
+        }
+        mImpls = EmptyList{};
+    }
+
+    [[nodiscard]] size_t getUsedSize() const {
+        return apply([](const auto& it) -> auto { return it.getUsedSize(); });
+    }
+
+    [[nodiscard]] size_t getAllocatedSize() const {
+        return apply([](const auto& it) -> auto { return it.getAllocatedSize(); });
+    }
+
+    void output(std::ostream& output, uint32_t level) const {
+        apply([&](const auto& it) { it.output(output, level); });
+    }
+
+    [[nodiscard]] bool hasFunctor() const {
+        return apply([](const auto& it) -> auto { return it.hasFunctor(); });
+    }
+
+    bool prepareListAndChildren(
             TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer,
-            std::function<void(RenderNode*, TreeObserver&, TreeInfo&, bool)> childFn);
+            std::function<void(RenderNode*, TreeObserver&, TreeInfo&, bool)> childFn) {
+        return apply([&](auto& it) -> auto {
+            return it.prepareListAndChildren(observer, info, functorsNeedLayer, std::move(childFn));
+        });
+    }
 
-    virtual void output(std::ostream& output, uint32_t level);
+    void syncContents(const WebViewSyncData& data) {
+        apply([&](auto& it) { it.syncContents(data); });
+    }
 
-protected:
-    // allocator into which all ops and LsaVector arrays allocated
-    LinearAllocator allocator;
-    LinearStdAllocator<void*> stdAllocator;
+    void onRemovedFromTree() {
+        apply([&](auto& it) { it.onRemovedFromTree(); });
+    }
 
-private:
-    LsaVector<Chunk> chunks;
-    LsaVector<BaseOpType*> ops;
+    [[nodiscard]] bool hasText() const {
+        return apply([](const auto& it) -> auto { return it.hasText(); });
+    }
 
-    // list of Ops referring to RenderNode children for quick, non-drawing traversal
-    LsaVector<NodeOpType*> children;
+    void applyColorTransform(ColorTransform transform) {
+        apply([=](auto& it) { it.applyColorTransform(transform); });
+    }
 
-    // Resources - Skia objects + 9 patches referred to by this DisplayList
-    LsaVector<sk_sp<Bitmap>> bitmapResources;
-    LsaVector<const SkPath*> pathResources;
-    LsaVector<const Res_png_9patch*> patchResources;
-    LsaVector<std::unique_ptr<const SkPaint>> paints;
-    LsaVector<std::unique_ptr<const SkRegion>> regions;
-    LsaVector<sp<VirtualLightRefBase>> referenceHolders;
-
-    // List of functors
-    LsaVector<FunctorContainer> functors;
-
-    // List of VectorDrawables that need to be notified of pushStaging. Note that this list gets
-    // nothing
-    // but a callback during sync DisplayList, unlike the list of functors defined above, which
-    // gets special treatment exclusive for webview.
-    LsaVector<VectorDrawableRoot*> vectorDrawables;
-
-    void cleanupResources();
+    [[nodiscard]] CanvasOpBuffer& asOpBuffer() {
+        return std::get<CanvasOpBuffer>(mImpls);
+    }
 };
 
-};  // namespace uirenderer
-};  // namespace android
+// For now stick to the original single-type container to avoid any regressions
+using DisplayList = SkiaDisplayListWrapper;
+
+}  // namespace uirenderer
+}  // namespace android

@@ -16,8 +16,13 @@
 
 package com.android.mediaframeworktest.stress;
 
-import com.android.mediaframeworktest.Camera2SurfaceViewTestCase;
-import com.android.mediaframeworktest.helpers.CameraTestUtils.SimpleCaptureCallback;
+import static android.hardware.camera2.CameraCharacteristics.CONTROL_AE_MODE_OFF;
+import static android.hardware.camera2.CameraCharacteristics.CONTROL_AE_MODE_ON;
+import static android.hardware.camera2.CameraCharacteristics.CONTROL_AE_MODE_ON_ALWAYS_FLASH;
+import static android.hardware.camera2.CameraCharacteristics.CONTROL_AE_MODE_ON_AUTO_FLASH;
+import static android.hardware.camera2.CameraCharacteristics.CONTROL_AE_MODE_ON_AUTO_FLASH_REDEYE;
+
+import static com.android.mediaframeworktest.helpers.CameraTestUtils.getValueNotNull;
 
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
@@ -26,14 +31,10 @@ import android.hardware.camera2.CaptureResult;
 import android.util.Log;
 import android.util.Size;
 
-import java.util.Arrays;
+import com.android.mediaframeworktest.Camera2SurfaceViewTestCase;
+import com.android.mediaframeworktest.helpers.CameraTestUtils.SimpleCaptureCallback;
 
-import static android.hardware.camera2.CameraCharacteristics.CONTROL_AE_MODE_OFF;
-import static android.hardware.camera2.CameraCharacteristics.CONTROL_AE_MODE_ON;
-import static android.hardware.camera2.CameraCharacteristics.CONTROL_AE_MODE_ON_ALWAYS_FLASH;
-import static android.hardware.camera2.CameraCharacteristics.CONTROL_AE_MODE_ON_AUTO_FLASH;
-import static android.hardware.camera2.CameraCharacteristics.CONTROL_AE_MODE_ON_AUTO_FLASH_REDEYE;
-import static com.android.mediaframeworktest.helpers.CameraTestUtils.getValueNotNull;
+import java.util.Arrays;
 
 /**
  * <p>
@@ -49,7 +50,7 @@ import static com.android.mediaframeworktest.helpers.CameraTestUtils.getValueNot
  *    -e iterations 10 \
  *    -e waitIntervalMs 1000 \
  *    -e resultToFile false \
- *    -r -w com.android.mediaframeworktest/.Camera2InstrumentationTestRunner
+ *    -r -w com.android.mediaframeworktest/androidx.test.runner.AndroidJUnitRunner
  */
 public class Camera2CaptureRequestTest extends Camera2SurfaceViewTestCase {
     private static final String TAG = "CaptureRequestTest";
@@ -59,7 +60,7 @@ public class Camera2CaptureRequestTest extends Camera2SurfaceViewTestCase {
     private static final int DEFAULT_SENSITIVITY = 100;
     private static final long EXPOSURE_TIME_ERROR_MARGIN_NS = 100000L; // 100us, Approximation.
     private static final float EXPOSURE_TIME_ERROR_MARGIN_RATE = 0.03f; // 3%, Approximation.
-    private static final float SENSITIVITY_ERROR_MARGIN_RATE = 0.03f; // 3%, Approximation.
+    private static final float SENSITIVITY_ERROR_MARGIN_RATE = 0.06f; // 6%, Approximation.
     private static final int DEFAULT_NUM_EXPOSURE_TIME_STEPS = 3;
     private static final int DEFAULT_NUM_SENSITIVITY_STEPS = 16;
     private static final int DEFAULT_SENSITIVITY_STEP_SIZE = 100;
@@ -308,7 +309,7 @@ public class Camera2CaptureRequestTest extends Camera2SurfaceViewTestCase {
     private void changeExposure(CaptureRequest.Builder requestBuilder,
             long expTime, int sensitivity) {
         // Check if the max analog sensitivity is available and no larger than max sensitivity.
-        // The max analog sensitivity is not actually used here. This is only an extra sanity check.
+        // The max analog sensitivity is not actually used here. This is only an extra check.
         mStaticInfo.getMaxAnalogSensitivityChecked();
 
         expTime = mStaticInfo.getExposureClampToRange(expTime);

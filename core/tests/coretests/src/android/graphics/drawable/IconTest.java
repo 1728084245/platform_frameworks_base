@@ -18,31 +18,64 @@ package android.graphics.drawable;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+import android.app.IUriGrantsManager;
+import android.content.ContentProvider;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.ParceledListSlice;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.RecordingCanvas;
 import android.graphics.Region;
+import android.net.Uri;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.IBinder;
 import android.os.Parcel;
-import android.test.AndroidTestCase;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.os.RemoteException;
 import android.util.Log;
+
+import androidx.test.core.app.ApplicationProvider;
 
 import com.android.frameworks.coretests.R;
 
+import com.google.testing.junit.testparameterinjector.TestParameter;
+import com.google.testing.junit.testparameterinjector.TestParameterInjector;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 
-public class IconTest extends AndroidTestCase {
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+
+@RunWith(TestParameterInjector.class)
+public class IconTest {
     public static final String TAG = IconTest.class.getSimpleName();
+    private Context mContext;
+
     public static void L(String s, Object... parts) {
         Log.d(TAG, (parts.length == 0) ? s : String.format(s, parts));
     }
 
-    @SmallTest
+    private Context getContext() {
+        return mContext;
+    }
+
+    @Before
+    public void setup() {
+        mContext = ApplicationProvider.getApplicationContext();
+    }
+
+    @Test
     public void testWithBitmap() throws Exception {
         final Bitmap bm1 = Bitmap.createBitmap(100, 200, Bitmap.Config.ARGB_8888);
         final Bitmap bm2 = Bitmap.createBitmap(100, 200, Bitmap.Config.RGB_565);
@@ -109,7 +142,7 @@ public class IconTest extends AndroidTestCase {
         }
     }
 
-    @SmallTest
+    @Test
     public void testScaleDownIfNecessary() throws Exception {
         final Bitmap bm = Bitmap.createBitmap(4321, 78, Bitmap.Config.ARGB_8888);
         final Icon ic = Icon.createWithBitmap(bm);
@@ -122,7 +155,7 @@ public class IconTest extends AndroidTestCase {
         assertThat(ic.getBitmap().getHeight()).isLessThan(21);
     }
 
-    @SmallTest
+    @Test
     public void testWithAdaptiveBitmap() throws Exception {
         final Bitmap bm1 = Bitmap.createBitmap(150, 150, Bitmap.Config.ARGB_8888);
 
@@ -156,7 +189,7 @@ public class IconTest extends AndroidTestCase {
         }
     }
 
-    @SmallTest
+    @Test
     public void testWithBitmapResource() throws Exception {
         final Bitmap res1 = ((BitmapDrawable) getContext().getDrawable(R.drawable.landscape))
                 .getBitmap();
@@ -179,7 +212,62 @@ public class IconTest extends AndroidTestCase {
         }
     }
 
-    @SmallTest
+    /**
+     * Icon resource test that ensures we can load and draw non-bitmaps. (In this case,
+     * stat_sys_adb is assumed, and asserted, to be a vector drawable.)
+     */
+    @Test
+    public void testWithStatSysAdbResource() throws Exception {
+        // establish reference bitmap
+        final float dp = getContext().getResources().getDisplayMetrics().density;
+        final int stat_sys_adb_width = (int) (24 * dp);
+        final int stat_sys_adb_height = (int) (24 * dp);
+
+        final Drawable stat_sys_adb = getContext()
+                .getDrawable(com.android.internal.R.drawable.stat_sys_adb);
+        if (!(stat_sys_adb instanceof VectorDrawable)) {
+            fail("stat_sys_adb is a " + stat_sys_adb.toString()
+                    + ", not a VectorDrawable; stat_sys_adb malformed");
+        }
+
+        if (stat_sys_adb.getIntrinsicWidth() != stat_sys_adb_width) {
+            fail("intrinsic width of stat_sys_adb is not 24dp; stat_sys_adb malformed");
+        }
+        if (stat_sys_adb.getIntrinsicHeight() != stat_sys_adb_height) {
+            fail("intrinsic height of stat_sys_adb is not 24dp; stat_sys_adb malformed");
+        }
+        final Bitmap referenceBitmap = Bitmap.createBitmap(
+                stat_sys_adb_width,
+                stat_sys_adb_height,
+                Bitmap.Config.ARGB_8888);
+        stat_sys_adb.setBounds(0, 0, stat_sys_adb_width, stat_sys_adb_height);
+        stat_sys_adb.draw(new Canvas(referenceBitmap));
+
+        final Icon im1 = Icon.createWithResource(getContext(),
+                com.android.internal.R.drawable.stat_sys_adb);
+        final Drawable draw1 = im1.loadDrawable(getContext());
+
+        assertEquals(stat_sys_adb.getIntrinsicWidth(), draw1.getIntrinsicWidth());
+        assertEquals(stat_sys_adb.getIntrinsicHeight(), draw1.getIntrinsicHeight());
+        assertEquals(im1.getResId(), com.android.internal.R.drawable.stat_sys_adb);
+
+        final Bitmap test1 = Bitmap.createBitmap(
+                draw1.getIntrinsicWidth(),
+                draw1.getIntrinsicHeight(),
+                Bitmap.Config.ARGB_8888);
+        draw1.setBounds(0, 0, test1.getWidth(), test1.getHeight());
+        draw1.draw(new Canvas(test1));
+
+        final File dir = getContext().getExternalFilesDir(null);
+        test1.compress(Bitmap.CompressFormat.PNG, 100,
+                new FileOutputStream(new File(dir, "testWithVectorDrawableResource-test.png")));
+        if (!equalBitmaps(referenceBitmap, test1)) {
+            findBitmapDifferences(referenceBitmap, test1);
+            fail("testWithFile: file1 differs, check " + dir);
+        }
+    }
+
+    @Test
     public void testWithFile() throws Exception {
         final Bitmap bit1 = ((BitmapDrawable) getContext().getDrawable(R.drawable.landscape))
                 .getBitmap();
@@ -203,7 +291,55 @@ public class IconTest extends AndroidTestCase {
         }
     }
 
-    @SmallTest
+    @Test
+    public void testWithAdaptiveIconResource_useMonochrome() throws Exception {
+        final int colorMono = ((ColorDrawable) getContext().getDrawable(
+                android.R.color.system_accent2_800)).getColor();
+        final Icon im1 = Icon.createWithResourceAdaptiveDrawable(getContext().getPackageName(),
+                R.drawable.adaptiveicon_drawable, true, 0.0f);
+        final Drawable draw1 = im1.loadDrawable(mContext);
+        assertThat(draw1 instanceof InsetDrawable).isTrue();
+        ColorDrawable colorDrawable = (ColorDrawable) ((DrawableWrapper) draw1).getDrawable();
+        assertThat(colorDrawable.getColor()).isEqualTo(colorMono);
+    }
+
+    @Test
+    public void testWithAdaptiveIconResource_dontUseMonochrome() throws Exception {
+        final int colorMono = ((ColorDrawable) getContext().getDrawable(
+                android.R.color.system_accent2_800)).getColor();
+        final int colorFg = ((ColorDrawable) getContext().getDrawable(
+                android.R.color.black)).getColor();
+        final int colorBg = ((ColorDrawable) getContext().getDrawable(
+                android.R.color.white)).getColor();
+
+        final Icon im1 = Icon.createWithResourceAdaptiveDrawable(getContext().getPackageName(),
+                R.drawable.adaptiveicon_drawable, false , 0.0f);
+        final Drawable draw1 = im1.loadDrawable(mContext);
+        assertThat(draw1 instanceof AdaptiveIconDrawable).isTrue();
+        ColorDrawable colorDrawableMono = (ColorDrawable) ((AdaptiveIconDrawable) draw1)
+                .getMonochrome();
+        assertThat(colorDrawableMono.getColor()).isEqualTo(colorMono);
+        ColorDrawable colorDrawableFg = (ColorDrawable) ((AdaptiveIconDrawable) draw1)
+                .getForeground();
+        assertThat(colorDrawableFg.getColor()).isEqualTo(colorFg);
+        ColorDrawable colorDrawableBg = (ColorDrawable) ((AdaptiveIconDrawable) draw1)
+                .getBackground();
+        assertThat(colorDrawableBg.getColor()).isEqualTo(colorBg);
+    }
+
+    @Test
+    public void testAdaptiveIconResource_sameAs(@TestParameter boolean useMonochrome)
+            throws Exception {
+        final Icon im1 = Icon.createWithResourceAdaptiveDrawable(getContext().getPackageName(),
+                R.drawable.adaptiveicon_drawable, useMonochrome, 1.0f);
+        final Parcel parcel = Parcel.obtain();
+        im1.writeToParcel(parcel, 0);
+        parcel.setDataPosition(0);
+        final Icon im2 = Icon.CREATOR.createFromParcel(parcel);
+        assertThat(im1.sameAs(im2)).isTrue();
+    }
+
+    @Test
     public void testAsync() throws Exception {
         final Bitmap bit1 = ((BitmapDrawable) getContext().getDrawable(R.drawable.landscape))
                 .getBitmap();
@@ -246,7 +382,7 @@ public class IconTest extends AndroidTestCase {
         L(TAG, "asyncTest: done");
     }
 
-    @SmallTest
+    @Test
     public void testParcel() throws Exception {
         final Bitmap originalbits = ((BitmapDrawable) getContext().getDrawable(R.drawable.landscape))
                 .getBitmap();
@@ -313,6 +449,165 @@ public class IconTest extends AndroidTestCase {
             }
 
         }
+    }
+
+    private int getMaxWidth(int origWidth, int origHeight, int maxNumPixels) {
+        float aspRatio = (float) origWidth / (float) origHeight;
+        int newHeight = (int) Math.sqrt(maxNumPixels / aspRatio);
+        return (int) (newHeight * aspRatio);
+    }
+
+    private int getMaxHeight(int origWidth, int origHeight, int maxNumPixels) {
+        float aspRatio = (float) origWidth / (float) origHeight;
+        return (int) Math.sqrt(maxNumPixels / aspRatio);
+    }
+
+    @Test
+    public void testScaleDownMaxSizeWithBitmap() throws Exception {
+        final int bmpWidth = 13_000;
+        final int bmpHeight = 10_000;
+        final int bmpBpp = 4;
+        final int maxNumPixels = RecordingCanvas.MAX_BITMAP_SIZE / bmpBpp;
+        final int maxWidth = getMaxWidth(bmpWidth, bmpHeight, maxNumPixels);
+        final int maxHeight = getMaxHeight(bmpWidth, bmpHeight, maxNumPixels);
+
+        final Bitmap bm = Bitmap.createBitmap(bmpWidth, bmpHeight, Bitmap.Config.ARGB_8888);
+        final Icon ic = Icon.createWithBitmap(bm);
+        final Drawable drawable = ic.loadDrawable(mContext);
+
+        assertThat(Math.abs(drawable.getIntrinsicWidth() - maxWidth)).isLessThan(2);
+        assertThat(Math.abs(drawable.getIntrinsicHeight() - maxHeight)).isLessThan(2);
+    }
+
+    @Test
+    public void testScaleDownMaxSizeWithAdaptiveBitmap() throws Exception {
+        final int bmpWidth = 20_000;
+        final int bmpHeight = 10_000;
+        final int bmpBpp = 4;
+        final int maxNumPixels = RecordingCanvas.MAX_BITMAP_SIZE / bmpBpp;
+        final int maxWidth = getMaxWidth(bmpWidth, bmpHeight, maxNumPixels);
+        final int maxHeight = getMaxHeight(bmpWidth, bmpHeight, maxNumPixels);
+
+        final Bitmap bm = Bitmap.createBitmap(bmpWidth, bmpHeight, Bitmap.Config.ARGB_8888);
+        final Icon ic = Icon.createWithAdaptiveBitmap(bm);
+        final AdaptiveIconDrawable adaptiveDrawable = (AdaptiveIconDrawable) ic.loadDrawable(
+                mContext);
+        final Drawable drawable = adaptiveDrawable.getForeground();
+
+        assertThat(drawable.getIntrinsicWidth()).isEqualTo(maxWidth);
+        assertThat(drawable.getIntrinsicHeight()).isEqualTo(maxHeight);
+    }
+
+    @Test
+    public void testScaleDownMaxSizeWithResource() throws Exception {
+        final Icon ic = Icon.createWithResource(getContext(), R.drawable.test_too_big);
+        final BitmapDrawable drawable = (BitmapDrawable) ic.loadDrawable(mContext);
+
+        assertThat(drawable.getBitmap().getByteCount()).isAtMost(RecordingCanvas.MAX_BITMAP_SIZE);
+    }
+
+    @Test
+    public void testScaleDownMaxSizeWithFile() throws Exception {
+        final Bitmap bit1 = ((BitmapDrawable) getContext().getDrawable(R.drawable.test_too_big))
+                .getBitmap();
+        final File dir = getContext().getExternalFilesDir(null);
+        final File file1 = new File(dir, "file1-too-big.png");
+        bit1.compress(Bitmap.CompressFormat.PNG, 100,
+                new FileOutputStream(file1));
+
+        final Icon ic = Icon.createWithFilePath(file1.toString());
+        final BitmapDrawable drawable = (BitmapDrawable) ic.loadDrawable(mContext);
+
+        assertThat(drawable.getBitmap().getByteCount()).isAtMost(RecordingCanvas.MAX_BITMAP_SIZE);
+    }
+
+    @Test
+    public void testScaleDownMaxSizeWithData() throws Exception {
+        final int bmpBpp = 4;
+        final Bitmap originalBits = ((BitmapDrawable) getContext().getDrawable(
+                R.drawable.test_too_big)).getBitmap();
+        final ByteArrayOutputStream ostream = new ByteArrayOutputStream(
+                originalBits.getWidth() * originalBits.getHeight() * bmpBpp);
+        originalBits.compress(Bitmap.CompressFormat.PNG, 100, ostream);
+        final byte[] pngdata = ostream.toByteArray();
+        final Icon ic = Icon.createWithData(pngdata, 0, pngdata.length);
+        final BitmapDrawable drawable = (BitmapDrawable) ic.loadDrawable(mContext);
+
+        assertThat(drawable.getBitmap().getByteCount()).isAtMost(RecordingCanvas.MAX_BITMAP_SIZE);
+    }
+
+    @Test
+    public void testLoadSafeDrawable_loadSuccessful() throws FileNotFoundException {
+        int uid = 12345;
+        String packageName = "test_pkg";
+
+        final Bitmap bit1 = ((BitmapDrawable) getContext().getDrawable(R.drawable.landscape))
+                .getBitmap();
+        final File dir = getContext().getExternalFilesDir(null);
+        final File file1 = new File(dir, "file1-original.png");
+        bit1.compress(Bitmap.CompressFormat.PNG, 100, new FileOutputStream(file1));
+
+        final Icon im1 = Icon.createWithFilePath(file1.toString());
+
+        TestableIUriGrantsManager ugm =
+                new TestableIUriGrantsManager(/* rejectCheckRequests */ false);
+
+        Drawable loadedDrawable = im1.loadDrawableCheckingUriGrant(
+                getContext(), ugm, uid, packageName);
+        assertThat(loadedDrawable).isNotNull();
+
+        assertThat(ugm.mRequests.size()).isEqualTo(1);
+        TestableIUriGrantsManager.CheckRequest r = ugm.mRequests.get(0);
+        assertThat(r.mCallingUid).isEqualTo(uid);
+        assertThat(r.mPackageName).isEqualTo(packageName);
+        assertThat(r.mMode).isEqualTo(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        assertThat(r.mUri).isEqualTo(ContentProvider.getUriWithoutUserId(im1.getUri()));
+        assertThat(r.mUserId).isEqualTo(ContentProvider.getUserIdFromUri(im1.getUri()));
+
+        final Bitmap test1 = Bitmap.createBitmap(loadedDrawable.getIntrinsicWidth(),
+                loadedDrawable.getIntrinsicHeight(), Bitmap.Config.ARGB_8888);
+        loadedDrawable.setBounds(0, 0, loadedDrawable.getIntrinsicWidth(),
+                loadedDrawable.getIntrinsicHeight());
+        loadedDrawable.draw(new Canvas(test1));
+
+        bit1.compress(Bitmap.CompressFormat.PNG, 100,
+                new FileOutputStream(new File(dir, "bitmap1-original.png")));
+        test1.compress(Bitmap.CompressFormat.PNG, 100,
+                new FileOutputStream(new File(dir, "bitmap1-test.png")));
+        if (!equalBitmaps(bit1, test1)) {
+            findBitmapDifferences(bit1, test1);
+            fail("bitmap1 differs, check " + dir);
+        }
+    }
+
+    @Test
+    public void testLoadSafeDrawable_grantRejected_nullDrawable() throws FileNotFoundException {
+        int uid = 12345;
+        String packageName = "test_pkg";
+
+        final Bitmap bit1 = ((BitmapDrawable) getContext().getDrawable(R.drawable.landscape))
+                .getBitmap();
+        final File dir = getContext().getExternalFilesDir(null);
+        final File file1 = new File(dir, "file1-original.png");
+        bit1.compress(Bitmap.CompressFormat.PNG, 100, new FileOutputStream(file1));
+
+        final Icon im1 = Icon.createWithFilePath(file1.toString());
+
+        TestableIUriGrantsManager ugm =
+                new TestableIUriGrantsManager(/* rejectCheckRequests */ true);
+
+        Drawable loadedDrawable = im1.loadDrawableCheckingUriGrant(
+                getContext(), ugm, uid, packageName);
+
+        assertThat(ugm.mRequests.size()).isEqualTo(1);
+        TestableIUriGrantsManager.CheckRequest r = ugm.mRequests.get(0);
+        assertThat(r.mCallingUid).isEqualTo(uid);
+        assertThat(r.mPackageName).isEqualTo(packageName);
+        assertThat(r.mMode).isEqualTo(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        assertThat(r.mUri).isEqualTo(ContentProvider.getUriWithoutUserId(im1.getUri()));
+        assertThat(r.mUserId).isEqualTo(ContentProvider.getUserIdFromUri(im1.getUri()));
+
+        assertThat(loadedDrawable).isNull();
     }
 
 
@@ -399,5 +694,78 @@ public class IconTest extends AndroidTestCase {
             }
         }
         L(sb.toString());
+    }
+
+    private static class TestableIUriGrantsManager extends IUriGrantsManager.Stub {
+
+        final ArrayList<CheckRequest> mRequests = new ArrayList<>();
+        final boolean mRejectCheckRequests;
+
+        TestableIUriGrantsManager(boolean rejectCheckRequests) {
+            this.mRejectCheckRequests = rejectCheckRequests;
+        }
+
+        @Override
+        public void takePersistableUriPermission(Uri uri, int i, String s, int i1)
+                throws RemoteException {
+
+        }
+
+        @Override
+        public void releasePersistableUriPermission(Uri uri, int i, String s, int i1)
+                throws RemoteException {
+
+        }
+
+        @Override
+        public void grantUriPermissionFromOwner(IBinder iBinder, int i, String s, Uri uri, int i1,
+                int i2, int i3) throws RemoteException {
+
+        }
+
+        @Override
+        public ParceledListSlice getGrantedUriPermissions(String s, int i) throws RemoteException {
+            return null;
+        }
+
+        @Override
+        public void clearGrantedUriPermissions(String s, int i) throws RemoteException {
+
+        }
+
+        @Override
+        public ParceledListSlice getUriPermissions(String s, boolean b, boolean b1)
+                throws RemoteException {
+            return null;
+        }
+
+        @Override
+        public int checkGrantUriPermission_ignoreNonSystem(
+                int uid, String packageName, Uri uri, int mode, int userId)
+                throws RemoteException {
+            CheckRequest r = new CheckRequest(uid, packageName, uri, mode, userId);
+            mRequests.add(r);
+            if (mRejectCheckRequests) {
+                throw new SecurityException();
+            } else {
+                return uid;
+            }
+        }
+
+        static class CheckRequest {
+            final int mCallingUid;
+            final String mPackageName;
+            final Uri mUri;
+            final int mMode;
+            final int mUserId;
+
+            CheckRequest(int callingUid, String packageName, Uri uri, int mode, int userId) {
+                this.mCallingUid = callingUid;
+                this.mPackageName = packageName;
+                this.mUri = uri;
+                this.mMode = mode;
+                this.mUserId = userId;
+            }
+        }
     }
 }

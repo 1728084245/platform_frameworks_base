@@ -17,4 +17,12 @@
 package android.app;
 
 parcelable AppOpsManager.PackageOps;
+parcelable AppOpsManager.NoteOpEventProxyInfo;
+parcelable AppOpsManager.NoteOpEvent;
+parcelable AppOpsManager.OpFeatureEntry;
 parcelable AppOpsManager.OpEntry;
+
+parcelable AppOpsManager.HistoricalOp;
+parcelable AppOpsManager.HistoricalOps;
+parcelable AppOpsManager.HistoricalPackageOps;
+parcelable AppOpsManager.HistoricalUidOps;

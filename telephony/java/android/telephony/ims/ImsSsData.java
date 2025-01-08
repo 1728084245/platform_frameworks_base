@@ -21,7 +21,8 @@ import android.annotation.Nullable;
 import android.annotation.SystemApi;
 import android.os.Parcel;
 import android.os.Parcelable;
-import android.telephony.Rlog;
+
+import com.android.telephony.Rlog;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -71,7 +72,7 @@ public final class ImsSsData implements Parcelable {
 
 
     /**@hide*/
-    @IntDef(flag = true, prefix = {"SS_"}, value = {
+    @IntDef(prefix = {"SS_"}, value = {
             SS_ACTIVATION,
             SS_DEACTIVATION,
             SS_INTERROGATION,
@@ -88,7 +89,7 @@ public final class ImsSsData implements Parcelable {
     public static final int SS_ERASURE = 4;
 
     /**@hide*/
-    @IntDef(flag = true, prefix = {"SS_"}, value = {
+    @IntDef(prefix = {"SS_"}, value = {
             SS_ALL_TELE_AND_BEARER_SERVICES,
             SS_ALL_TELESEVICES,
             SS_TELEPHONY,
@@ -189,7 +190,7 @@ public final class ImsSsData implements Parcelable {
     public static final int RESULT_SUCCESS = 0;
 
     /** @hide */
-    @IntDef(flag = true, prefix = { "SS_" }, value = {
+    @IntDef(prefix = { "SS_" }, value = {
             SS_CFU,
             SS_CF_BUSY,
             SS_CF_NO_REPLY,
@@ -364,11 +365,11 @@ public final class ImsSsData implements Parcelable {
         serviceClass = in.readInt();
         result = in.readInt();
         mSsInfo = in.createIntArray();
-        mCfInfo = in.readParcelableList(new ArrayList<>(), this.getClass().getClassLoader());
-        mImsSsInfo = in.readParcelableList(new ArrayList<>(), this.getClass().getClassLoader());
+        mCfInfo = in.readParcelableList(new ArrayList<>(), this.getClass().getClassLoader(), android.telephony.ims.ImsCallForwardInfo.class);
+        mImsSsInfo = in.readParcelableList(new ArrayList<>(), this.getClass().getClassLoader(), android.telephony.ims.ImsSsInfo.class);
     }
 
-    public static final Creator<ImsSsData> CREATOR = new Creator<ImsSsData>() {
+    public static final @android.annotation.NonNull Creator<ImsSsData> CREATOR = new Creator<ImsSsData>() {
         @Override
         public ImsSsData createFromParcel(Parcel in) {
             return new ImsSsData(in);
@@ -570,6 +571,8 @@ public final class ImsSsData implements Parcelable {
         return mCfInfo;
     }
 
+    @NonNull
+    @Override
     public String toString() {
         return "[ImsSsData] " + "ServiceType: " + getServiceType()
             + " RequestType: " + getRequestType()

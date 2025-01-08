@@ -18,6 +18,8 @@ package com.android.server.notification;
 
 import android.content.ComponentName;
 import android.net.Uri;
+import android.os.Binder;
+import android.os.Process;
 import android.service.notification.Condition;
 import android.service.notification.IConditionProvider;
 import android.service.notification.ZenModeConfig;
@@ -29,8 +31,11 @@ import android.util.Log;
 import com.android.internal.annotations.VisibleForTesting;
 
 import java.io.PrintWriter;
-import java.util.Objects;
 
+/**
+ * Helper class for managing active rules from
+ * {@link android.service.notification.ConditionProviderService CPSes}.
+ */
 public class ZenModeConditions implements ConditionProviders.Callback {
     private static final String TAG = ZenModeHelper.TAG;
     private static final boolean DEBUG = ZenModeHelper.DEBUG;
@@ -40,8 +45,6 @@ public class ZenModeConditions implements ConditionProviders.Callback {
 
     @VisibleForTesting
     protected final ArrayMap<Uri, ComponentName> mSubscriptions = new ArrayMap<>();
-
-    private boolean mFirstEvaluation = true;
 
     public ZenModeConditions(ZenModeHelper helper, ConditionProviders conditionProviders) {
         mHelper = helper;
@@ -55,6 +58,9 @@ public class ZenModeConditions implements ConditionProviders.Callback {
         if (mConditionProviders.isSystemProviderEnabled(ZenModeConfig.EVENT_PATH)) {
             mConditionProviders.addSystemProvider(new EventConditionProvider());
         }
+        if (mConditionProviders.isSystemProviderEnabled(ZenModeConfig.CUSTOM_MANUAL_PATH)) {
+            mConditionProviders.addSystemProvider(new CustomManualConditionProvider());
+        }
         mConditionProviders.setCallback(this);
     }
 
@@ -65,16 +71,19 @@ public class ZenModeConditions implements ConditionProviders.Callback {
     public void evaluateConfig(ZenModeConfig config, ComponentName trigger,
             boolean processSubscriptions) {
         if (config == null) return;
-        if (config.manualRule != null && config.manualRule.condition != null
+        if (!android.app.Flags.modesUi() && config.manualRule != null
+                && config.manualRule.condition != null
                 && !config.manualRule.isTrueOrUnknown()) {
             if (DEBUG) Log.d(TAG, "evaluateConfig: clearing manual rule");
             config.manualRule = null;
         }
         final ArraySet<Uri> current = new ArraySet<>();
-        evaluateRule(config.manualRule, current, null, processSubscriptions);
+        evaluateRule(config.manualRule, current, null, processSubscriptions, true);
         for (ZenRule automaticRule : config.automaticRules.values()) {
-            evaluateRule(automaticRule, current, trigger, processSubscriptions);
-            updateSnoozing(automaticRule);
+            if (automaticRule.component != null) {
+                evaluateRule(automaticRule, current, trigger, processSubscriptions, false);
+                automaticRule.reconsiderConditionOverride();
+            }
         }
 
         synchronized (mSubscriptions) {
@@ -90,7 +99,6 @@ public class ZenModeConditions implements ConditionProviders.Callback {
                 }
             }
         }
-        mFirstEvaluation = false;
     }
 
     @Override
@@ -106,7 +114,11 @@ public class ZenModeConditions implements ConditionProviders.Callback {
     @Override
     public void onServiceAdded(ComponentName component) {
         if (DEBUG) Log.d(TAG, "onServiceAdded " + component);
-        mHelper.setConfig(mHelper.getConfig(), component, "zmc.onServiceAdded");
+        final int callingUid = Binder.getCallingUid();
+        mHelper.setConfig(mHelper.getConfig(), component,
+                callingUid == Process.SYSTEM_UID ? ZenModeConfig.ORIGIN_SYSTEM
+                        : ZenModeConfig.ORIGIN_APP,
+                "zmc.onServiceAdded:" + component, callingUid);
     }
 
     @Override
@@ -114,23 +126,18 @@ public class ZenModeConditions implements ConditionProviders.Callback {
         if (DEBUG) Log.d(TAG, "onConditionChanged " + id + " " + condition);
         ZenModeConfig config = mHelper.getConfig();
         if (config == null) return;
-        ComponentName trigger = null;
-        boolean updated = updateCondition(id, condition, config.manualRule);
-        for (ZenRule automaticRule : config.automaticRules.values()) {
-            updated |= updateCondition(id, condition, automaticRule);
-            updated |= updateSnoozing(automaticRule);
-            if (updated) {
-                trigger = automaticRule.component;
-            }
-        }
-        if (updated) {
-            mHelper.setConfig(config, trigger, "conditionChanged");
-        }
+        final int callingUid = Binder.getCallingUid();
+        mHelper.setAutomaticZenRuleState(id, condition,
+                callingUid == Process.SYSTEM_UID ? ZenModeConfig.ORIGIN_SYSTEM
+                        : ZenModeConfig.ORIGIN_APP,
+                callingUid);
     }
 
+    // Only valid for CPS backed rules
     private void evaluateRule(ZenRule rule, ArraySet<Uri> current, ComponentName trigger,
-            boolean processSubscriptions) {
+            boolean processSubscriptions, boolean isManual) {
         if (rule == null || rule.conditionId == null) return;
+        if (rule.configurationActivity != null) return;
         final Uri id = rule.conditionId;
         boolean isSystemCondition = false;
         for (SystemConditionProviderService sp : mConditionProviders.getSystemProviders()) {
@@ -140,6 +147,7 @@ public class ZenModeConditions implements ConditionProviders.Callback {
                 isSystemCondition = true;
             }
         }
+        // ensure that we have a record of the rule if it's backed by an currently alive CPS
         if (!isSystemCondition) {
             final IConditionProvider cp = mConditionProviders.findConditionProvider(rule.component);
             if (DEBUG) Log.d(TAG, "Ensure external rule exists: " + (cp != null) + " for " + id);
@@ -147,14 +155,19 @@ public class ZenModeConditions implements ConditionProviders.Callback {
                 mConditionProviders.ensureRecordExists(rule.component, id, cp);
             }
         }
-        if (rule.component == null) {
-            Log.w(TAG, "No component found for automatic rule: " + rule.conditionId);
-            rule.enabled = false;
+        // empty rule? disable and bail early
+        if (rule.component == null && rule.enabler == null) {
+            if (!isManual) {
+                Log.w(TAG, "No component found for automatic rule: " + rule.conditionId);
+                rule.enabled = false;
+            }
             return;
         }
         if (current != null) {
             current.add(id);
         }
+
+        // If the rule is bound by a CPS and the CPS is alive, tell them about the rule
         if (processSubscriptions && ((trigger != null && trigger.equals(rule.component))
                 || isSystemCondition)) {
             if (DEBUG) Log.d(TAG, "Subscribing to " + rule.component);
@@ -167,40 +180,11 @@ public class ZenModeConditions implements ConditionProviders.Callback {
                 if (DEBUG) Log.d(TAG, "zmc failed to subscribe");
             }
         }
-        if (rule.condition == null) {
+        // backfill the rule state from CPS backed components if it's missing
+        if (rule.component != null && rule.condition == null) {
             rule.condition = mConditionProviders.findCondition(rule.component, rule.conditionId);
             if (rule.condition != null && DEBUG) Log.d(TAG, "Found existing condition for: "
                     + rule.conditionId);
         }
     }
-
-    private boolean isAutomaticActive(ComponentName component) {
-        if (component == null) return false;
-        final ZenModeConfig config = mHelper.getConfig();
-        if (config == null) return false;
-        for (ZenRule rule : config.automaticRules.values()) {
-            if (component.equals(rule.component) && rule.isAutomaticActive()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean updateSnoozing(ZenRule rule) {
-        if (rule != null && rule.snoozing && (mFirstEvaluation || !rule.isTrueOrUnknown())) {
-            rule.snoozing = false;
-            if (DEBUG) Log.d(TAG, "Snoozing reset for " + rule.conditionId);
-            return true;
-        }
-        return false;
-    }
-
-    private boolean updateCondition(Uri id, Condition condition, ZenRule rule) {
-        if (id == null || rule == null || rule.conditionId == null) return false;
-        if (!rule.conditionId.equals(id)) return false;
-        if (Objects.equals(condition, rule.condition)) return false;
-        rule.condition = condition;
-        return true;
-    }
-
 }

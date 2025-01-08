@@ -17,9 +17,13 @@
 
 #define LOG_TAG "SysPropJNI"
 
+#include <utility>
+#include <optional>
+
 #include "android-base/logging.h"
+#include "android-base/parsebool.h"
+#include "android-base/parseint.h"
 #include "android-base/properties.h"
-#include "cutils/properties.h"
 #include "utils/misc.h"
 #include <utils/Log.h>
 #include "jni.h"
@@ -28,88 +32,169 @@
 #include <nativehelper/ScopedPrimitiveArray.h>
 #include <nativehelper/ScopedUtfChars.h>
 
-namespace android
-{
+#if defined(__BIONIC__)
+# include <sys/system_properties.h>
+#endif
 
+namespace android {
 namespace {
 
-template <typename T, typename Handler>
-T ConvertKeyAndForward(JNIEnv *env, jstring keyJ, T defJ, Handler handler) {
-    std::string key;
-    {
-        // Scope the String access. If the handler can throw an exception,
-        // releasing the string characters late would trigger an abort.
-        ScopedUtfChars key_utf(env, keyJ);
-        if (key_utf.c_str() == nullptr) {
-            return defJ;
-        }
-        key = key_utf.c_str();  // This will make a copy, but we can't avoid
-                                // with the existing interface in
-                                // android::base.
-    }
-    return handler(key, defJ);
+using android::base::ParseBoolResult;
+
+template<typename Functor>
+void ReadProperty(const prop_info* prop, Functor&& functor)
+{
+    auto thunk = [](void* cookie,
+                    const char* /*name*/,
+                    const char* value,
+                    uint32_t /*serial*/) {
+        std::forward<Functor>(*static_cast<Functor*>(cookie))(value);
+    };
+    __system_property_read_callback(prop, thunk, &functor);
 }
 
-jstring SystemProperties_getSS(JNIEnv *env, jclass clazz, jstring keyJ,
+template<typename Functor>
+void ReadProperty(JNIEnv* env, jstring keyJ, Functor&& functor)
+{
+    ScopedUtfChars key(env, keyJ);
+    if (!key.c_str()) {
+        return;
+    }
+    const prop_info* prop = __system_property_find(key.c_str());
+    if (!prop) {
+        return;
+    }
+    ReadProperty(prop, std::forward<Functor>(functor));
+}
+
+jstring SystemProperties_getSS(JNIEnv* env, jclass clazz, jstring keyJ,
                                jstring defJ)
 {
-    // Using ConvertKeyAndForward is sub-optimal for copying the key string,
-    // but improves reuse and reasoning over code.
-    auto handler = [&](const std::string& key, jstring defJ) {
-        std::string prop_val = android::base::GetProperty(key, "");
-        if (!prop_val.empty()) {
-            return env->NewStringUTF(prop_val.c_str());
-        };
-        if (defJ != nullptr) {
-            return defJ;
+    jstring ret = defJ;
+    ReadProperty(env, keyJ, [&](const char* value) {
+        if (value[0]) {
+            ret = env->NewStringUTF(value);
         }
-        // This function is specified to never return null (or have an
-        // exception pending).
-        return env->NewStringUTF("");
-    };
-    return ConvertKeyAndForward(env, keyJ, defJ, handler);
-}
-
-jstring SystemProperties_getS(JNIEnv *env, jclass clazz, jstring keyJ)
-{
-    return SystemProperties_getSS(env, clazz, keyJ, nullptr);
+    });
+    if (ret == nullptr && !env->ExceptionCheck()) {
+      ret = env->NewStringUTF("");  // Legacy behavior
+    }
+    return ret;
 }
 
 template <typename T>
 T SystemProperties_get_integral(JNIEnv *env, jclass, jstring keyJ,
                                        T defJ)
 {
-    auto handler = [](const std::string& key, T defV) {
-        return android::base::GetIntProperty<T>(key, defV);
-    };
-    return ConvertKeyAndForward(env, keyJ, defJ, handler);
+    T ret = defJ;
+    ReadProperty(env, keyJ, [&](const char* value) {
+        android::base::ParseInt<T>(value, &ret);
+    });
+    return ret;
+}
+
+static jboolean jbooleanFromParseBoolResult(ParseBoolResult parseResult, jboolean defJ) {
+    jboolean ret;
+    switch (parseResult) {
+        case ParseBoolResult::kError:
+            ret = defJ;
+            break;
+        case ParseBoolResult::kFalse:
+            ret = JNI_FALSE;
+            break;
+        case ParseBoolResult::kTrue:
+            ret = JNI_TRUE;
+            break;
+    }
+    return ret;
 }
 
 jboolean SystemProperties_get_boolean(JNIEnv *env, jclass, jstring keyJ,
                                       jboolean defJ)
 {
-    auto handler = [](const std::string& key, jboolean defV) -> jboolean {
-        bool result = android::base::GetBoolProperty(key, defV);
-        return result ? JNI_TRUE : JNI_FALSE;
-    };
-    return ConvertKeyAndForward(env, keyJ, defJ, handler);
+    ParseBoolResult parseResult = ParseBoolResult::kError;
+    ReadProperty(env, keyJ, [&](const char* value) {
+        parseResult = android::base::ParseBool(value);
+    });
+    return jbooleanFromParseBoolResult(parseResult, defJ);
+}
+
+jlong SystemProperties_find(JNIEnv* env, jclass, jstring keyJ)
+{
+    ScopedUtfChars key(env, keyJ);
+    if (!key.c_str()) {
+        return 0;
+    }
+    const prop_info* prop = __system_property_find(key.c_str());
+    return reinterpret_cast<jlong>(prop);
+}
+
+jstring SystemProperties_getH(JNIEnv* env, jclass clazz, jlong propJ)
+{
+    jstring ret;
+    auto prop = reinterpret_cast<const prop_info*>(propJ);
+    ReadProperty(prop, [&](const char* value) {
+        ret = env->NewStringUTF(value);
+    });
+    return ret;
+}
+
+template <typename T>
+T SystemProperties_get_integralH(CRITICAL_JNI_PARAMS_COMMA jlong propJ, T defJ)
+{
+    T ret = defJ;
+    auto prop = reinterpret_cast<const prop_info*>(propJ);
+    ReadProperty(prop, [&](const char* value) {
+        android::base::ParseInt<T>(value, &ret);
+    });
+    return ret;
+}
+
+jboolean SystemProperties_get_booleanH(CRITICAL_JNI_PARAMS_COMMA jlong propJ, jboolean defJ)
+{
+    ParseBoolResult parseResult = ParseBoolResult::kError;
+    auto prop = reinterpret_cast<const prop_info*>(propJ);
+    ReadProperty(prop, [&](const char* value) {
+        parseResult = android::base::ParseBool(value);
+    });
+    return jbooleanFromParseBoolResult(parseResult, defJ);
 }
 
 void SystemProperties_set(JNIEnv *env, jobject clazz, jstring keyJ,
                           jstring valJ)
 {
-    auto handler = [&](const std::string& key, bool) {
-        std::string val;
-        if (valJ != nullptr) {
-            ScopedUtfChars key_utf(env, valJ);
-            val = key_utf.c_str();
+    ScopedUtfChars key(env, keyJ);
+    if (!key.c_str()) {
+        return;
+    }
+    std::optional<ScopedUtfChars> value;
+    if (valJ != nullptr) {
+        value.emplace(env, valJ);
+        if (!value->c_str()) {
+            return;
         }
-        return android::base::SetProperty(key, val);
-    };
-    if (!ConvertKeyAndForward(env, keyJ, true, handler)) {
-        // Must have been a failure in SetProperty.
-        jniThrowException(env, "java/lang/RuntimeException",
-                          "failed to set system property");
+    }
+    // Calling SystemProperties.set() with a null value is equivalent to an
+    // empty string, but this is not true for the underlying libc function.
+    const char* value_c_str = value ? value->c_str() : "";
+    // Explicitly clear errno so we can recognize __system_property_set()
+    // failures from failed system calls (as opposed to "init rejected your
+    // request" failures).
+    errno = 0;
+    bool success;
+    success = !__system_property_set(key.c_str(), value_c_str);
+    if (!success) {
+        if (errno != 0) {
+            jniThrowExceptionFmt(env, "java/lang/RuntimeException",
+                                 "failed to set system property \"%s\" to \"%s\": %m",
+                                 key.c_str(), value_c_str);
+        } else {
+            // Must have made init unhappy, which will have logged something,
+            // but there's no API to ask for more detail.
+            jniThrowExceptionFmt(env, "java/lang/RuntimeException",
+                                 "failed to set system property \"%s\" to \"%s\" (check logcat for reason)",
+                                 key.c_str(), value_c_str);
+        }
     }
 }
 
@@ -157,8 +242,6 @@ void SystemProperties_report_sysprop_change(JNIEnv /**env*/, jobject /*clazz*/)
 int register_android_os_SystemProperties(JNIEnv *env)
 {
     const JNINativeMethod method_table[] = {
-        { "native_get", "(Ljava/lang/String;)Ljava/lang/String;",
-          (void*) SystemProperties_getS },
         { "native_get",
           "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
           (void*) SystemProperties_getSS },
@@ -168,6 +251,18 @@ int register_android_os_SystemProperties(JNIEnv *env)
           (void*) SystemProperties_get_integral<jlong> },
         { "native_get_boolean", "(Ljava/lang/String;Z)Z",
           (void*) SystemProperties_get_boolean },
+        { "native_find",
+          "(Ljava/lang/String;)J",
+          (void*) SystemProperties_find },
+        { "native_get",
+          "(J)Ljava/lang/String;",
+          (void*) SystemProperties_getH },
+        { "native_get_int", "(JI)I",
+          (void*) SystemProperties_get_integralH<jint> },
+        { "native_get_long", "(JJ)J",
+          (void*) SystemProperties_get_integralH<jlong> },
+        { "native_get_boolean", "(JZ)Z",
+          (void*) SystemProperties_get_booleanH },
         { "native_set", "(Ljava/lang/String;Ljava/lang/String;)V",
           (void*) SystemProperties_set },
         { "native_add_change_callback", "()V",
@@ -179,4 +274,4 @@ int register_android_os_SystemProperties(JNIEnv *env)
                                 method_table, NELEM(method_table));
 }
 
-};
+}  // namespace android

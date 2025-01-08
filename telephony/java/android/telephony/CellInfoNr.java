@@ -19,6 +19,8 @@ package android.telephony;
 import android.annotation.NonNull;
 import android.os.Parcel;
 
+import dalvik.annotation.codegen.CovariantReturnType;
+
 import java.util.Objects;
 
 /**
@@ -27,8 +29,15 @@ import java.util.Objects;
 public final class CellInfoNr extends CellInfo {
     private static final String TAG = "CellInfoNr";
 
-    private final CellIdentityNr mCellIdentity;
+    private CellIdentityNr mCellIdentity;
     private final CellSignalStrengthNr mCellSignalStrength;
+
+    /** @hide */
+    public CellInfoNr() {
+        super();
+        mCellIdentity = new CellIdentityNr();
+        mCellSignalStrength = new CellSignalStrengthNr();
+    }
 
     private CellInfoNr(Parcel in) {
         super(in);
@@ -43,18 +52,33 @@ public final class CellInfoNr extends CellInfo {
         mCellSignalStrength = other.mCellSignalStrength;
     }
 
+    /** @hide */
+    public CellInfoNr(int connectionStatus, boolean registered, long timeStamp,
+            CellIdentityNr cellIdentityNr, CellSignalStrengthNr cellSignalStrengthNr) {
+        super(connectionStatus, registered, timeStamp);
+        mCellIdentity = cellIdentityNr;
+        mCellSignalStrength = cellSignalStrengthNr;
+    }
+
     /**
      * @return a {@link CellIdentityNr} instance.
      */
+    @CovariantReturnType(returnType = CellIdentityNr.class, presentAfter = 29)
     @Override
     @NonNull
     public CellIdentity getCellIdentity() {
         return mCellIdentity;
     }
 
+    /** @hide */
+    public void setCellIdentity(CellIdentityNr cid) {
+        mCellIdentity = cid;
+    }
+
     /**
      * @return a {@link CellSignalStrengthNr} instance.
      */
+    @CovariantReturnType(returnType = CellSignalStrengthNr.class, presentAfter = 29)
     @Override
     @NonNull
     public CellSignalStrength getCellSignalStrength() {
@@ -101,7 +125,7 @@ public final class CellInfoNr extends CellInfo {
         mCellSignalStrength.writeToParcel(dest, flags);
     }
 
-    public static final Creator<CellInfoNr> CREATOR = new Creator<CellInfoNr>() {
+    public static final @android.annotation.NonNull Creator<CellInfoNr> CREATOR = new Creator<CellInfoNr>() {
         @Override
         public CellInfoNr createFromParcel(Parcel in) {
             // Skip the type info.

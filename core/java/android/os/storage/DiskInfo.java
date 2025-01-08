@@ -18,7 +18,7 @@ package android.os.storage;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.res.Resources;
 import android.os.Build;
 import android.os.Parcel;
@@ -50,6 +50,8 @@ public class DiskInfo implements Parcelable {
     public static final int FLAG_DEFAULT_PRIMARY = 1 << 1;
     public static final int FLAG_SD = 1 << 2;
     public static final int FLAG_USB = 1 << 3;
+    /** The FLAG_STUB_VISIBLE is set from vold, which gets the flag from outside (e.g., ChromeOS) */
+    public static final int FLAG_STUB_VISIBLE = 1 << 6;
 
     public final String id;
     @UnsupportedAppUsage
@@ -152,6 +154,10 @@ public class DiskInfo implements Parcelable {
         return (flags & FLAG_USB) != 0;
     }
 
+    public boolean isStubVisible() {
+        return (flags & FLAG_STUB_VISIBLE) != 0;
+    }
+
     @Override
     public String toString() {
         final CharArrayWriter writer = new CharArrayWriter();
@@ -184,7 +190,7 @@ public class DiskInfo implements Parcelable {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (o instanceof DiskInfo) {
             return Objects.equals(id, ((DiskInfo) o).id);
         } else {
@@ -198,7 +204,7 @@ public class DiskInfo implements Parcelable {
     }
 
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
-    public static final Creator<DiskInfo> CREATOR = new Creator<DiskInfo>() {
+    public static final @android.annotation.NonNull Creator<DiskInfo> CREATOR = new Creator<DiskInfo>() {
         @Override
         public DiskInfo createFromParcel(Parcel in) {
             return new DiskInfo(in);

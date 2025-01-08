@@ -15,7 +15,6 @@
  */
 package com.android.settingslib.wifi;
 
-import android.annotation.Nullable;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
@@ -25,9 +24,6 @@ import android.graphics.drawable.StateListDrawable;
 import android.net.wifi.WifiConfiguration;
 import android.os.Looper;
 import android.os.UserHandle;
-import androidx.annotation.VisibleForTesting;
-import androidx.preference.Preference;
-import androidx.preference.PreferenceViewHolder;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.SparseArray;
@@ -35,9 +31,13 @@ import android.view.View;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
+import androidx.preference.Preference;
+import androidx.preference.PreferenceViewHolder;
+
 import com.android.settingslib.R;
 import com.android.settingslib.TronUtils;
-import com.android.settingslib.TwoTargetPreference;
 import com.android.settingslib.Utils;
 import com.android.settingslib.wifi.AccessPoint.Speed;
 
@@ -87,10 +87,16 @@ public class AccessPointPreference extends Preference {
             // Fallback for platforms that do not need friction icon resources.
             frictionSld = null;
         }
-        return frictionSld != null ? (StateListDrawable) frictionSld.getDrawable(0) : null;
+        if (frictionSld != null) {
+            StateListDrawable val = (StateListDrawable) frictionSld.getDrawable(0);
+            frictionSld.recycle();
+            return val;
+        } else {
+            return null;
+        }
     }
 
-    // Used for dummy pref.
+    // Used for fake pref.
     public AccessPointPreference(Context context, AttributeSet attrs) {
         super(context, attrs);
         mFrictionSld = null;
@@ -142,7 +148,7 @@ public class AccessPointPreference extends Preference {
     public void onBindViewHolder(final PreferenceViewHolder view) {
         super.onBindViewHolder(view);
         if (mAccessPoint == null) {
-            // Used for dummy pref.
+            // Used for fake pref.
             return;
         }
         Drawable drawable = getIcon();
@@ -161,7 +167,8 @@ public class AccessPointPreference extends Preference {
         ImageView frictionImageView = (ImageView) view.findViewById(R.id.friction_icon);
         bindFrictionImage(frictionImageView);
 
-        final View divider = view.findViewById(R.id.two_target_divider);
+        final View divider = view.findViewById(
+                com.android.settingslib.widget.preference.twotarget.R.id.two_target_divider);
         divider.setVisibility(shouldShowDivider() ? View.VISIBLE : View.INVISIBLE);
     }
 
@@ -183,7 +190,7 @@ public class AccessPointPreference extends Preference {
 
         Drawable drawable = mIconInjector.getIcon(level);
         if (!mForSavedNetworks && drawable != null) {
-            drawable.setTint(Utils.getColorAttr(context, android.R.attr.colorControlNormal));
+            drawable.setTintList(Utils.getColorAttr(context, android.R.attr.colorControlNormal));
             setIcon(drawable);
         } else {
             safeSetDefaultIcon();
@@ -200,7 +207,8 @@ public class AccessPointPreference extends Preference {
         if (frictionImageView == null || mFrictionSld == null) {
             return;
         }
-        if (mAccessPoint.getSecurity() != AccessPoint.SECURITY_NONE) {
+        if ((mAccessPoint.getSecurity() != AccessPoint.SECURITY_NONE)
+                && (mAccessPoint.getSecurity() != AccessPoint.SECURITY_OWE)) {
             mFrictionSld.setState(STATE_SECURED);
         } else if (mAccessPoint.isMetered()) {
             mFrictionSld.setState(STATE_METERED);
@@ -231,7 +239,7 @@ public class AccessPointPreference extends Preference {
      * Updates the title and summary; may indirectly call notifyChanged().
      */
     public void refresh() {
-        setTitle(this, mAccessPoint, mForSavedNetworks);
+        setTitle(this, mAccessPoint);
         final Context context = getContext();
         int level = mAccessPoint.getLevel();
         int wifiSpeed = mAccessPoint.getSpeed();
@@ -261,12 +269,8 @@ public class AccessPointPreference extends Preference {
     }
 
     @VisibleForTesting
-    static void setTitle(AccessPointPreference preference, AccessPoint ap, boolean savedNetworks) {
-        if (savedNetworks) {
-            preference.setTitle(ap.getConfigName());
-        } else {
-            preference.setTitle(ap.getSsidStr());
-        }
+    static void setTitle(AccessPointPreference preference, AccessPoint ap) {
+        preference.setTitle(ap.getTitle());
     }
 
     /**

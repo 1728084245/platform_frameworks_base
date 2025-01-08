@@ -83,6 +83,16 @@ int ASensorManager_getSensorList(ASensorManager* manager, ASensorList* list) {
     return c;
 }
 
+ssize_t ASensorManager_getDynamicSensorList(ASensorManager* manager, ASensorList* list) {
+    RETURN_IF_MANAGER_IS_NULL(android::BAD_VALUE);
+    Sensor const* const* l;
+    ssize_t c = static_cast<SensorManager*>(manager)->getDynamicSensorList(&l);
+    if (list) {
+        *list = reinterpret_cast<ASensorList>(l);
+    }
+    return c;
+}
+
 ASensor const* ASensorManager_getDefaultSensor(ASensorManager* manager, int type) {
     RETURN_IF_MANAGER_IS_NULL(nullptr);
     return static_cast<SensorManager*>(manager)->getDefaultSensor(type);
@@ -115,6 +125,7 @@ ASensorEventQueue* ASensorManager_createEventQueue(ASensorManager* manager,
     if (queue != 0) {
         ALooper_addFd(looper, queue->getFd(), ident, ALOOPER_EVENT_INPUT, callback, data);
         queue->looper = looper;
+        queue->requestAdditionalInfo = false;
         queue->incStrong(manager);
     }
     return static_cast<ASensorEventQueue*>(queue.get());
@@ -274,23 +285,31 @@ ssize_t ASensorEventQueue_getEvents(ASensorEventQueue* queue, ASensorEvent* even
         return android::BAD_VALUE;
     }
 
-    ssize_t actual = static_cast<SensorEventQueue*>(queue)->read(events, count);
+    SensorEventQueue* sensorQueue = static_cast<SensorEventQueue*>(queue);
+    ssize_t actual = sensorQueue->read(events, count);
     if (actual > 0) {
-        static_cast<SensorEventQueue*>(queue)->sendAck(events, actual);
+        sensorQueue->sendAck(events, actual);
     }
-    return actual;
+
+    return sensorQueue->filterEvents(events, actual);
+}
+
+int ASensorEventQueue_requestAdditionalInfoEvents(ASensorEventQueue* queue, bool enable) {
+    RETURN_IF_QUEUE_IS_NULL(android::BAD_VALUE);
+    queue->requestAdditionalInfo = enable;
+    return android::OK;
 }
 
 /*****************************************************************************/
 
 const char* ASensor_getName(ASensor const* sensor) {
     RETURN_IF_SENSOR_IS_NULL(nullptr);
-    return static_cast<Sensor const*>(sensor)->getName().string();
+    return static_cast<Sensor const*>(sensor)->getName().c_str();
 }
 
 const char* ASensor_getVendor(ASensor const* sensor) {
     RETURN_IF_SENSOR_IS_NULL(nullptr);
-    return static_cast<Sensor const*>(sensor)->getVendor().string();
+    return static_cast<Sensor const*>(sensor)->getVendor().c_str();
 }
 
 int ASensor_getType(ASensor const* sensor) {
@@ -320,7 +339,7 @@ int ASensor_getFifoReservedEventCount(ASensor const* sensor) {
 
 const char* ASensor_getStringType(ASensor const* sensor) {
     RETURN_IF_SENSOR_IS_NULL(nullptr);
-    return static_cast<Sensor const*>(sensor)->getStringType().string();
+    return static_cast<Sensor const*>(sensor)->getStringType().c_str();
 }
 
 int ASensor_getReportingMode(ASensor const* sensor) {
@@ -341,4 +360,9 @@ bool ASensor_isDirectChannelTypeSupported(ASensor const *sensor, int channelType
 int ASensor_getHighestDirectReportRateLevel(ASensor const *sensor) {
     RETURN_IF_SENSOR_IS_NULL(ASENSOR_DIRECT_RATE_STOP);
     return static_cast<Sensor const *>(sensor)->getHighestDirectReportRateLevel();
+}
+
+int ASensor_getHandle(ASensor const* sensor) {
+    RETURN_IF_SENSOR_IS_NULL(ASENSOR_INVALID);
+    return static_cast<Sensor const*>(sensor)->getHandle();
 }

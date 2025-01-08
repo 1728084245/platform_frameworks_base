@@ -29,6 +29,7 @@ import android.content.Context;
 import android.content.pm.PackageManagerInternal;
 import android.os.Build;
 import android.os.UserHandle;
+import android.platform.test.annotations.Presubmit;
 import android.util.ArraySet;
 import android.util.Log;
 import android.util.SparseArray;
@@ -47,6 +48,7 @@ import org.junit.runner.RunWith;
 
 @RunWith(AndroidJUnit4.class)
 @SmallTest
+@Presubmit
 public class JobSetTest {
     private static final String TAG = JobSetTest.class.getSimpleName();
     private static final int SECONDARY_USER_ID_1 = 12;
@@ -64,6 +66,7 @@ public class JobSetTest {
         final PackageManagerInternal pm = mock(PackageManagerInternal.class);
         when(pm.getPackageTargetSdkVersion(anyString()))
                 .thenReturn(Build.VERSION_CODES.CUR_DEVELOPMENT);
+        LocalServices.removeServiceForTest(PackageManagerInternal.class);
         LocalServices.addService(PackageManagerInternal.class, pm);
         assumeFalse("Test cannot run in user " + mContext.getUserId(),
                 mContext.getUserId() == SECONDARY_USER_ID_1
@@ -76,7 +79,7 @@ public class JobSetTest {
                 .setRequiresCharging(true)
                 .build();
         return JobStatus.createFromJobInfo(jobInfo, callingUid, mContext.getPackageName(),
-                mContext.getUserId(), "Test");
+                mContext.getUserId(), "Namespace", "Test");
     }
 
     @Test
@@ -94,9 +97,9 @@ public class JobSetTest {
         mJobSet.remove(testJob1);
         mJobSet.remove(testJob2);
         assertHaveSameJobs(mJobSet.mJobsPerSourceUid, mJobSet.mJobs);
-        mJobSet.removeJobsOfNonUsers(new int[] {mContext.getUserId(), SECONDARY_USER_ID_1});
+        mJobSet.removeJobsOfUnlistedUsers(new int[] {mContext.getUserId(), SECONDARY_USER_ID_1});
         assertHaveSameJobs(mJobSet.mJobsPerSourceUid, mJobSet.mJobs);
-        mJobSet.removeJobsOfNonUsers(new int[] {mContext.getUserId()});
+        mJobSet.removeJobsOfUnlistedUsers(new int[] {mContext.getUserId()});
         assertTrue("mJobs should be empty", mJobSet.mJobs.size() == 0);
         assertTrue("mJobsPerSourceUid should be empty", mJobSet.mJobsPerSourceUid.size() == 0);
     }

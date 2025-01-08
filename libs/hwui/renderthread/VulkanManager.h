@@ -17,10 +17,38 @@
 #ifndef VULKANMANAGER_H
 #define VULKANMANAGER_H
 
+#if !defined(VK_USE_PLATFORM_ANDROID_KHR)
+#define VK_USE_PLATFORM_ANDROID_KHR
+#endif
 #include <SkSurface.h>
-#include <vk/GrVkBackendContext.h>
-
+#include <android-base/unique_fd.h>
+#include <include/gpu/ganesh/GrContextOptions.h>
+#include <utils/StrongPointer.h>
+#include <vk/VulkanExtensions.h>
 #include <vulkan/vulkan.h>
+
+// VK_ANDROID_frame_boundary is a bespoke extension defined by AGI
+// (https://github.com/google/agi) to enable profiling of apps rendering via
+// HWUI. This extension is not defined in Khronos, hence the need to declare it
+// manually here. There's a superseding extension (VK_EXT_frame_boundary) being
+// discussed in Khronos, but in the meantime we use the bespoke
+// VK_ANDROID_frame_boundary. This is a device extension that is implemented by
+// AGI's Vulkan capture layer, such that it is only supported by devices when
+// AGI is doing a capture of the app.
+//
+// TODO(b/182165045): use the Khronos blessed VK_EXT_frame_boudary once it has
+// landed in the spec.
+typedef void(VKAPI_PTR* PFN_vkFrameBoundaryANDROID)(VkDevice device, VkSemaphore semaphore,
+                                                    VkImage image);
+#define VK_ANDROID_FRAME_BOUNDARY_EXTENSION_NAME "VK_ANDROID_frame_boundary"
+
+#include "Frame.h"
+#include "IRenderPipeline.h"
+#include "VulkanSurface.h"
+#include "private/hwui/DrawVkInfo.h"
+
+#include <SkColorSpace.h>
+#include <SkRefCnt.h>
 
 namespace android {
 namespace uirenderer {
@@ -28,95 +56,77 @@ namespace renderthread {
 
 class RenderThread;
 
-class VulkanSurface {
-public:
-    VulkanSurface() {}
-
-    sk_sp<SkSurface> getBackBufferSurface() { return mBackbuffer; }
-
-private:
-    friend class VulkanManager;
-    struct BackbufferInfo {
-        uint32_t mImageIndex;           // image this is associated with
-        VkSemaphore mAcquireSemaphore;  // we signal on this for acquisition of image
-        VkSemaphore mRenderSemaphore;   // we wait on this for rendering to be done
-        VkCommandBuffer
-                mTransitionCmdBuffers[2];  // to transition layout between present and render
-        // We use these fences to make sure the above Command buffers have finished their work
-        // before attempting to reuse them or destroy them.
-        VkFence mUsageFences[2];
-    };
-
-    struct ImageInfo {
-        VkImageLayout mImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        sk_sp<SkSurface> mSurface;
-        uint16_t mLastUsed = 0;
-        bool mInvalid = true;
-    };
-
-    sk_sp<SkSurface> mBackbuffer;
-
-    VkSurfaceKHR mVkSurface = VK_NULL_HANDLE;
-    VkSwapchainKHR mSwapchain = VK_NULL_HANDLE;
-
-    BackbufferInfo* mBackbuffers = nullptr;
-    uint32_t mCurrentBackbufferIndex;
-
-    uint32_t mImageCount;
-    VkImage* mImages = nullptr;
-    ImageInfo* mImageInfos;
-    uint16_t mCurrentTime = 0;
-};
-
 // This class contains the shared global Vulkan objects, such as VkInstance, VkDevice and VkQueue,
 // which are re-used by CanvasContext. This class is created once and should be used by all vulkan
 // windowing contexts. The VulkanManager must be initialized before use.
-class VulkanManager {
+class VulkanManager final : public RefBase {
 public:
+    static sp<VulkanManager> getInstance();
+    static sp<VulkanManager> peekInstance();
+
     // Sets up the vulkan context that is shared amonst all clients of the VulkanManager. This must
     // be call once before use of the VulkanManager. Multiple calls after the first will simiply
     // return.
     void initialize();
 
     // Quick check to see if the VulkanManager has been initialized.
-    bool hasVkContext() { return mBackendContext.get() != nullptr; }
+    bool hasVkContext() { return mInitialized; }
 
-    // Given a window this creates a new VkSurfaceKHR and VkSwapchain and stores them inside a new
-    // VulkanSurface object which is returned.
-    VulkanSurface* createSurface(ANativeWindow* window);
-
-    // Destroy the VulkanSurface and all associated vulkan objects.
+    // Create and destroy functions for wrapping an ANativeWindow in a VulkanSurface
+    VulkanSurface* createSurface(ANativeWindow* window,
+                                 ColorMode colorMode,
+                                 sk_sp<SkColorSpace> surfaceColorSpace,
+                                 SkColorType surfaceColorType,
+                                 GrDirectContext* grContext,
+                                 uint32_t extraBuffers);
     void destroySurface(VulkanSurface* surface);
 
-    // Cleans up all the global state in the VulkanManger.
-    void destroy();
+    Frame dequeueNextBuffer(VulkanSurface* surface);
 
-    // No work is needed to make a VulkanSurface current, and all functions require that a
-    // VulkanSurface is passed into them so we just return true here.
-    bool isCurrent(VulkanSurface* surface) { return true; }
+    struct VkDrawResult {
+        // The estimated start time for intiating GPU work, -1 if unknown.
+        nsecs_t submissionTime;
+        android::base::unique_fd presentFence;
+    };
 
-    int getAge(VulkanSurface* surface);
+    // Finishes the frame and submits work to the GPU
+    VkDrawResult finishFrame(SkSurface* surface);
+    void swapBuffers(VulkanSurface* surface, const SkRect& dirtyRect,
+                     android::base::unique_fd&& presentFence);
 
-    // Returns an SkSurface which wraps the next image returned from vkAcquireNextImageKHR. It also
-    // will transition the VkImage from a present layout to color attachment so that it can be used
-    // by the client for drawing.
-    SkSurface* getBackbufferSurface(VulkanSurface* surface);
+    // Inserts a wait on fence command into the Vulkan command buffer.
+    status_t fenceWait(int fence, GrDirectContext* grContext);
 
-    // Presents the current VkImage.
-    void swapBuffers(VulkanSurface* surface);
+    // Creates a fence that is signaled when all the pending Vulkan commands are finished on the
+    // GPU.
+    status_t createReleaseFence(int* nativeFence, GrDirectContext* grContext);
+
+    // Returned pointers are owned by VulkanManager.
+    // An instance of VkFunctorInitParams returned from getVkFunctorInitParams refers to
+    // the internal state of VulkanManager: VulkanManager must be alive to use the returned value.
+    VkFunctorInitParams getVkFunctorInitParams() const;
+
+
+    enum class ContextType {
+        kRenderThread,
+        kUploadThread
+    };
+
+    // returns a Skia graphic context used to draw content on the specified thread
+    sk_sp<GrDirectContext> createContext(GrContextOptions& options,
+                                         ContextType contextType = ContextType::kRenderThread);
+
+    uint32_t getDriverVersion() const { return mDriverVersion; }
 
 private:
-    friend class RenderThread;
+    friend class VulkanSurface;
 
-    explicit VulkanManager(RenderThread& thread);
-    ~VulkanManager() { destroy(); }
+    explicit VulkanManager() {}
+    ~VulkanManager();
 
-    void destroyBuffers(VulkanSurface* surface);
-
-    bool createSwapchain(VulkanSurface* surface);
-    void createBuffers(VulkanSurface* surface, VkFormat format, VkExtent2D extent);
-
-    VulkanSurface::BackbufferInfo* getAvailableBackbuffer(VulkanSurface* surface);
+    // Sets up the VkInstance and VkDevice objects. Also fills out the passed in
+    // VkPhysicalDeviceFeatures struct.
+    void setupDevice(skgpu::VulkanExtensions&, VkPhysicalDeviceFeatures2&);
 
     // simple wrapper class that exists only to initialize a pointer to NULL
     template <typename FNPTR_TYPE>
@@ -134,22 +144,24 @@ private:
         FNPTR_TYPE fPtr;
     };
 
-    // WSI interface functions
-    VkPtr<PFN_vkCreateAndroidSurfaceKHR> mCreateAndroidSurfaceKHR;
-    VkPtr<PFN_vkDestroySurfaceKHR> mDestroySurfaceKHR;
-    VkPtr<PFN_vkGetPhysicalDeviceSurfaceSupportKHR> mGetPhysicalDeviceSurfaceSupportKHR;
-    VkPtr<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR> mGetPhysicalDeviceSurfaceCapabilitiesKHR;
-    VkPtr<PFN_vkGetPhysicalDeviceSurfaceFormatsKHR> mGetPhysicalDeviceSurfaceFormatsKHR;
-    VkPtr<PFN_vkGetPhysicalDeviceSurfacePresentModesKHR> mGetPhysicalDeviceSurfacePresentModesKHR;
+    // Instance Functions
+    VkPtr<PFN_vkEnumerateInstanceVersion> mEnumerateInstanceVersion;
+    VkPtr<PFN_vkEnumerateInstanceExtensionProperties> mEnumerateInstanceExtensionProperties;
+    VkPtr<PFN_vkCreateInstance> mCreateInstance;
 
-    VkPtr<PFN_vkCreateSwapchainKHR> mCreateSwapchainKHR;
-    VkPtr<PFN_vkDestroySwapchainKHR> mDestroySwapchainKHR;
-    VkPtr<PFN_vkGetSwapchainImagesKHR> mGetSwapchainImagesKHR;
-    VkPtr<PFN_vkAcquireNextImageKHR> mAcquireNextImageKHR;
-    VkPtr<PFN_vkQueuePresentKHR> mQueuePresentKHR;
-    VkPtr<PFN_vkCreateSharedSwapchainsKHR> mCreateSharedSwapchainsKHR;
+    VkPtr<PFN_vkDestroyInstance> mDestroyInstance;
+    VkPtr<PFN_vkEnumeratePhysicalDevices> mEnumeratePhysicalDevices;
+    VkPtr<PFN_vkGetPhysicalDeviceProperties> mGetPhysicalDeviceProperties;
+    VkPtr<PFN_vkGetPhysicalDeviceQueueFamilyProperties> mGetPhysicalDeviceQueueFamilyProperties;
+    VkPtr<PFN_vkGetPhysicalDeviceFeatures2> mGetPhysicalDeviceFeatures2;
+    VkPtr<PFN_vkGetPhysicalDeviceImageFormatProperties2> mGetPhysicalDeviceImageFormatProperties2;
+    VkPtr<PFN_vkCreateDevice> mCreateDevice;
+    VkPtr<PFN_vkEnumerateDeviceExtensionProperties> mEnumerateDeviceExtensionProperties;
 
-    // Additional vulkan functions
+    // Device Functions
+    VkPtr<PFN_vkGetDeviceQueue> mGetDeviceQueue;
+    VkPtr<PFN_vkDeviceWaitIdle> mDeviceWaitIdle;
+    VkPtr<PFN_vkDestroyDevice> mDestroyDevice;
     VkPtr<PFN_vkCreateCommandPool> mCreateCommandPool;
     VkPtr<PFN_vkDestroyCommandPool> mDestroyCommandPool;
     VkPtr<PFN_vkAllocateCommandBuffers> mAllocateCommandBuffers;
@@ -159,30 +171,45 @@ private:
     VkPtr<PFN_vkEndCommandBuffer> mEndCommandBuffer;
     VkPtr<PFN_vkCmdPipelineBarrier> mCmdPipelineBarrier;
 
-    VkPtr<PFN_vkGetDeviceQueue> mGetDeviceQueue;
     VkPtr<PFN_vkQueueSubmit> mQueueSubmit;
     VkPtr<PFN_vkQueueWaitIdle> mQueueWaitIdle;
-    VkPtr<PFN_vkDeviceWaitIdle> mDeviceWaitIdle;
 
     VkPtr<PFN_vkCreateSemaphore> mCreateSemaphore;
     VkPtr<PFN_vkDestroySemaphore> mDestroySemaphore;
+    VkPtr<PFN_vkImportSemaphoreFdKHR> mImportSemaphoreFdKHR;
+    VkPtr<PFN_vkGetSemaphoreFdKHR> mGetSemaphoreFdKHR;
     VkPtr<PFN_vkCreateFence> mCreateFence;
     VkPtr<PFN_vkDestroyFence> mDestroyFence;
     VkPtr<PFN_vkWaitForFences> mWaitForFences;
     VkPtr<PFN_vkResetFences> mResetFences;
+    VkPtr<PFN_vkFrameBoundaryANDROID> mFrameBoundaryANDROID;
 
-    RenderThread& mRenderThread;
+    VkInstance mInstance = VK_NULL_HANDLE;
+    VkPhysicalDevice mPhysicalDevice = VK_NULL_HANDLE;
+    VkDevice mDevice = VK_NULL_HANDLE;
 
-    sk_sp<const GrVkBackendContext> mBackendContext;
-    uint32_t mPresentQueueIndex;
-    VkQueue mPresentQueue = VK_NULL_HANDLE;
-    VkCommandPool mCommandPool = VK_NULL_HANDLE;
+    uint32_t mGraphicsQueueIndex;
+    VkQueue mGraphicsQueue = VK_NULL_HANDLE;
+    VkQueue mAHBUploadQueue = VK_NULL_HANDLE;
+
+    // Variables saved to populate VkFunctorInitParams.
+    static const uint32_t mAPIVersion = VK_MAKE_VERSION(1, 1, 0);
+    std::vector<VkExtensionProperties> mInstanceExtensionsOwner;
+    std::vector<const char*> mInstanceExtensions;
+    std::vector<VkExtensionProperties> mDeviceExtensionsOwner;
+    std::vector<const char*> mDeviceExtensions;
+    VkPhysicalDeviceFeatures2 mPhysicalDeviceFeatures2{};
 
     enum class SwapBehavior {
         Discard,
         BufferAge,
     };
     SwapBehavior mSwapBehavior = SwapBehavior::Discard;
+    skgpu::VulkanExtensions mExtensions;
+    uint32_t mDriverVersion = 0;
+
+    std::once_flag mInitFlag;
+    std::atomic_bool mInitialized = false;
 };
 
 } /* namespace renderthread */

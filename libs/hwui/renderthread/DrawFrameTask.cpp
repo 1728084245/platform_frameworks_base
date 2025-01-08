@@ -16,13 +16,17 @@
 
 #include "DrawFrameTask.h"
 
+#include <gui/TraceUtils.h>
 #include <utils/Log.h>
-#include <utils/Trace.h>
+
+#include <algorithm>
 
 #include "../DeferredLayerUpdater.h"
 #include "../DisplayList.h"
+#include "../Properties.h"
 #include "../RenderNode.h"
 #include "CanvasContext.h"
+#include "HardwareBufferRenderParams.h"
 #include "RenderThread.h"
 
 namespace android {
@@ -69,38 +73,53 @@ int DrawFrameTask::drawFrame() {
     LOG_ALWAYS_FATAL_IF(!mContext, "Cannot drawFrame with no CanvasContext!");
 
     mSyncResult = SyncResult::OK;
-    mSyncQueued = systemTime(CLOCK_MONOTONIC);
+    mSyncQueued = systemTime(SYSTEM_TIME_MONOTONIC);
     postAndWait();
 
     return mSyncResult;
 }
 
 void DrawFrameTask::postAndWait() {
+    ATRACE_CALL();
     AutoMutex _lock(mLock);
     mRenderThread->queue().post([this]() { run(); });
     mSignal.wait(mLock);
 }
 
 void DrawFrameTask::run() {
-    ATRACE_NAME("DrawFrame");
+    const int64_t vsyncId = mFrameInfo[static_cast<int>(FrameInfoIndex::FrameTimelineVsyncId)];
+    ATRACE_FORMAT("DrawFrames %" PRId64, vsyncId);
 
+    mContext->setSyncDelayDuration(systemTime(SYSTEM_TIME_MONOTONIC) - mSyncQueued);
+    mContext->setTargetSdrHdrRatio(mRenderSdrHdrRatio);
+
+    auto hardwareBufferParams = mHardwareBufferParams;
+    mContext->setHardwareBufferRenderParams(hardwareBufferParams);
+    IRenderPipeline* pipeline = mContext->getRenderPipeline();
     bool canUnblockUiThread;
     bool canDrawThisFrame;
+    bool solelyTextureViewUpdates;
     {
         TreeInfo info(TreeInfo::MODE_FULL, *mContext);
+        info.forceDrawFrame = mForceDrawFrame;
+        mForceDrawFrame = false;
         canUnblockUiThread = syncFrameState(info);
-        canDrawThisFrame = info.out.canDrawThisFrame;
+        canDrawThisFrame = !info.out.skippedFrameReason.has_value();
+        solelyTextureViewUpdates = info.out.solelyTextureViewUpdates;
 
-        if (mFrameCompleteCallback) {
-            mContext->addFrameCompleteListener(std::move(mFrameCompleteCallback));
-            mFrameCompleteCallback = nullptr;
+        if (mFrameCommitCallback) {
+            mContext->addFrameCommitListener(std::move(mFrameCommitCallback));
+            mFrameCommitCallback = nullptr;
         }
     }
 
     // Grab a copy of everything we need
     CanvasContext* context = mContext;
-    std::function<void(int64_t)> callback = std::move(mFrameCallback);
+    std::function<std::function<void(bool)>(int32_t, int64_t)> frameCallback =
+            std::move(mFrameCallback);
+    std::function<void()> frameCompleteCallback = std::move(mFrameCompleteCallback);
     mFrameCallback = nullptr;
+    mFrameCompleteCallback = nullptr;
 
     // From this point on anything in "this" is *UNSAFE TO ACCESS*
     if (canUnblockUiThread) {
@@ -108,48 +127,81 @@ void DrawFrameTask::run() {
     }
 
     // Even if we aren't drawing this vsync pulse the next frame number will still be accurate
-    if (CC_UNLIKELY(callback)) {
-        context->enqueueFrameWork([callback, frameNr = context->getFrameNumber()]() {
-            callback(frameNr);
+    if (CC_UNLIKELY(frameCallback)) {
+        context->enqueueFrameWork([frameCallback, context, syncResult = mSyncResult,
+                                   frameNr = context->getFrameNumber()]() {
+            auto frameCommitCallback = frameCallback(syncResult, frameNr);
+            if (frameCommitCallback) {
+                context->addFrameCommitListener(std::move(frameCommitCallback));
+            }
         });
     }
 
     if (CC_LIKELY(canDrawThisFrame)) {
-        context->draw();
+        context->draw(solelyTextureViewUpdates);
     } else {
+#ifdef __ANDROID__
+        // Do a flush in case syncFrameState performed any texture uploads. Since we skipped
+        // the draw() call, those uploads (or deletes) will end up sitting in the queue.
+        // Do them now
+        if (GrDirectContext* grContext = mRenderThread->getGrContext()) {
+            grContext->flushAndSubmit();
+        }
+#endif
         // wait on fences so tasks don't overlap next frame
         context->waitOnFences();
     }
 
+    if (CC_UNLIKELY(frameCompleteCallback)) {
+        std::invoke(frameCompleteCallback);
+    }
+
     if (!canUnblockUiThread) {
         unblockUiThread();
+    }
+
+    if (pipeline->hasHardwareBuffer()) {
+        auto fence = pipeline->flush();
+        hardwareBufferParams.invokeRenderCallback(std::move(fence), 0);
     }
 }
 
 bool DrawFrameTask::syncFrameState(TreeInfo& info) {
     ATRACE_CALL();
     int64_t vsync = mFrameInfo[static_cast<int>(FrameInfoIndex::Vsync)];
-    mRenderThread->timeLord().vsyncReceived(vsync);
+    int64_t intendedVsync = mFrameInfo[static_cast<int>(FrameInfoIndex::IntendedVsync)];
+    int64_t vsyncId = mFrameInfo[static_cast<int>(FrameInfoIndex::FrameTimelineVsyncId)];
+    int64_t frameDeadline = mFrameInfo[static_cast<int>(FrameInfoIndex::FrameDeadline)];
+    int64_t frameInterval = mFrameInfo[static_cast<int>(FrameInfoIndex::FrameInterval)];
+    mRenderThread->timeLord().vsyncReceived(vsync, intendedVsync, vsyncId, frameDeadline,
+            frameInterval);
     bool canDraw = mContext->makeCurrent();
     mContext->unpinImages();
 
+#ifdef __ANDROID__
     for (size_t i = 0; i < mLayers.size(); i++) {
-        mLayers[i]->apply();
+        if (mLayers[i]) {
+            mLayers[i]->apply();
+        }
     }
+#endif
+
     mLayers.clear();
     mContext->setContentDrawBounds(mContentDrawBounds);
     mContext->prepareTree(info, mFrameInfo, mSyncQueued, mTargetNode);
 
     // This is after the prepareTree so that any pending operations
     // (RenderNode tree state, prefetched layers, etc...) will be flushed.
-    if (CC_UNLIKELY(!mContext->hasSurface() || !canDraw)) {
-        if (!mContext->hasSurface()) {
+    bool hasTarget = mContext->hasOutputTarget();
+    if (CC_UNLIKELY(!hasTarget || !canDraw)) {
+        if (!hasTarget) {
             mSyncResult |= SyncResult::LostSurfaceRewardIfFound;
+            info.out.skippedFrameReason = SkippedFrameReason::NoOutputTarget;
         } else {
             // If we have a surface but can't draw we must be stopped
             mSyncResult |= SyncResult::ContextIsStopped;
+            info.out.skippedFrameReason = SkippedFrameReason::ContextIsStopped;
         }
-        info.out.canDrawThisFrame = false;
     }
 
     if (info.out.hasAnimations) {
@@ -157,7 +209,7 @@ bool DrawFrameTask::syncFrameState(TreeInfo& info) {
             mSyncResult |= SyncResult::UIRedrawRequired;
         }
     }
-    if (!info.out.canDrawThisFrame) {
+    if (info.out.skippedFrameReason) {
         mSyncResult |= SyncResult::FrameDropped;
     }
     // If prepareTextures is false, we ran out of texture cache space

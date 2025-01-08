@@ -3,12 +3,13 @@ package com.android.systemui.tuner;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.provider.Settings;
-import androidx.preference.SwitchPreference;
 import android.util.AttributeSet;
+
+import androidx.preference.SwitchPreference;
 
 import com.android.internal.logging.MetricsLogger;
 import com.android.systemui.Dependency;
-import com.android.systemui.R;
+import com.android.systemui.res.R;
 import com.android.systemui.tuner.TunerService.Tunable;
 
 public class TunerSwitch extends SwitchPreference implements Tunable {
@@ -22,6 +23,7 @@ public class TunerSwitch extends SwitchPreference implements Tunable {
         TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.TunerSwitch);
         mDefault = a.getBoolean(R.styleable.TunerSwitch_defValue, false);
         mAction = a.getInt(R.styleable.TunerSwitch_metricsAction, -1);
+        a.recycle();
     }
 
     @Override

@@ -17,10 +17,14 @@
 package android.telephony;
 
 import android.annotation.CallSuper;
+import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.SystemApi;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.text.TextUtils;
+
+import com.android.telephony.Rlog;
 
 import java.util.Objects;
 import java.util.UUID;
@@ -32,7 +36,18 @@ import java.util.UUID;
 public abstract class CellIdentity implements Parcelable {
 
     /** @hide */
-    public static final int INVALID_CHANNEL_NUMBER = -1;
+    public static final int INVALID_CHANNEL_NUMBER = Integer.MAX_VALUE;
+
+    /**
+     * parameters for validation
+     * @hide
+     */
+    public static final int MCC_LENGTH = 3;
+
+    /** @hide */
+    public static final int MNC_MIN_LENGTH = 2;
+    /** @hide */
+    public static final int MNC_MAX_LENGTH = 3;
 
     // Log tag
     /** @hide */
@@ -54,14 +69,19 @@ public abstract class CellIdentity implements Parcelable {
     /** @hide */
     protected String mAlphaShort;
 
+    // Cell Global, 3GPP TS 23.003
     /** @hide */
-    protected CellIdentity(String tag, int type, String mcc, String mnc, String alphal,
-                           String alphas) {
+    protected String mGlobalCellId;
+
+
+    /** @hide */
+    protected CellIdentity(@Nullable String tag, int type, @Nullable String mcc,
+            @Nullable String mnc, @Nullable String alphal, @Nullable String alphas) {
         mTag = tag;
         mType = type;
 
         // Only allow INT_MAX if unknown string mcc/mnc
-        if (mcc == null || mcc.matches("^[0-9]{3}$")) {
+        if (mcc == null || isMcc(mcc)) {
             mMccStr = mcc;
         } else if (mcc.isEmpty() || mcc.equals(String.valueOf(Integer.MAX_VALUE))) {
             // If the mccStr is empty or unknown, set it as null.
@@ -73,7 +93,7 @@ public abstract class CellIdentity implements Parcelable {
             log("invalid MCC format: " + mcc);
         }
 
-        if (mnc == null || mnc.matches("^[0-9]{2,3}$")) {
+        if (mnc == null || isMnc(mnc)) {
             mMncStr = mnc;
         } else if (mnc.isEmpty() || mnc.equals(String.valueOf(Integer.MAX_VALUE))) {
             // If the mncStr is empty or unknown, set it as null.
@@ -87,7 +107,7 @@ public abstract class CellIdentity implements Parcelable {
 
         if ((mMccStr != null && mMncStr == null) || (mMccStr == null && mMncStr != null)) {
             AnomalyReporter.reportAnomaly(
-                    UUID.fromString("a3ab0b9d-f2aa-4baf-911d-7096c0d4645a"),
+                    UUID.fromString("e257ae06-ac0a-44c0-ba63-823b9f07b3e4"),
                     "CellIdentity Missing Half of PLMN ID");
         }
 
@@ -168,10 +188,49 @@ public abstract class CellIdentity implements Parcelable {
     }
 
     /**
+     * @return Global Cell ID
+     * @hide
+     */
+    @Nullable
+    public String getGlobalCellId() {
+        return mGlobalCellId;
+    }
+
+    /**
+     * @param ci a CellIdentity to compare to the current CellIdentity.
+     * @return true if ci has the same technology and Global Cell ID; false, otherwise.
+     * @hide
+     */
+    public boolean isSameCell(@Nullable CellIdentity ci) {
+        if (ci == null) return false;
+        if (this.getClass() != ci.getClass()) return false;
+        return TextUtils.equals(this.getGlobalCellId(), ci.getGlobalCellId());
+    }
+
+    /** @hide */
+    public @Nullable String getPlmn() {
+        if (mMccStr == null || mMncStr == null) return null;
+        return mMccStr + mMncStr;
+    }
+
+    /** @hide */
+    protected abstract void updateGlobalCellId();
+
+    /**
      * @return a CellLocation object for this CellIdentity
      * @hide
      */
-    public abstract CellLocation asCellLocation();
+    @SystemApi
+    public abstract @NonNull CellLocation asCellLocation();
+
+    /**
+     * Create and a return a new instance of CellIdentity with location-identifying information
+     * removed.
+     *
+     * @hide
+     */
+    @SystemApi
+    public abstract @NonNull CellIdentity sanitizeLocationInfo();
 
     @Override
     public boolean equals(Object other) {
@@ -206,6 +265,17 @@ public abstract class CellIdentity implements Parcelable {
         dest.writeString(mAlphaShort);
     }
 
+    /** Used by phone interface manager to verify if a given string is valid MccMnc
+     * @hide
+     */
+    public static boolean isValidPlmn(@NonNull String plmn) {
+        if (plmn.length() < MCC_LENGTH + MNC_MIN_LENGTH
+                || plmn.length() > MCC_LENGTH + MNC_MAX_LENGTH) {
+            return false;
+        }
+        return (isMcc(plmn.substring(0, MCC_LENGTH)) && isMnc(plmn.substring(MCC_LENGTH)));
+    }
+
     /**
      * Construct from Parcel
      * @hide
@@ -216,7 +286,7 @@ public abstract class CellIdentity implements Parcelable {
     }
 
     /** Implement the Parcelable interface */
-    public static final Creator<CellIdentity> CREATOR =
+    public static final @android.annotation.NonNull Creator<CellIdentity> CREATOR =
             new Creator<CellIdentity>() {
                 @Override
                 public CellIdentity createFromParcel(Parcel in) {
@@ -261,5 +331,31 @@ public abstract class CellIdentity implements Parcelable {
             int value, int rangeMin, int rangeMax, int special) {
         if ((value < rangeMin || value > rangeMax) && value != special) return CellInfo.UNAVAILABLE;
         return value;
+    }
+
+    /** @hide */
+    private static boolean isMcc(@NonNull String mcc) {
+        // ensure no out of bounds indexing
+        if (mcc.length() != MCC_LENGTH) return false;
+
+        // Character.isDigit allows all unicode digits, not just [0-9]
+        for (int i = 0; i < MCC_LENGTH; i++) {
+            if (mcc.charAt(i) < '0' || mcc.charAt(i) > '9') return false;
+        }
+
+        return true;
+    }
+
+    /** @hide */
+    private static boolean isMnc(@NonNull String mnc) {
+        // ensure no out of bounds indexing
+        if (mnc.length() < MNC_MIN_LENGTH || mnc.length() > MNC_MAX_LENGTH) return false;
+
+        // Character.isDigit allows all unicode digits, not just [0-9]
+        for (int i = 0; i < mnc.length(); i++) {
+            if (mnc.charAt(i) < '0' || mnc.charAt(i) > '9') return false;
+        }
+
+        return true;
     }
 }

@@ -16,28 +16,35 @@
 
 package android.util;
 
-import junit.framework.Assert;
-import junit.framework.TestCase;
-
 import android.os.SystemProperties;
 import android.test.PerformanceTestCase;
-import android.test.suitebuilder.annotation.Suppress;
-import android.util.Log;
+
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.Suppress;
+
+import junit.framework.TestCase;
+
+import org.junit.Assert;
+import org.junit.Ignore;
+import org.junit.Test;
+import org.junit.runner.RunWith;
 
 //This is an empty TestCase.
 @Suppress
-public class LogTest extends TestCase {
+@RunWith(AndroidJUnit4.class)
+public class LogTest {
     private static final String PROPERTY_TAG = "log.tag.LogTest";
     private static final String LOG_TAG = "LogTest";
 
-
-    // TODO: remove this test once we uncomment out the following test.
-    public void testLogTestDummy() {
-      return;
+    @Test
+    public void testWtf() {
+        Log.wtf(LOG_TAG, "Message");
+        Log.wtf(LOG_TAG, "Message", new Throwable("Throwable"));
+        Log.wtf(LOG_TAG, new Throwable("Throwable"));
     }
 
-
-    /* TODO: This test is commented out because we will not be able to set properities. Fix the test.
+    @Test
+    @Ignore
     public void testIsLoggable() {
         // First clear any SystemProperty setting for our test key.
         SystemProperties.set(PROPERTY_TAG, null);
@@ -130,8 +137,7 @@ public class LogTest extends TestCase {
         Assert.assertFalse(Log.isLoggable(LOG_TAG, Log.ERROR));
         Assert.assertFalse(Log.isLoggable(LOG_TAG, Log.ASSERT));
     }
-    */
-    
+
     public static class PerformanceTest extends TestCase implements PerformanceTestCase {
         private static final int ITERATIONS = 1000;
 

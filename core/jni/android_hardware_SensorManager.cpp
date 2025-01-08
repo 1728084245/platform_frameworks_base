@@ -66,6 +66,7 @@ struct SensorOffsets
     jfieldID    flags;
     //methods
     jmethodID   setType;
+    jmethodID   setId;
     jmethodID   setUuid;
     jmethodID   init;
 } gSensorOffsets;
@@ -112,6 +113,7 @@ nativeClassInit (JNIEnv *_env, jclass _this)
     sensorOffsets.flags = GetFieldIDOrDie(_env,sensorClass, "mFlags", "I");
 
     sensorOffsets.setType = GetMethodIDOrDie(_env,sensorClass, "setType", "(I)Z");
+    sensorOffsets.setId = GetMethodIDOrDie(_env,sensorClass, "setId", "(I)V");
     sensorOffsets.setUuid = GetMethodIDOrDie(_env,sensorClass, "setUuid", "(JJ)V");
     sensorOffsets.init = GetMethodIDOrDie(_env,sensorClass, "<init>", "()V");
 
@@ -131,12 +133,24 @@ nativeClassInit (JNIEnv *_env, jclass _this)
             MakeGlobalRefOrDie(_env, _env->CallObjectMethod(empty.get(), stringOffsets.intern));
 }
 
+uint64_t htonll(uint64_t ll) {
+    constexpr uint32_t kBytesToTest = 0x12345678;
+    constexpr uint8_t kFirstByte = (const uint8_t &)kBytesToTest;
+    constexpr bool kIsLittleEndian = kFirstByte == 0x78;
+
+    if constexpr (kIsLittleEndian) {
+        return static_cast<uint64_t>(htonl(ll & 0xffffffff)) << 32 | htonl(ll >> 32);
+    } else {
+        return ll;
+    }
+}
+
 static jstring getJavaInternedString(JNIEnv *env, const String8 &string) {
     if (string == "") {
         return gStringOffsets.emptyString;
     }
 
-    ScopedLocalRef<jstring> javaString(env, env->NewStringUTF(string.string()));
+    ScopedLocalRef<jstring> javaString(env, env->NewStringUTF(string.c_str()));
     jstring internedString = (jstring)
             env->CallObjectMethod(javaString.get(), gStringOffsets.intern);
     return internedString;
@@ -188,9 +202,11 @@ translateNativeSensorToJavaSensor(JNIEnv *env, jobject sensor, const Sensor& nat
             env->SetObjectField(sensor, sensorOffsets.stringType, stringType);
         }
 
-        // TODO(b/29547335): Rename "setUuid" method to "setId".
-        int64_t id = nativeSensor.getId();
-        env->CallVoidMethod(sensor, sensorOffsets.setUuid, id, 0);
+        int32_t id = nativeSensor.getId();
+        env->CallVoidMethod(sensor, sensorOffsets.setId, id);
+        Sensor::uuid_t uuid = nativeSensor.getUuid();
+        env->CallVoidMethod(sensor, sensorOffsets.setUuid, htonll(uuid.i64[0]),
+                            htonll(uuid.i64[1]));
     }
     return sensor;
 }
@@ -207,6 +223,19 @@ nativeGetSensorAtIndex(JNIEnv *env, jclass clazz, jlong sensorManager, jobject s
     }
 
     return translateNativeSensorToJavaSensor(env, sensor, *sensorList[index]) != NULL;
+}
+
+static jboolean nativeGetDefaultDeviceSensorAtIndex(JNIEnv *env, jclass clazz, jlong sensorManager,
+                                                    jobject sensor, jint index) {
+    SensorManager *mgr = reinterpret_cast<SensorManager *>(sensorManager);
+
+    Vector<Sensor> sensorList;
+    ssize_t count = mgr->getDefaultDeviceSensorList(sensorList);
+    if (ssize_t(index) >= count) {
+        return false;
+    }
+
+    return translateNativeSensorToJavaSensor(env, sensor, sensorList[index]) != NULL;
 }
 
 static void
@@ -227,13 +256,43 @@ nativeGetDynamicSensors(JNIEnv *env, jclass clazz, jlong sensorManager, jobject 
     }
 }
 
+static void nativeGetRuntimeSensors(JNIEnv *env, jclass clazz, jlong sensorManager, jint deviceId,
+                                    jobject sensorList) {
+    SensorManager *mgr = reinterpret_cast<SensorManager *>(sensorManager);
+    const ListOffsets &listOffsets(gListOffsets);
+
+    Vector<Sensor> nativeList;
+
+    mgr->getRuntimeSensorList(deviceId, nativeList);
+
+    ALOGI("DYNS native SensorManager.getRuntimeSensorList return %zu sensors", nativeList.size());
+    for (size_t i = 0; i < nativeList.size(); ++i) {
+        jobject sensor = translateNativeSensorToJavaSensor(env, NULL, nativeList[i]);
+        // add to list
+        env->CallBooleanMethod(sensorList, listOffsets.add, sensor);
+    }
+}
+
 static jboolean nativeIsDataInjectionEnabled(JNIEnv *_env, jclass _this, jlong sensorManager) {
     SensorManager* mgr = reinterpret_cast<SensorManager*>(sensorManager);
     return mgr->isDataInjectionEnabled();
 }
 
+static jboolean nativeIsReplayDataInjectionEnabled(JNIEnv *_env, jclass _this,
+                                                   jlong sensorManager) {
+    SensorManager *mgr = reinterpret_cast<SensorManager *>(sensorManager);
+    return mgr->isReplayDataInjectionEnabled();
+}
+
+static jboolean nativeIsHalBypassReplayDataInjectionEnabled(JNIEnv *_env, jclass _this,
+                                                            jlong sensorManager) {
+    SensorManager *mgr = reinterpret_cast<SensorManager *>(sensorManager);
+    return mgr->isHalBypassReplayDataInjectionEnabled();
+}
+
 static jint nativeCreateDirectChannel(JNIEnv *_env, jclass _this, jlong sensorManager,
-        jlong size, jint channelType, jint fd, jobject hardwareBufferObj) {
+                                      jint deviceId, jlong size, jint channelType, jint fd,
+                                      jobject hardwareBufferObj) {
     const native_handle_t *nativeHandle = nullptr;
     NATIVE_HANDLE_DECLARE_STORAGE(ashmemHandle, 1, 0);
 
@@ -254,7 +313,7 @@ static jint nativeCreateDirectChannel(JNIEnv *_env, jclass _this, jlong sensorMa
     }
 
     SensorManager* mgr = reinterpret_cast<SensorManager*>(sensorManager);
-    return mgr->createDirectChannel(size, channelType, nativeHandle);
+    return mgr->createDirectChannel(deviceId, size, channelType, nativeHandle);
 }
 
 static void nativeDestroyDirectChannel(JNIEnv *_env, jclass _this, jlong sensorManager,
@@ -332,7 +391,7 @@ private:
     virtual int handleEvent(int fd, int events, void* data) {
         JNIEnv* env = AndroidRuntime::getJNIEnv();
         sp<SensorEventQueue> q = reinterpret_cast<SensorEventQueue *>(data);
-        ScopedLocalRef<jobject> receiverObj(env, jniGetReferent(env, mReceiverWeakGlobal));
+        ScopedLocalRef<jobject> receiverObj(env, GetReferent(env, mReceiverWeakGlobal));
 
         ssize_t n;
         ASensorEvent buffer[16];
@@ -421,11 +480,18 @@ private:
 };
 
 static jlong nativeInitSensorEventQueue(JNIEnv *env, jclass clazz, jlong sensorManager,
-        jobject eventQWeak, jobject msgQ, jstring packageName, jint mode) {
+                                        jobject eventQWeak, jobject msgQ, jstring packageName,
+                                        jint mode, jstring opPackageName, jstring attributionTag) {
     SensorManager* mgr = reinterpret_cast<SensorManager*>(sensorManager);
     ScopedUtfChars packageUtf(env, packageName);
     String8 clientName(packageUtf.c_str());
-    sp<SensorEventQueue> queue(mgr->createEventQueue(clientName, mode));
+
+    String16 attributionTagName("");
+    if (attributionTag != nullptr) {
+        ScopedUtfChars attrUtf(env, attributionTag);
+        attributionTagName = String16(attrUtf.c_str());
+    }
+    sp<SensorEventQueue> queue(mgr->createEventQueue(clientName, mode, attributionTagName));
 
     if (queue == NULL) {
         jniThrowRuntimeException(env, "Cannot construct native SensorEventQueue.");
@@ -480,66 +546,51 @@ static jint nativeInjectSensorData(JNIEnv *env, jclass clazz, jlong eventQ, jint
 //----------------------------------------------------------------------------
 
 static const JNINativeMethod gSystemSensorManagerMethods[] = {
-    {"nativeClassInit",
-            "()V",
-            (void*)nativeClassInit },
-    {"nativeCreate",
-             "(Ljava/lang/String;)J",
-             (void*)nativeCreate },
+        {"nativeClassInit", "()V", (void *)nativeClassInit},
+        {"nativeCreate", "(Ljava/lang/String;)J", (void *)nativeCreate},
 
-    {"nativeGetSensorAtIndex",
-            "(JLandroid/hardware/Sensor;I)Z",
-            (void*)nativeGetSensorAtIndex },
+        {"nativeGetSensorAtIndex", "(JLandroid/hardware/Sensor;I)Z",
+         (void *)nativeGetSensorAtIndex},
 
-    {"nativeGetDynamicSensors",
-            "(JLjava/util/List;)V",
-            (void*)nativeGetDynamicSensors },
+        {"nativeGetDefaultDeviceSensorAtIndex", "(JLandroid/hardware/Sensor;I)Z",
+         (void *)nativeGetDefaultDeviceSensorAtIndex},
 
-    {"nativeIsDataInjectionEnabled",
-            "(J)Z",
-            (void*)nativeIsDataInjectionEnabled },
+        {"nativeGetDynamicSensors", "(JLjava/util/List;)V", (void *)nativeGetDynamicSensors},
 
-    {"nativeCreateDirectChannel",
-            "(JJIILandroid/hardware/HardwareBuffer;)I",
-            (void*)nativeCreateDirectChannel },
+        {"nativeGetRuntimeSensors", "(JILjava/util/List;)V", (void *)nativeGetRuntimeSensors},
 
-    {"nativeDestroyDirectChannel",
-            "(JI)V",
-            (void*)nativeDestroyDirectChannel },
+        {"nativeIsDataInjectionEnabled", "(J)Z", (void *)nativeIsDataInjectionEnabled},
 
-    {"nativeConfigDirectChannel",
-            "(JIII)I",
-            (void*)nativeConfigDirectChannel },
+        {"nativeIsReplayDataInjectionEnabled", "(J)Z", (void *)nativeIsReplayDataInjectionEnabled},
 
-    {"nativeSetOperationParameter",
-            "(JII[F[I)I",
-            (void*)nativeSetOperationParameter },
+        {"nativeIsHalBypassReplayDataInjectionEnabled", "(J)Z",
+         (void *)nativeIsHalBypassReplayDataInjectionEnabled},
+
+        {"nativeCreateDirectChannel", "(JIJIILandroid/hardware/HardwareBuffer;)I",
+         (void *)nativeCreateDirectChannel},
+
+        {"nativeDestroyDirectChannel", "(JI)V", (void *)nativeDestroyDirectChannel},
+
+        {"nativeConfigDirectChannel", "(JIII)I", (void *)nativeConfigDirectChannel},
+
+        {"nativeSetOperationParameter", "(JII[F[I)I", (void *)nativeSetOperationParameter},
 };
 
 static const JNINativeMethod gBaseEventQueueMethods[] = {
-    {"nativeInitBaseEventQueue",
-             "(JLjava/lang/ref/WeakReference;Landroid/os/MessageQueue;Ljava/lang/String;ILjava/lang/String;)J",
-             (void*)nativeInitSensorEventQueue },
+        {"nativeInitBaseEventQueue",
+         "(JLjava/lang/ref/WeakReference;Landroid/os/MessageQueue;Ljava/lang/String;ILjava/lang/"
+         "String;Ljava/lang/String;)J",
+         (void *)nativeInitSensorEventQueue},
 
-    {"nativeEnableSensor",
-            "(JIII)I",
-            (void*)nativeEnableSensor },
+        {"nativeEnableSensor", "(JIII)I", (void *)nativeEnableSensor},
 
-    {"nativeDisableSensor",
-            "(JI)I",
-            (void*)nativeDisableSensor },
+        {"nativeDisableSensor", "(JI)I", (void *)nativeDisableSensor},
 
-    {"nativeDestroySensorEventQueue",
-            "(J)V",
-            (void*)nativeDestroySensorEventQueue },
+        {"nativeDestroySensorEventQueue", "(J)V", (void *)nativeDestroySensorEventQueue},
 
-    {"nativeFlushSensor",
-            "(J)I",
-            (void*)nativeFlushSensor },
+        {"nativeFlushSensor", "(J)I", (void *)nativeFlushSensor},
 
-    {"nativeInjectSensorData",
-            "(JI[FIJ)I",
-            (void*)nativeInjectSensorData },
+        {"nativeInjectSensorData", "(JI[FIJ)I", (void *)nativeInjectSensorData},
 };
 
 } //unnamed namespace

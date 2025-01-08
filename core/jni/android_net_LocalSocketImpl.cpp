@@ -16,7 +16,7 @@
 
 #define LOG_TAG "LocalSocketImpl"
 
-#include <nativehelper/JNIHelp.h>
+#include <nativehelper/JNIPlatformHelp.h>
 #include "jni.h"
 #include "utils/Log.h"
 #include "utils/misc.h"
@@ -221,7 +221,7 @@ static int socket_write_all(JNIEnv *env, jobject object, int fd,
 
     ssize_t rc = SendFileDescriptorVector(fd, buffer, len, fds);
 
-    while (rc != len) {
+    while (rc != static_cast<ssize_t>(len)) {
         if (rc == -1) {
             jniThrowIOException(env, errno);
             return -1;
@@ -257,7 +257,7 @@ static jint socket_read (JNIEnv *env, jobject object, jobject fileDescriptor)
     err = socket_read_all(env, object, fd, &buf, 1);
 
     if (err < 0) {
-        jniThrowIOException(env, errno);
+        // socket_read_all has already thrown
         return (jint)0;
     }
 

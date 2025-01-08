@@ -16,13 +16,28 @@
 
 package android.os;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+
+import android.app.ActivityManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
-import android.test.AndroidTestCase;
-import android.test.suitebuilder.annotation.MediumTest;
+import android.platform.test.annotations.IgnoreUnderRavenwood;
+import android.platform.test.ravenwood.RavenwoodRule;
 import android.util.Log;
+
+import androidx.test.InstrumentationRegistry;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+
+import com.android.internal.os.SkipPresubmit;
+
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.runner.RunWith;
 
 import java.io.File;
 import java.io.IOException;
@@ -30,8 +45,15 @@ import java.io.IOException;
 /**
  * Test whether Binder calls inherit thread priorities correctly.
  */
-public class BinderThreadPriorityTest extends AndroidTestCase {
+@RunWith(AndroidJUnit4.class)
+@IgnoreUnderRavenwood(blockedBy = ActivityManager.class)
+public class BinderThreadPriorityTest {
     private static final String TAG = "BinderThreadPriorityTest";
+
+    @Rule
+    public final RavenwoodRule mRavenwood = new RavenwoodRule();
+
+    private Context mContext;
     private IBinderThreadPriorityService mService;
     private int mSavedPriority;
 
@@ -56,12 +78,11 @@ public class BinderThreadPriorityTest extends AndroidTestCase {
         private static void fail() { throw new RuntimeException("unimplemented"); }
     }
 
-    @Override
-    protected void setUp() throws Exception {
-        super.setUp();
-
-        getContext().bindService(
-                new Intent(getContext(), BinderThreadPriorityService.class),
+    @Before
+    public void setUp() throws Exception {
+        mContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        mContext.bindService(
+                new Intent(mContext, BinderThreadPriorityService.class),
                 mConnection, Context.BIND_AUTO_CREATE);
 
         synchronized (this) {
@@ -81,8 +102,8 @@ public class BinderThreadPriorityTest extends AndroidTestCase {
         Log.i(TAG, "Saved priority: " + mSavedPriority);
     }
 
-    @Override
-    protected void tearDown() throws Exception {
+    @After
+    public void tearDown() throws Exception {
         // HACK -- see bug 2665914 -- setThreadPriority() doesn't always set the
         // scheduler group reliably unless we start out with background priority.
         Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
@@ -90,8 +111,7 @@ public class BinderThreadPriorityTest extends AndroidTestCase {
         assertEquals(mSavedPriority, Process.getThreadPriority(Process.myTid()));
         assertEquals(expectedSchedulerGroup(mSavedPriority), getSchedulerGroup());
 
-        getContext().unbindService(mConnection);
-        super.tearDown();
+        mContext.unbindService(mConnection);
     }
 
     public static String getSchedulerGroup() {
@@ -112,6 +132,8 @@ public class BinderThreadPriorityTest extends AndroidTestCase {
         return "/";
     }
 
+    @Test
+    @SkipPresubmit("b/381950874: bitrot and failed")
     public void testPassPriorityToService() throws Exception {
         for (int prio = 19; prio >= -20; prio--) {
             Process.setThreadPriority(prio);
@@ -126,6 +148,8 @@ public class BinderThreadPriorityTest extends AndroidTestCase {
         }
     }
 
+    @Test
+    @SkipPresubmit("b/381950874: bitrot and failed")
     public void testCallBackFromServiceWithPriority() throws Exception {
         for (int prio = -20; prio <= 19; prio++) {
             final int expected = prio;

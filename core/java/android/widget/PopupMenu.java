@@ -18,8 +18,9 @@ package android.widget;
 
 import android.annotation.MenuRes;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
+import android.os.Build;
 import android.view.Gravity;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -40,7 +41,7 @@ import com.android.internal.view.menu.ShowableListMenu;
  * it.
  */
 public class PopupMenu {
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     private final Context mContext;
     private final MenuBuilder mMenu;
     private final View mAnchor;
@@ -256,6 +257,19 @@ public class PopupMenu {
      */
     public void setOnDismissListener(OnDismissListener listener) {
         mOnDismissListener = listener;
+    }
+
+    /**
+     * Sets whether the popup menu's adapter is forced to show icons in the
+     * menu item views.
+     * <p>
+     * Changes take effect on the next call to show().
+     *
+     * @param forceShowIcon {@code true} to force icons to be shown, or
+     *                  {@code false} for icons to be optionally shown
+     */
+    public void setForceShowIcon(boolean forceShowIcon) {
+        mPopup.setForceShowIcon(forceShowIcon);
     }
 
     /**

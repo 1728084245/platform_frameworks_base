@@ -16,7 +16,7 @@
 
 package android.app;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ContentProviderNative;
 import android.content.IContentProvider;
 import android.content.pm.ProviderInfo;
@@ -39,6 +39,11 @@ public class ContentProviderHolder implements Parcelable {
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
     public boolean noReleaseNeeded;
 
+    /**
+     * Whether the provider here is a local provider or not.
+     */
+    public boolean mLocal;
+
     @UnsupportedAppUsage
     public ContentProviderHolder(ProviderInfo _info) {
         info = _info;
@@ -59,9 +64,10 @@ public class ContentProviderHolder implements Parcelable {
         }
         dest.writeStrongBinder(connection);
         dest.writeInt(noReleaseNeeded ? 1 : 0);
+        dest.writeInt(mLocal ? 1 : 0);
     }
 
-    public static final Parcelable.Creator<ContentProviderHolder> CREATOR
+    public static final @android.annotation.NonNull Parcelable.Creator<ContentProviderHolder> CREATOR
             = new Parcelable.Creator<ContentProviderHolder>() {
         @Override
         public ContentProviderHolder createFromParcel(Parcel source) {
@@ -81,5 +87,6 @@ public class ContentProviderHolder implements Parcelable {
                 source.readStrongBinder());
         connection = source.readStrongBinder();
         noReleaseNeeded = source.readInt() != 0;
+        mLocal = source.readInt() != 0;
     }
 }

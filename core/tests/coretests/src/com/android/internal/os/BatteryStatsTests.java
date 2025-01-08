@@ -13,41 +13,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.android.internal.os;
+
+import com.android.internal.power.EnergyConsumerStatsTest;
 
 import org.junit.runner.RunWith;
 import org.junit.runners.Suite;
 
 @RunWith(Suite.class)
 @Suite.SuiteClasses({
-        BatteryStatsCpuTimesTest.class,
-        BatteryStatsBackgroundStatsTest.class,
-        BatteryStatsCounterTest.class,
-        BatteryStatsDualTimerTest.class,
-        BatteryStatsDurationTimerTest.class,
-        BatteryStatsHelperTest.class,
-        BatteryStatsImplTest.class,
-        BatteryStatsNoteTest.class,
-        BatteryStatsSamplingTimerTest.class,
-        BatteryStatsSensorTest.class,
-        BatteryStatsServTest.class,
-        BatteryStatsStopwatchTimerTest.class,
-        BatteryStatsTimeBaseTest.class,
-        BatteryStatsTimerTest.class,
-        BatteryStatsUidTest.class,
-        BatteryStatsUserLifecycleTests.class,
-        KernelCpuProcReaderTest.class,
+        KernelCpuProcStringReaderTest.class,
+        KernelCpuUidActiveTimeReaderTest.class,
+        KernelCpuUidBpfMapReaderTest.class,
+        KernelCpuUidClusterTimeReaderTest.class,
+        KernelCpuUidFreqTimeReaderTest.class,
+        KernelCpuUidUserSysTimeReaderTest.class,
         KernelMemoryBandwidthStatsTest.class,
+        KernelSingleProcessCpuThreadReaderTest.class,
         KernelSingleUidTimeReaderTest.class,
-        KernelUidCpuFreqTimeReaderTest.class,
-        KernelUidCpuActiveTimeReaderTest.class,
-        KernelUidCpuClusterTimeReaderTest.class,
-        KernelWakelockReaderTest.class,
-        LongSamplingCounterTest.class,
-        LongSamplingCounterArrayTest.class,
-        PowerCalculatorTest.class,
-        PowerProfileTest.class
+        LongArrayMultiStateCounterTest.class,
+        LongMultiStateCounterTest.class,
+        MonotonicClockTest.class,
+        PowerProfileTest.class,
+        PowerStatsTest.class,
+
+        EnergyConsumerStatsTest.class
     })
 public class BatteryStatsTests {
 }
-
